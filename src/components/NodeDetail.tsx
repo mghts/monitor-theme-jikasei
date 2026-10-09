@@ -174,6 +174,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
   const RANGES_FOR = { resources: RANGES, latency: RANGES }
   const hours = ranges[tab]
   const [smooth, setSmooth] = useState(false)
+  const [connectGaps, setConnectGaps] = useState(false)
+  const [smoothLines, setSmoothLines] = useState(false)
   // Probes switched off. Hiding a slow one is what makes the fast ones readable,
   // as the axis rescales to what remains.
   const [hiddenProbes, setHiddenProbes] = useState<number[]>([])
@@ -327,8 +329,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
   // The hub stamps every sample with its bucket rather than the second the probe
   // finished, so probes reporting at the bucket's rate share rows instead of each
   // contributing its own: a day of four probes is 717 rows rather than 2,868. A
-  // slower probe leaves gaps in its own column, which is what `connectNulls`
-  // addresses.
+  // slower probe leaves gaps in its own column. These stay in the data even
+  // when the reader chooses to connect the visible line across them.
   //
   // Every probe and both versions of every sample are held here whether or not
   // they are on screen: recharts resets the brush when the data array changes
@@ -452,7 +454,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               </Tab>
             ))}
           </div>
-          {tab === "latency" && (
+          {tab === "latency" && (<>
             <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
               <input
                 type="checkbox"
@@ -462,7 +464,27 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               />
               削峰
             </label>
-          )}
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground" title="跨过丢包或缺测样本连接有效延迟点；不补写延迟数据">
+              <input
+                type="checkbox"
+                data-latency-option="connect-gaps"
+                checked={connectGaps}
+                onChange={(e) => setConnectGaps(e.target.checked)}
+                className="accent-foreground"
+              />
+              连接断点
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground" title="让曲线平滑经过有效采样点；不改变采样值，也不替代削峰">
+              <input
+                type="checkbox"
+                data-latency-option="smooth-lines"
+                checked={smoothLines}
+                onChange={(e) => setSmoothLines(e.target.checked)}
+                className="accent-foreground"
+              />
+              平滑曲线
+            </label>
+          </>)}
           {/* 备注在这一行右端：桌面（≥sm）**直接并排**在「完整详情 ›」左边（不新增行高），
               手机这一行放不下，收成一枚小图标 + 浮层（点开看全，点别处 / Esc 收起）。
               一枚备注一枚小卡片（私有 + 公有合并成一串，私有那几枚带锁与描边）。
@@ -521,6 +543,9 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
             </span>
           )}
         </div>
+        {tab === "latency" && (connectGaps || smoothLines) && (
+          <p className="text-[11px] text-muted-foreground">连接和平滑仅影响线条显示；丢包与无响应仍按原始采样展示。</p>
+        )}
         {(updatedAt > 0 || refreshing) && (
           <p className="text-[11px] text-muted-foreground" role="status">
             {updatedAt > 0 && <span title={new Date(updatedAt).toLocaleString("zh-CN")}>历史更新于 {new Date(updatedAt).toLocaleTimeString("zh-CN")}</span>}
@@ -595,6 +620,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                   domain="auto"
                   unit="ms"
                   left={52}
+                  connectGaps={connectGaps}
+                  smoothLines={smoothLines}
                   from={zoomIndices?.[0] ?? 0}
                   to={zoomIndices?.[1] ?? pingRows.length - 1}
                   // 原来 recharts 的 Brush（22px 高的拖两端把手）换成「在图上横向拖选一段」+

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 
 import { ChartTooltip } from "@/components/ChartTooltip"
+import { linePath } from "@/lib/chart-path"
 import { clockFor, quarters, timeTicks } from "@/lib/format"
 import { nearestTimeIndex, timeIndexAtRatio } from "@/lib/history"
 
@@ -12,7 +13,7 @@ import { nearestTimeIndex, timeIndexAtRatio } from "@/lib/history"
  *   · Y 轴从 0 起、刻度就是 `quarters(top)`（top 由 `axisTop` 定，所以四格是整数）；
  *   · X 轴是**真时间轴**（`timeTicks` 给的显式刻度），不是按序号排的类别轴 ——
  *     否则 agent 掉线那段时间会被压成 0 宽，看着像什么都没发生；
- *   · 断点照断：某个采样是 null（那一段没数据）就断开重起一笔，不连桥；
+ *   · 默认保留 null 断点与折线；延迟图可选择连接断点或平滑，仅改变路径；
  *   · 折线不带点、1.5px、无入场动画（`SERIES` 那三条注释说的就是这些）；
  *   · 悬停时画一条竖线 + 那枚自绘 tooltip（`ChartTooltip`，本来就跟 recharts 解耦，
  *     只是 props 恰好同形）。
@@ -98,6 +99,8 @@ export function TimeChart({
   label,
   domain = "zero",
   left = LEFT,
+  connectGaps = false,
+  smoothLines = false,
   onZoom,
   renderTooltip,
 }: {
@@ -126,6 +129,10 @@ export function TimeChart({
   domain?: "zero" | "auto"
   /** 左边留给 Y 轴刻度的宽度（四张资源图 68，延迟图 52，与原来逐像素一致）。 */
   left?: number
+  /** 只连接曲线中的有效样本；原始空值、悬停提示与区间填充仍保留。 */
+  connectGaps?: boolean
+  /** 保留采样端点的平滑曲线，不改变数据或 Y 轴量程。 */
+  smoothLines?: boolean
   /** 给了它就能**在图上横向拖选一段缩放**（索引是全量数组里的下标）。 */
   onZoom?: (from: number, to: number) => void
   /** 自定义悬停内容（延迟图用它接 `PingTooltip`）。 */
@@ -195,21 +202,13 @@ export function TimeChart({
     edge = cx + half
   }
 
-  /** 一条曲线：null 断开重起一笔（不连桥）。 */
-  const lineOf = (s: ChartSeries) => {
-    let d = ""
-    let pen = false
-    for (const row of view) {
+  const lineOf = (s: ChartSeries) => linePath(
+    view.map((row) => {
       const v = num(row[s.key])
-      if (v === null) {
-        pen = false
-        continue
-      }
-      d += `${pen ? "L" : "M"}${x(row.ts).toFixed(1)},${y(v).toFixed(1)}`
-      pen = true
-    }
-    return d
-  }
+      return v === null ? null : { x: x(row.ts), y: y(v) }
+    }),
+    { connectGaps, smooth: smoothLines },
+  )
 
   /** 面积：每一段连续的点各自闭合成一块（同样不跨断点）。 */
   const areasOf = (s: ChartSeries) => {
@@ -293,7 +292,7 @@ export function TimeChart({
   return (
     // `data-chart`：给护栏一个稳定锚点（仓库里 `data-latency` / `data-card-style` 同一套做法）。
     // 换实现（recharts → 自绘）时，按 `.recharts-surface` 那种类名找的判据会静默变成 0。
-    <div ref={box} data-chart="" className="relative h-full w-full">
+    <div ref={box} data-chart="" data-connect-gaps={connectGaps} data-smooth-lines={smoothLines} className="relative h-full w-full">
       {w > 0 && h > 0 && (
         <svg width={w} height={h} role="img" aria-label={label} className="overflow-visible">
           {/* 网格：只画横线（原来 `vertical={false}`），虚线、用边框色。 */}
@@ -344,6 +343,7 @@ export function TimeChart({
           {series.filter((s) => !s.band).map((s) => (
             <path
               key={`l${s.key}`}
+              data-series={s.key}
               d={lineOf(s)}
               fill="none"
               stroke={s.color}

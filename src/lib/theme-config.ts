@@ -1,7 +1,24 @@
-import { useCallback, useEffect, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useState } from "react"
 
 import { api } from "@/lib/api"
-import { cardStyleOrNull, DEFAULTS, normalizeConfig, type ThemeConfig } from "@/lib/site-settings"
+import { cardStyleOrNull, DEFAULTS, normalizeConfig, type LatencyStyle, type ThemeConfig } from "@/lib/site-settings"
+
+type LatencyStyleState = {
+  style: LatencyStyle
+  siteDefault: LatencyStyle
+  onChange: (next: LatencyStyle) => void
+}
+
+/** 首页小曲线与详情共用当前样式；临时选择只留在 App 会话中，刷新后跟随站点设置。 */
+export const LatencyStyleContext = createContext<LatencyStyleState>({
+  style: DEFAULTS.latencyStyle,
+  siteDefault: DEFAULTS.latencyStyle,
+  onChange: () => undefined,
+})
+
+export function useLatencyStyle(): LatencyStyleState {
+  return useContext(LatencyStyleContext)
+}
 
 /**
  * 站点级设置：只存 Hub（`/api/themes/<short>/config`），一个站一份，不落访客的浏览器——

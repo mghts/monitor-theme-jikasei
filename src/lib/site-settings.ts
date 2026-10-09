@@ -28,6 +28,8 @@ export type ThemeConfig = {
   listTop: "none" | "groups" | "summary" | "budget" | "both" | "bothBudget"
   /** 卡片「三网延迟」要显示的线路，按名字指定（ping 任务名），一行一个。 */
   pingLines: string
+  /** 全站延迟曲线的默认线形；访客可在详情或紧凑展开中临时调整，只影响显示。 */
+  latencyStyle: LatencyStyle
   /** 「备注显示位置」：备注小卡片摊在哪儿（卡片 / 整页详情 / 两边都摊）。 */
   remarkPlacement: RemarkPlacement
   /**
@@ -56,6 +58,31 @@ export function readThemePreference(storage?: Pick<Storage, "getItem">): "light"
 
 /** 四档的取值与顺序（后台那格下拉、`normalizeConfig` 都照它）。 */
 export const THEME_MODES: ThemeMode[] = ["system", "auto", "light", "dark"]
+
+/** 延迟曲线四档：折线/平滑 × 保留断点/连接断点。 */
+export type LatencyStyle = "broken" | "connected" | "smooth" | "connectedSmooth"
+
+/** 后台下拉与配置校验共用的四档顺序。 */
+export const LATENCY_STYLES: LatencyStyle[] = ["broken", "connected", "smooth", "connectedSmooth"]
+
+/** 旧站没有这一项，或保存了无效值时，保留原来的折线与断点。 */
+export function latencyStyleOf(v: unknown): LatencyStyle {
+  return LATENCY_STYLES.includes(v as LatencyStyle) ? (v as LatencyStyle) : DEFAULTS.latencyStyle
+}
+
+/** 只决定路径画法，不插补样本、不修改丢包或无响应值。 */
+export function latencyLineOptions(style: LatencyStyle): { connectGaps: boolean; smooth: boolean } {
+  return {
+    connectGaps: style === "connected" || style === "connectedSmooth",
+    smooth: style === "smooth" || style === "connectedSmooth",
+  }
+}
+
+/** 详情中的两个开关回写为统一线形，切换其中一个时可保留另一个。 */
+export function latencyStyleFromOptions({ connectGaps, smooth }: { connectGaps: boolean; smooth: boolean }): LatencyStyle {
+  if (smooth) return connectGaps ? "connectedSmooth" : "smooth"
+  return connectGaps ? "connected" : "broken"
+}
 
 /** 「备注显示位置」：`both` 卡片与详情页（默认）/ `card` 只在卡片 / `detail` 只在整页详情 / `none` 都不显示。 */
 export type RemarkPlacement = "both" | "card" | "detail" | "none"
@@ -89,6 +116,8 @@ export const DEFAULTS: ThemeConfig = {
   // 延迟线路：留空 = 按后台顺序自动显示前几条；填了名字就只显示这些（一行一个）。
   // 名字是 ping 任务的名字，不是节点名——对不上的行会被跳过。
   pingLines: "",
+  // 保留旧版的折线与断点；四处延迟图共用站点默认值。
+  latencyStyle: "broken",
   // 备注显示位置：默认两边都摊。
   remarkPlacement: "both",
   // 地球默认显示：它本来就是这块页面的招牌，站长要更安静的版面可以在后台关掉；
@@ -133,6 +162,7 @@ export function cardStyleOf(v: unknown): ThemeConfig["cardStyle"] {
  * 1.10.0 又多了一层「概览卡片长什么样」（原版 / 月度预算剩余价值版），但仍然并在这一个键里：
  * 再开一个设置项就是第 7 个字段，对话框又回到那个两列的排版。六档＝分组标签行开关（开关）
  * × 概览卡片三态（不显示 / 原版 / 预算版）里真的用得上的组合。
+ * 1.29.0 用户明确增加「延迟曲线样式」作为第 7 项，设置项上限仍为 7。
  *
  * 读到没有 `listTop` 的旧配置就按两个开关的组合迁过来：不迁的话，站长开着的那一行会静默消失。
  */
@@ -198,6 +228,8 @@ export function normalizeConfig(saved: unknown): ThemeConfig {
     listTop: listTopOf(s.listTop, { showSummary: s.showSummary, showGroupTabs: s.showGroupTabs }),
     // 留空是有意义的值（= 自动取前几条），空串不能当「没填过」；只有类型不对时才回落。
     pingLines: typeof s.pingLines === "string" ? s.pingLines : DEFAULTS.pingLines,
+    // 四档线形：旧/无效配置保留旧版的折线与断点。
+    latencyStyle: latencyStyleOf(s.latencyStyle),
     // 「备注显示位置」只认那三档；老站点配置里没有这个键（或写成别的）→ 两边都摊。
     remarkPlacement: REMARK_PLACEMENTS.includes(s.remarkPlacement as RemarkPlacement)
       ? (s.remarkPlacement as RemarkPlacement)

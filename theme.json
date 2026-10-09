@@ -2,7 +2,7 @@
   "name": "jikasei",
   "short": "jikasei",
   "description": "自家制の极简探针（Monitor）主题：五种卡片形态、节点地球、分组筛选、明暗双色。",
-  "version": "1.28.0",
+  "version": "1.29.0",
   "author": "akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [
@@ -114,6 +114,31 @@
       "label": "显示的延迟线路",
       "default": "",
       "help": "每行一个 ping 任务名，最多三条；留空自动取前三条。"
+    },
+    {
+      "type": "select",
+      "key": "latencyStyle",
+      "label": "延迟曲线样式",
+      "default": "broken",
+      "options": [
+        {
+          "value": "broken",
+          "label": "折线，保留断点（默认）"
+        },
+        {
+          "value": "connected",
+          "label": "连续折线"
+        },
+        {
+          "value": "smooth",
+          "label": "平滑曲线，保留断点"
+        },
+        {
+          "value": "connectedSmooth",
+          "label": "连续平滑曲线"
+        }
+      ],
+      "help": "统一首页卡片、浮层、紧凑展开与节点详情的默认线形；仅影响显示，不改变丢包或无响应数据。"
     },
     {
       "type": "title",

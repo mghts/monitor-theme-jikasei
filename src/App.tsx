@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { Globe as GlobeIcon, Moon, Sun, Wrench } from "lucide-react"
 
 import { CardStyleMenu } from "@/components/CardStyleMenu"
@@ -13,9 +13,9 @@ import { api, groupView, useNodes } from "@/lib/api"
 import { regionView } from "@/lib/globe"
 import { hasDetailRemarks } from "@/lib/notes"
 import { searchNodes } from "@/lib/search"
-import { hasGroupTabs, hasSummary, isBudgetLayout, useCardStyle, useGlobeVisible, useLocalFarm, useThemeConfig } from "@/lib/theme-config"
+import { hasGroupTabs, hasSummary, isBudgetLayout, LatencyStyleContext, useCardStyle, useGlobeVisible, useLocalFarm, useThemeConfig } from "@/lib/theme-config"
 import { isBeijingNight, readThemePreference, resolveDark, type ThemeMode } from "@/lib/site-settings"
-import type { RemarkPlacement } from "@/lib/site-settings"
+import type { LatencyStyle, RemarkPlacement } from "@/lib/site-settings"
 import { FarmIcon } from "@/components/FarmIcon"
 
 type Me = {
@@ -214,6 +214,17 @@ function useTheme(siteMode: ThemeMode) {
 
 export default function App() {
   const config = useThemeConfig()
+  const [latencyChoice, setLatencyChoice] = useState<{ siteDefault: LatencyStyle; style: LatencyStyle } | null>(null)
+  // 配置异步到达或默认档变化时，旧默认下的临时选择失效，所有延迟曲线一起跟随新默认。
+  const latencyStyle = latencyChoice?.siteDefault === config.latencyStyle ? latencyChoice.style : config.latencyStyle
+  const chooseLatencyStyle = useCallback((next: LatencyStyle) => {
+    setLatencyChoice(next === config.latencyStyle ? null : { siteDefault: config.latencyStyle, style: next })
+  }, [config.latencyStyle])
+  const latencyCurve = useMemo(() => ({
+    style: latencyStyle,
+    siteDefault: config.latencyStyle,
+    onChange: chooseLatencyStyle,
+  }), [latencyStyle, config.latencyStyle, chooseLatencyStyle])
   // 明暗：站长那一档（`themeMode`）当默认，访客点过顶栏那枚图标就以他的为准。
   const [dark, toggleTheme] = useTheme(config.themeMode)
   // 顶栏那枚入口图标（1.25.0 起没有设置项）：挂载即探一次本站约定的 `/chicken/`，
@@ -377,6 +388,7 @@ export default function App() {
   return (
     // 纵向排下来、页脚吊在最后（main 吃满剩余高度）：机器少、内容比一屏短时，
     // 署名也落在屏幕的右下角，而不是紧贴在列表底下浮在半空中。
+    <LatencyStyleContext value={latencyCurve}>
     <div className="flex min-h-svh flex-col">
       <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
         {/* ★ 窄屏的横向余量很紧（390 宽上这一行原本要 407px，整页因此能横向拖动）。现在按
@@ -555,6 +567,7 @@ export default function App() {
         </p>
       </footer>
     </div>
+    </LatencyStyleContext>
   )
 }
 

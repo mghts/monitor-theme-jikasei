@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { api, type Node } from "@/lib/api"
+import { linePath } from "@/lib/chart-path"
 import { clockFor } from "@/lib/format"
 import { latestPing, withHistorySlot } from "@/lib/history"
+import { latencyLineOptions } from "@/lib/site-settings"
+import { useLatencyStyle } from "@/lib/theme-config"
 
 /** `/api/nodes/{id}/metrics?series=ping` 返回里，本组件用到的几块（形状同详情页）。 */
 type PingPoint = {
@@ -123,44 +126,48 @@ const toneClass = (tone: Tone) =>
 const SPARK_W = 100
 const SPARK_H = 20
 
-/** 走势线：无坐标轴、无交互，只把这一小时的起伏画出来；断点照断，不连桥。 */
-function Sparkline({ values, className }: { values: Array<number | null>; className: string }) {
-  const nums = values.filter((v): v is number => v !== null)
+/** 走势线与详情共用样式和路径算法；null 时间仍占轴宽，不压缩丢包或采样缺口。 */
+function Sparkline({ points, probeId, className }: { points: PingPoint[]; probeId: number; className: string }) {
+  const { style } = useLatencyStyle()
+  const options = latencyLineOptions(style)
+  const nums = points.filter((point) => Number.isFinite(point.ts) && typeof point.latency === "number" && Number.isFinite(point.latency))
+    .map((point) => point.latency as number)
   if (nums.length < 2) return <span className="min-w-0 flex-1" />
   const min = Math.min(...nums)
   const max = Math.max(...nums)
-  const span = max - min || 1
-  const x = (i: number) => (values.length <= 1 ? 0 : (i * SPARK_W) / (values.length - 1))
-  const y = (v: number) => SPARK_H - 2 - ((v - min) / span) * (SPARK_H - 4)
-  const segments: string[] = []
-  let current: string[] = []
-  values.forEach((v, i) => {
-    if (v === null) {
-      if (current.length) { segments.push(current.join(" ")); current = [] }
-      return
-    }
-    current.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`)
-  })
-  if (current.length) segments.push(current.join(" "))
+  const times = points.filter((point) => Number.isFinite(point.ts)).map((point) => point.ts)
+  const first = Math.min(...times)
+  const last = Math.max(...times)
+  const ratio = (value: number, low: number, high: number) => {
+    if (high === low) return 0
+    const span = high - low
+    // 极端有限坐标相减也可能溢出，先减半后归一化；不向 SVG 传 NaN/Infinity。
+    const position = Number.isFinite(span) ? (value - low) / span : (value / 2 - low / 2) / (high / 2 - low / 2)
+    return Math.max(0, Math.min(1, position))
+  }
+  const path = linePath(points.map((point) => Number.isFinite(point.ts) && typeof point.latency === "number" && Number.isFinite(point.latency)
+    ? { x: ratio(point.ts, first, last) * SPARK_W, y: SPARK_H - 2 - ratio(point.latency, min, max) * (SPARK_H - 4) }
+    : null), options)
   return (
     <svg
+      data-latency-sparkline={probeId}
+      data-connect-gaps={options.connectGaps}
+      data-smooth-lines={options.smooth}
       viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
       preserveAspectRatio="none"
       className={`h-4 min-w-0 flex-1 ${className}`}
       aria-hidden="true"
     >
-      {segments.map((points, i) => (
-        <polyline
-          key={i}
-          points={points}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
+      <path
+        data-series={`t${probeId}`}
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   )
 }
@@ -198,7 +205,7 @@ function ProbeRow({ probe, now, compact = false }: { probe: Probe; now: number; 
         <span className={`tnum ${compact ? "w-12" : "w-14"} shrink-0 text-right font-medium ${gray}`}>
           {ms === null ? "超时" : `${ms} ms`}
         </span>
-        <Sparkline values={probe.points.map((pt) => pt.latency)} className={gray} />
+        <Sparkline points={probe.points} probeId={probe.id} className={gray} />
         <span className={`tnum ${compact ? "w-9" : "w-10"} shrink-0 text-right text-muted-foreground`}>
           {probe.loss > 0 ? `${probe.loss.toFixed(1)}%` : "0.0%"}
         </span>

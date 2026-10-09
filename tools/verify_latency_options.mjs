@@ -55,9 +55,12 @@ const NODE = {
   metrics: { uptime: 400000, cpu: 12, load: [0.1, 0.2, 0.3], mem_used: GB, mem_total: 2 * GB, swap_used: 0, swap_total: 0, disk_used: 10 * GB, disk_total: 40 * GB, net_rx: 1024, net_tx: 512, procs: 50, tcp: 10, udp: 2, total_rx: 20 * GB, total_tx: 10 * GB, month_rx: 3 * GB, month_tx: GB },
 }
 let config = { cardStyle: 'detailed', listTop: 'none' }
+let configDelay = 0
 const requests = []
+const configResponses = []
 const results = []
 const exceptions = []
+const delayedEvidence = []
 let base = ''
 let chrome
 let ws
@@ -74,7 +77,19 @@ const server = createServer((req, res) => {
     let body = {}
     if (url.pathname === '/api/me') body = { authed: false, github: false, public_page: true, site: base, site_name: '延迟选项验收', history_days: 30 }
     else if (url.pathname === '/api/nodes') body = { nodes: [NODE] }
-    else if (url.pathname.endsWith('/config')) body = config
+    else if (url.pathname.endsWith('/config')) {
+      const saved = { ...config }
+      const response = { latencyStyle: saved.latencyStyle ?? '(missing)', requestedAt: Date.now(), delay: configDelay }
+      configResponses.push(response)
+      setTimeout(() => {
+        response.sentAt = Date.now()
+        if (!res.destroyed) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+          res.end(JSON.stringify(saved))
+        }
+      }, configDelay)
+      return
+    }
     else if (url.pathname === '/api/version') body = { version: '1.4.0' }
     else if (url.pathname === '/api/nodes/1/metrics') {
       requests.push(url.pathname + url.search)
@@ -180,11 +195,56 @@ function resourceState() {
   })
 }
 async function openDetail(width) {
+  configDelay = 0
   config = { cardStyle: 'detailed', listTop: 'none' }
   await send('Emulation.setDeviceMetricsOverride', { width, height: 1100, deviceScaleFactor: 1, mobile: width < 640 })
   await send('Page.navigate', { url: `${base}/node/1?case=${width}-${Date.now()}` })
   await waitFor(() => document.querySelectorAll('svg[role="img"][aria-label]').length === 4 && !!document.querySelector('path[data-series="cpu"]')?.getAttribute('d'))
   await sleep(200)
+}
+
+const STYLES = { broken: [false, false], connected: [true, false], smooth: [false, true], connectedSmooth: [true, true] }
+function sparkState() {
+  return [...document.querySelectorAll('svg[data-latency-sparkline]')].map((svg) => ({
+    id: svg.dataset.latencySparkline, connect: svg.dataset.connectGaps, smooth: svg.dataset.smoothLines,
+    paths: [...svg.querySelectorAll('path[data-series]')].map((p) => ({ key: p.dataset.series, d: p.getAttribute('d') || '' })),
+    text: svg.parentElement.textContent.trim(),
+  }))
+}
+function pathsMatch(paths, connect, smooth, breaks) {
+  return paths.length === 2 && paths.every((p) => p.d.length > 0 && (p.d.match(/M/g) || []).length === (connect ? 1 : breaks[p.key]) && (smooth ? p.d.includes('C') : p.d.includes('L') && !p.d.includes('C')))
+}
+function sparksMatch(sparks, connect, smooth) {
+  return sparks.length === 2 && sparks.every((s) => s.connect === String(connect) && s.smooth === String(smooth) && s.paths.length === 1) && pathsMatch(sparks.flatMap((s) => s.paths), connect, smooth, { t1: 3, t2: 2 })
+}
+function detailMatches(detail, connect, smooth) {
+  return detail.connect === String(connect) && detail.smooth === String(smooth) && detail.controls.length === 2 && detail.controls.every((control) => control.checked === (control.key === 'connect-gaps' ? connect : smooth)) && pathsMatch(detail.paths, connect, smooth, { t1: 3, t2: 4 })
+}
+async function navigateConfig(saved, path = '/', { width = 1280, delay = 0 } = {}) {
+  config = { cardStyle: 'detailed', listTop: 'none', ...saved }
+  configDelay = delay
+  await send('Emulation.setDeviceMetricsOverride', { width, height: 1100, deviceScaleFactor: 1, mobile: width < 640 })
+  await send('Page.navigate', { url: `${base}${path}?config=${Date.now()}-${configResponses.length}` })
+}
+async function readySparks(connect, smooth) {
+  await waitFor((connect, smooth) => {
+    const svgs = [...document.querySelectorAll('svg[data-latency-sparkline]')]
+    return svgs.length === 2 && svgs.every((svg) => svg.dataset.connectGaps === String(connect) && svg.dataset.smoothLines === String(smooth) && svg.querySelector('path[data-series]')?.getAttribute('d'))
+  }, connect, smooth)
+  return evaluate(sparkState)
+}
+async function readyDetailStyle(connect, smooth) {
+  await ready()
+  await waitFor((connect, smooth) => {
+    const chart = document.querySelector('svg[aria-label="节点延迟走势"]')?.closest('[data-chart]')
+    return chart?.dataset.connectGaps === String(connect) && chart?.dataset.smoothLines === String(smooth)
+  }, connect, smooth)
+  return state()
+}
+async function openConfiguredDetail(saved) {
+  await navigateConfig(saved, '/node/1')
+  await waitFor(() => [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '网络延迟'))
+  await clickText('网络延迟')
 }
 
 try {
@@ -296,16 +356,132 @@ try {
     const compact = await options(true, true)
     check(`${width}px 紧凑展开可独立开启且布局完整`, !compact.overflow && compact.controls.every((c) => c.w > 0 && c.x >= -1 && c.right <= width + 1) && compact.paths.every((p) => p.d.includes('C') && (p.d.match(/M/g) || []).length === 1), JSON.stringify({ overflow: compact.overflow, controls: compact.controls }))
     check(`${width}px 紧凑展开保留完整详情入口`, await evaluate(() => [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '完整详情 ›')))
+    if (width === 360) {
+      const buttons = await evaluate(() => [...document.querySelector('[data-latency-option]')?.closest('label')?.parentElement?.querySelectorAll('button') || []].map((button) => {
+        const r = button.getBoundingClientRect()
+        const css = getComputedStyle(button)
+        const range = document.createRange()
+        range.selectNodeContents(button)
+        const text = range.getBoundingClientRect()
+        return { text: button.textContent.trim(), x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom,
+          lineHeight: css.lineHeight, whiteSpace: css.whiteSpace,
+          textRect: { x: text.x, y: text.y, w: text.width, h: text.height, right: text.right, bottom: text.bottom },
+          visible: r.width > 0 && r.height > 0 && css.visibility !== 'hidden' && css.display !== 'none' && r.bottom > 0 && r.top < innerHeight }
+      }).filter((button) => button.visible))
+      const detailButton = buttons.find((button) => button.text === '完整详情 ›')
+      const text = detailButton?.textRect
+      const lineHeight = Number.parseFloat(detailButton?.lineHeight || '')
+      check('360px 紧凑完整详情入口单行且文字不被裁切', !!detailButton && detailButton.h <= 24 && detailButton.h <= lineHeight + 1 && detailButton.whiteSpace === 'nowrap' && text.w > 0 && text.h <= lineHeight + 1 && text.x >= detailButton.x - 1 && text.right <= detailButton.right + 1 && text.y >= detailButton.y - 1 && text.bottom <= detailButton.bottom + 1 && text.x >= -1 && text.right <= 361, JSON.stringify(detailButton))
+      check('360px 延迟工具栏当前可见按钮全部位于视口内', buttons.length > 0 && buttons.every((button) => button.x >= -1 && button.right <= 361 && button.y >= -1 && button.bottom <= 1101), JSON.stringify(buttons))
+    }
     await screenshot(`compact-${width}-options-on`)
     await clickText('完整详情 ›')
     await waitFor(() => location.pathname === '/node/1' && !!document.querySelector('dl'))
     check(`${width}px 完整详情入口能打开节点详情`, await evaluate(() => location.pathname === '/node/1' && !!document.querySelector('dl')))
   }
+
+  // 站点默认值统一卡面、经典浮层、详情和紧凑展开；每轮用完整导航隔离会话临时选择。
+  let sparkBaselineText
+  for (const [style, [connect, smooth]] of Object.entries(STYLES)) {
+    for (const cardStyle of ['detailed', 'latency']) {
+      await navigateConfig({ cardStyle, latencyStyle: style })
+      const sparks = await readySparks(connect, smooth)
+      const text = sparks.map((spark) => spark.text)
+      if (!sparkBaselineText) sparkBaselineText = text
+      check(`站点默认 ${style}：${cardStyle} 卡面曲线与采样/丢包读数一致`, sparksMatch(sparks, connect, smooth) && JSON.stringify(text) === JSON.stringify(sparkBaselineText), JSON.stringify(sparks.map((spark) => ({ id: spark.id, connect: spark.connect, smooth: spark.smooth, text: spark.text, paths: spark.paths.map((p) => ({ key: p.key, moves: (p.d.match(/M/g) || []).length, cubic: p.d.includes('C') })) }))))
+      if (style === 'connectedSmooth' && cardStyle === 'detailed') await screenshot('site-connectedSmooth-detailed-1280')
+    }
+    await openConfiguredDetail({ latencyStyle: style })
+    const detail = await readyDetailStyle(connect, smooth)
+    check(`站点默认 ${style}：详情 checkbox 与主曲线同步且丢包仍保留`, detailMatches(detail, connect, smooth) && (await hoverAt(6)) === lossTip && JSON.stringify(detail.legend) === JSON.stringify(baseline.legend), JSON.stringify({ connect: detail.connect, smooth: detail.smooth, paths: detail.paths.map((p) => ({ key: p.key, moves: (p.d.match(/M/g) || []).length, cubic: p.d.includes('C') })) }))
+    await navigateConfig({ cardStyle: 'compact', latencyStyle: style })
+    await waitFor(() => !!document.querySelector('tbody tr[role="button"]'))
+    await evaluate(() => document.querySelector('tbody tr[role="button"]').click())
+    check(`站点默认 ${style}：紧凑展开同步`, detailMatches(await readyDetailStyle(connect, smooth), connect, smooth))
+    await navigateConfig({ cardStyle: 'classic', latencyStyle: style })
+    await waitFor(() => !!document.querySelector('[data-note-popover]'))
+    await evaluate(() => document.querySelector('[data-note-popover]').click())
+    const peekSparks = await readySparks(connect, smooth)
+    check(`站点默认 ${style}：classic 浮层曲线与读数同步`, sparksMatch(peekSparks, connect, smooth) && JSON.stringify(peekSparks.map((spark) => spark.text)) === JSON.stringify(sparkBaselineText))
+    if (style === 'connectedSmooth') await screenshot('site-connectedSmooth-classic-1280')
+  }
+
+  // 在新文档最早的绘制中记录曲线属性，证明迟到的配置会更新已挂载组件。
+  // 详情页初始是资源页签，观察器一看到延迟页签便点开，使 broken 首帧发生在配置返回前。
+  const observeDefaults = await send('Page.addScriptToEvaluateOnNewDocument', { source: `(${(() => {
+    window.__latencyObservations = []
+    let selectedLatency = false
+    const remember = (state) => {
+      if (!window.__latencyObservations.some((old) => old.kind === state.kind && old.source === state.source && old.connect === state.connect && old.smooth === state.smooth)) window.__latencyObservations.push({ ...state, at: performance.now() })
+    }
+    const record = () => {
+      if (!selectedLatency && location.pathname === '/node/1') {
+        const tab = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '网络延迟')
+        if (tab) { selectedLatency = true; tab.click() }
+      }
+      // checkbox 出现即证明 NodeDetail 已挂载；历史请求与 ResizeObserver 完成后才有路径。
+      const connect = document.querySelector('[data-latency-option="connect-gaps"]')
+      const smooth = document.querySelector('[data-latency-option="smooth-lines"]')
+      if (connect && smooth) remember({ kind: 'detail', connect: String(connect.checked), smooth: String(smooth.checked), source: 'controls' })
+      for (const svg of document.querySelectorAll('svg[data-latency-sparkline], svg[aria-label="节点延迟走势"]')) {
+        if (!svg.querySelector('path[data-series]')?.getAttribute('d')) continue
+        const element = svg.hasAttribute('data-latency-sparkline') ? svg : svg.closest('[data-chart]')
+        remember({ kind: svg.hasAttribute('data-latency-sparkline') ? 'spark' : 'detail', connect: element.dataset.connectGaps, smooth: element.dataset.smoothLines, source: 'svg' })
+      }
+    }
+    new MutationObserver(record).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-connect-gaps', 'data-smooth-lines', 'd'] })
+  }).toString()})()` })
+  const lateConfigDelay = 1000
+  for (const [kind, path] of [['spark', '/'], ['detail', '/node/1']]) {
+    await navigateConfig({ latencyStyle: 'connectedSmooth' }, path, { delay: lateConfigDelay })
+    if (kind === 'detail') {
+      await waitFor(() => [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '网络延迟'))
+      await evaluate(() => [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '网络延迟').click())
+    }
+    const final = kind === 'spark' ? sparksMatch(await readySparks(true, true), true, true) : detailMatches(await readyDetailStyle(true, true), true, true)
+    const observations = await evaluate(() => window.__latencyObservations)
+    const response = configResponses.at(-1)
+    delayedEvidence.push({ kind, response, observations })
+    check(`配置延迟 ${lateConfigDelay}ms：${kind} 从 broken 首帧跟随站点默认`, final && observations.some((state) => state.kind === kind && state.source === 'svg' && state.connect === 'false' && state.smooth === 'false') && observations.some((state) => state.kind === kind && state.source === 'svg' && state.connect === 'true' && state.smooth === 'true') && response.delay === lateConfigDelay && response.sentAt - response.requestedAt >= lateConfigDelay - 15, JSON.stringify({ response, observations }))
+  }
+  await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: observeDefaults.identifier })
+
+  await openConfiguredDetail({ latencyStyle: 'connected', cardStyle: 'detailed' })
+  await readyDetailStyle(true, false)
+  const sessionBefore = await evaluate(() => ({ timeOrigin: performance.timeOrigin, storage: JSON.stringify(Object.fromEntries(Object.entries(localStorage))) }))
+  await options(false, true)
+  await clickText('延迟选项验收')
+  await waitFor(() => location.pathname === '/')
+  const temporarySparks = await readySparks(false, true)
+  const sessionAfter = await evaluate(() => ({ timeOrigin: performance.timeOrigin, storage: JSON.stringify(Object.fromEntries(Object.entries(localStorage))) }))
+  check('详情临时切换后 SPA 返回首页同步，且未写入本地存储', sparksMatch(temporarySparks, false, true) && sessionBefore.timeOrigin === sessionAfter.timeOrigin && sessionBefore.storage === sessionAfter.storage, JSON.stringify({ before: sessionBefore, after: sessionAfter }))
+  await send('Page.reload', { ignoreCache: true })
+  const refreshedSparks = await readySparks(true, false)
+  check('刷新后丢弃临时选项，恢复站点 connected 默认', sparksMatch(refreshedSparks, true, false) && (await evaluate(() => performance.timeOrigin)) !== sessionBefore.timeOrigin)
+  await evaluate(() => document.querySelector('[data-slot="card"][role="button"]').click())
+  await waitFor(() => location.pathname === '/node/1' && [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '网络延迟'))
+  await clickText('网络延迟')
+  await readyDetailStyle(true, false)
+  await options(false, true)
+  await clickText('恢复默认')
+  const restoredDetail = detailMatches(await readyDetailStyle(true, false), true, false)
+  const restoredButtonGone = await evaluate(() => ![...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '恢复默认'))
+  await clickText('延迟选项验收')
+  await waitFor(() => location.pathname === '/')
+  check('恢复默认按钮还原站点样式，SPA 返回首页继续保持', restoredDetail && restoredButtonGone && sparksMatch(await readySparks(true, false), true, false))
+
+  for (const [label, saved] of [['旧配置未设置样式', {}], ['无效样式值', { latencyStyle: 'invalid-value' }]]) {
+    await navigateConfig(saved)
+    const homeBroken = sparksMatch(await readySparks(false, false), false, false)
+    await openConfiguredDetail(saved)
+    const detailBroken = detailMatches(await readyDetailStyle(false, false), false, false)
+    check(`${label}：首页和详情安全回退 broken`, homeBroken && detailBroken)
+  }
   check('验收期间无未捕获页面异常', exceptions.length === 0, exceptions.join(' ; '))
 } catch (error) {
   check('验收脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, base, fixture: { offsets: OFFSETS, rawLatencies: LATENCIES, overallLoss: PING.loss }, results, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, base, fixture: { offsets: OFFSETS, rawLatencies: LATENCIES, overallLoss: PING.loss, apiFields: ['metrics', 'ping', 'probes', 'loss', 'step'] }, results, requests, configResponses, delayedEvidence, exceptions }, null, 2))
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()
   ws?.close()

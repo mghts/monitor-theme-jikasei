@@ -11,7 +11,8 @@ import {
   axisBytes, axisTop, bytes, despike, cpuName, osName, rate, uptime,
 } from "@/lib/format"
 import { hasDetailRemarks, remarkChips } from "@/lib/notes"
-import { remarksOnCards, type RemarkPlacement } from "@/lib/site-settings"
+import { latencyLineOptions, latencyStyleFromOptions, remarksOnCards, type RemarkPlacement } from "@/lib/site-settings"
+import { useLatencyStyle } from "@/lib/theme-config"
 import { rangesFor } from "@/lib/ranges"
 import { timeRangeIndices, withHistorySlot } from "@/lib/history"
 
@@ -174,8 +175,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
   const RANGES_FOR = { resources: RANGES, latency: RANGES }
   const hours = ranges[tab]
   const [smooth, setSmooth] = useState(false)
-  const [connectGaps, setConnectGaps] = useState(false)
-  const [smoothLines, setSmoothLines] = useState(false)
+  const { style: latencyStyle, siteDefault, onChange: chooseLatencyStyle } = useLatencyStyle()
+  const { connectGaps, smooth: smoothLines } = latencyLineOptions(latencyStyle)
   // Probes switched off. Hiding a slow one is what makes the fast ones readable,
   // as the axis rescales to what remains.
   const [hiddenProbes, setHiddenProbes] = useState<number[]>([])
@@ -469,7 +470,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                 type="checkbox"
                 data-latency-option="connect-gaps"
                 checked={connectGaps}
-                onChange={(e) => setConnectGaps(e.target.checked)}
+                onChange={(e) => chooseLatencyStyle(latencyStyleFromOptions({ connectGaps: e.target.checked, smooth: smoothLines }))}
                 className="accent-foreground"
               />
               连接断点
@@ -479,11 +480,21 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                 type="checkbox"
                 data-latency-option="smooth-lines"
                 checked={smoothLines}
-                onChange={(e) => setSmoothLines(e.target.checked)}
+                onChange={(e) => chooseLatencyStyle(latencyStyleFromOptions({ connectGaps, smooth: e.target.checked }))}
                 className="accent-foreground"
               />
               平滑曲线
             </label>
+            {latencyStyle !== siteDefault && (
+              <button
+                type="button"
+                onClick={() => chooseLatencyStyle(siteDefault)}
+                className="shrink-0 whitespace-nowrap text-xs text-muted-foreground transition-colors hover:text-foreground"
+                title="恢复主题设置中的延迟曲线样式"
+              >
+                恢复默认
+              </button>
+            )}
           </>)}
           {/* 备注在这一行右端：桌面（≥sm）**直接并排**在「完整详情 ›」左边（不新增行高），
               手机这一行放不下，收成一枚小图标 + 浮层（点开看全，点别处 / Esc 收起）。
@@ -493,7 +504,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               ★只有「紧凑」就地展开（embedded）才需要这条入口：整页详情把整串摊在规格下面（见上面那段），
               所以那一页的量程栏右边不再挂图标，免得同一句话出现两遍。 */}
           {embedded && (cardChips.length > 0 || onOpenDetail) && (
-            <span className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-x-4 gap-y-1">
+            <span className="ml-auto flex w-full min-w-0 items-center justify-end gap-x-4 gap-y-1 sm:w-auto sm:flex-1">
               {cardChips.length > 0 && (
                 <>
                   {/* ★不许再给它 `max-w-[14rem]` 那种上限：这一行的左边本来是空的（量程按钮与削峰只占
@@ -536,15 +547,15 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                 </>
               )}
               {onOpenDetail && (
-                <button onClick={onOpenDetail} className="text-xs text-muted-foreground transition-colors hover:text-foreground">
+                <button onClick={onOpenDetail} className="shrink-0 whitespace-nowrap text-xs text-muted-foreground transition-colors hover:text-foreground">
                   完整详情 ›
                 </button>
               )}
             </span>
           )}
         </div>
-        {tab === "latency" && (connectGaps || smoothLines) && (
-          <p className="text-[11px] text-muted-foreground">连接和平滑仅影响线条显示；丢包与无响应仍按原始采样展示。</p>
+        {tab === "latency" && (connectGaps || smoothLines || latencyStyle !== siteDefault) && (
+          <p className="text-[11px] text-muted-foreground">曲线样式同步首页卡片，仅影响线条显示；丢包与无响应仍按原始采样展示。</p>
         )}
         {(updatedAt > 0 || refreshing) && (
           <p className="text-[11px] text-muted-foreground" role="status">

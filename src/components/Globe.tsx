@@ -1,18 +1,20 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react"
+import { Minus, Plus } from "lucide-react"
 
 import {
   camera, clampLat, globeCaption, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
-  links, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, type Placed, type Quality,
+  GLOBE_ZOOM, links, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
 import type { Node } from "@/lib/api"
+import { Button } from "@/components/ui/button"
 
 /**
  * 列表页顶部的「节点地球」：正射投影的一颗地球，每台机器一枚针、一条引线连到左右两摞
  * 标签上，旁边一条一条列着地区。整套是从上游复刻过来的，几何与排布在 `@/lib/globe` 里（那里的注释写了逐点比对的办法）。
  *
- * 这一层只管四件事：**什么时候重画**、**指针怎么转它**、**点哪里开哪台机器**、
- * **地区侧栏怎么筛**。数据（节点 → 针的落点）只在节点列表变了时算一次。
+ * 这一层负责重画、旋转、缩放、节点点击与地区筛选。
+ * 数据（节点 → 针的落点）只在节点列表变了时算一次。
  *
  * 重画的节奏（这是它能不能在手机上呆着的关键，别随手改成每帧）：
  *   · 空闲时按档位的 `idleMs` 重画（medium 64ms ≈ 15fps，low 90ms ≈ 11fps），
@@ -91,12 +93,18 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const [pinned, setPinned] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [inView, setInView] = useState(true)
+  const [zoom, setZoom] = useState<number>(GLOBE_ZOOM.default)
+  const [fitHeight, setFitHeight] = useState(280)
+  const zoomId = useId()
+  const frame = useMemo(() => zoomView(zoom, points.length), [zoom, points.length])
   // 画布的实际像素尺寸：只用来算"两摞标签各自的文字还有多少余量"（见 viewBox 那段）。
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
   const reduced = useReducedMotion()
   // 标签左右侧的记忆：跨帧保留，圆心附近 ±18 的机器才不会左右闪。布局函数就地写它。
   const sides = useRef(new Map<string, "L" | "R">())
   const host = useRef<HTMLDivElement>(null)
+  const regions = useRef<HTMLDivElement>(null)
+  const controls = useRef<HTMLDivElement>(null)
   const drag = useRef<{
     id: number; x: number; y: number; lon: number; lat: number; moved: boolean
     /** pointerdown 那一刻压在谁身上（见 endDrag 的注释：click 的 target 不能再信）。 */
@@ -108,9 +116,19 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     if (!el || typeof ResizeObserver !== "function") return
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect()
-      setBox({ w: r.width, h: r.height })
+      setBox((prev) => prev?.w === r.width && prev.h === r.height ? prev : { w: r.width, h: r.height })
+      // 量地区内容本身，避免左栏增高后又把伸展的侧栏高度当成新目标，形成循环。
+      const list = regions.current
+      const toolbar = controls.current
+      if (list && toolbar && list.parentElement) {
+        const style = getComputedStyle(list.parentElement)
+        const sideHeight = list.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+        setFitHeight(Math.max(280, Math.min(360, sideHeight - toolbar.getBoundingClientRect().height)))
+      }
     })
     ro.observe(el)
+    if (regions.current) ro.observe(regions.current)
+    if (controls.current) ro.observe(controls.current)
     return () => ro.disconnect()
   }, [])
 
@@ -219,7 +237,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
    * 会被直接裁掉 —— 屏幕上只看到半句话，页面什么都不会报。
    *
    * 所以这里量出容器实际比例、算出每侧还剩多少余量，不够就把 viewBox 往两边撑开
-   * （最多各 140，再长宁可小一点也不能裁）。宽屏上算出来是负的 → 撑开 0，与上游逐像素相同。
+   * （最多各 36，其余长名字省略）。缩放后按新圆盘与标签位置重新计算。
    */
   // 真量函数：一次量不出来（老浏览器）就整个退回估法，别每帧都试。
   const measured = useMemo(() => {
@@ -227,27 +245,28 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     return probe === null ? undefined : (text: string) => measureLabel(text) as number
   }, [])
   const canvas = useMemo(() => {
-    const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${VIEW.w} ${VIEW.h}` }
+    const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${frame.w} ${frame.h}` }
     if (!box || !points.length) return plain
     const ink = Math.max(0, ...points.map((p) => Math.max(
       inkWidthWith(measured, `${p.name} · ${p.code}`),
       inkWidthWith(measured, `${p.code} · ${p.name}`),
     )))
-    const scale = Math.min(box.w / VIEW.w, box.h / VIEW.h)
+    const scale = Math.min(box.w / frame.w, box.h / frame.h)
     // 一侧还剩多少余量（用户单位）：宽屏是"容器比画布宽"留下的空白，窄屏约等于 0。
-    const room = (box.w / scale - VIEW.w) / 2
+    const room = (box.w / scale - frame.w) / 2
     // 撑开最多 36：再长宁可截字（见 labelMax），也不能让地球被挤小一圈 ——
     // 460 的画布撑到 532 已经让圆盘小 13%，再多就不是"复刻"那个地球了。
-    // （123 = 两摞标签各自距画布边缘的距离，与 globe.ts 的 stack 同一组数。）
-    const pad = Math.max(0, Math.min(36, ink + 6 - (123 + room)))
+    // 标签距边缘的余量会跟随圆盘半径变化；默认是上游的 123。
+    const labelEdge = frame.cx - frame.r - 15
+    const pad = Math.max(0, Math.min(36, ink + 6 - (labelEdge + room)))
     return {
       pad,
       room,
-      viewBox: pad ? `${-pad.toFixed(1)} 0 ${(VIEW.w + pad * 2).toFixed(1)} ${VIEW.h}` : `0 0 ${VIEW.w} ${VIEW.h}`,
+      viewBox: pad ? `${-pad.toFixed(1)} 0 ${(frame.w + pad * 2).toFixed(1)} ${frame.h}` : `0 0 ${frame.w} ${frame.h}`,
     }
-  }, [box, points, measured])
+  }, [box, points, measured, frame])
   /**
-   * 两摞标签各自距画布边缘 123（见 globe.ts 的 stack），这一行长最多能有多宽 ——
+   * 标签至画布边缘的距离加上留白，就是这一行最多能有多宽 ——
    * ★ 是 `max(room, pad)`，**不是** `room + pad`（这里踩过一次，`clipped` 那条护栏当时
    * 因为正则写错静默失效，一直没报）：
    *
@@ -259,109 +278,124 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
    *
    * 取 max 两种情况都对；再用 -6 留一点墨迹余量（描边是 3，见 inkWidthWith）。
    */
-  const labelMax = 123 + Math.max(canvas.room, canvas.pad) - 6
+  const labelMax = frame.cx - frame.r - 15 + Math.max(canvas.room, canvas.pad) - 6
 
   // ★ 每一帧在这里算一遍：岸线（几百个点）、经纬网、标签堆叠、连线。
   // 这些函数都是纯的（标签左右侧的记忆那个 Map 由调用方持有），没有副作用。
-  const cam = camera(view.lon, view.lat)
+  const cam = camera(view.lon, view.lat, frame)
   const land = landPaths(cam, prep)
   const wires = graticule(cam, profile, profile.sweepCount ? sweepLonAt(Date.now()) : null)
   // ★ 这里读 ref 是有意的，也是这套排布必须的：那两个字是**跨帧记忆**——
   // 圆心附近 ±18 的机器（正在转到中缝上的那几台）如果每帧重新判左右，标签会在两摞之间
   // 来回跳。读它是幂等的：同一帧算多少次结果都一样，只是把"上一帧选的那一侧"记下来。
   // eslint-disable-next-line react/refs -- 跨帧记忆，见上
-  const placed = layoutLabels(cam, points, sides.current, labelMax, VIEW.cx, measured)
-  const arcs = links(placed, profile.linkMode)
+  const placed = layoutLabels(cam, points, sides.current, labelMax, frame.cx, measured)
+  const arcs = links(placed, profile.linkMode, frame)
   const aim = pinned && region ? rows.find((row) => row.region.key === region)?.aim : undefined
   const marker = aim ? cam.at(aim[0], aim[1]) : null
 
   return (
     <section className="globe-panel" aria-label="节点地球">
-      <div
-        ref={host}
-        className="globe-atlas"
-        data-drag={dragging ? "true" : "false"}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={(e) => endDrag(e, true)}
-        onPointerCancel={(e) => endDrag(e, false)}
-      >
-        {/* 地球是下面那张列表的另一种画法，不是唯一的入口：对读屏隐藏，免得 26 枚针
-            变成 26 个无名可点项。地区侧栏那几个是真按钮，留着。 */}
-        <svg viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
-          <defs>
-            {/* 圆盘里那层明暗：中心几乎透明、边上压到 `--globe-rim`（上游同一套停点）。 */}
-            <radialGradient id="globe-shade" cx="38%" cy="36%" r="68%">
-              <stop offset="0%" stopColor="currentColor" stopOpacity="0.06" />
-              <stop offset="70%" stopColor="currentColor" stopOpacity="0" />
-              <stop offset="100%" stopColor="var(--globe-rim)" stopOpacity="1" />
-            </radialGradient>
-          </defs>
-          <circle className="globe-ocean" cx={VIEW.cx} cy={VIEW.cy} r={VIEW.r} />
-          <circle className="globe-disk" cx={VIEW.cx} cy={VIEW.cy} r={VIEW.r} fill="url(#globe-shade)" />
-          {land.fill && <path className="globe-land" d={land.fill} />}
-          {land.stroke && <path className="globe-coast" d={land.stroke} />}
-          {wires.map((wire, i) => (
-            <path
-              key={i}
-              className={wire.sweep >= 0 ? "globe-sweep" : "globe-wire"}
-              d={wire.d}
-              strokeWidth={wire.width}
-              style={wire.sweep >= 0 ? { strokeOpacity: sweepOpacity(dark, wire.sweep) } : undefined}
-            />
-          ))}
-          <line className="globe-base" x1={110} y1={VIEW.cy + VIEW.r + 16} x2={350} y2={VIEW.cy + VIEW.r + 16} />
-          {arcs.map((arc, i) => (
-            <path key={i} className="globe-link" d={arc.d} />
-          ))}
-          {placed.map((p) => (
-            <Pin key={p.key} p={p} />
-          ))}
-          {marker && (
-            <g className="globe-selected">
-              <circle className="globe-selected-ring" cx={marker.x} cy={marker.y} r={7} />
-              <circle className="globe-selected-core" cx={marker.x} cy={marker.y} r={2.4} />
-            </g>
-          )}
-          <text className="globe-caption" x={VIEW.cx} y={VIEW.cy + VIEW.r + 28} textAnchor="middle">
-            {globeCaption(view.lon, view.lat, profile.key)}
-          </text>
-        </svg>
+      <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": frame.h / VIEW.h } as CSSProperties}>
+        <div
+          ref={host}
+          className="globe-atlas"
+          data-drag={dragging ? "true" : "false"}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={(e) => endDrag(e, true)}
+          onPointerCancel={(e) => endDrag(e, false)}
+        >
+          {/* 地球是下面那张列表的另一种画法，不是唯一的入口：对读屏隐藏，免得 26 枚针
+              变成 26 个无名可点项。地区侧栏那几个是真按钮，留着。 */}
+          <svg viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
+            <defs>
+              {/* 圆盘里那层明暗：中心几乎透明、边上压到 `--globe-rim`（上游同一套停点）。 */}
+              <radialGradient id="globe-shade" cx="38%" cy="36%" r="68%">
+                <stop offset="0%" stopColor="currentColor" stopOpacity="0.06" />
+                <stop offset="70%" stopColor="currentColor" stopOpacity="0" />
+                <stop offset="100%" stopColor="var(--globe-rim)" stopOpacity="1" />
+              </radialGradient>
+            </defs>
+            <circle className="globe-ocean" cx={frame.cx} cy={frame.cy} r={frame.r} />
+            <circle className="globe-disk" cx={frame.cx} cy={frame.cy} r={frame.r} fill="url(#globe-shade)" />
+            {land.fill && <path className="globe-land" d={land.fill} />}
+            {land.stroke && <path className="globe-coast" d={land.stroke} />}
+            {wires.map((wire, i) => (
+              <path
+                key={i}
+                className={wire.sweep >= 0 ? "globe-sweep" : "globe-wire"}
+                d={wire.d}
+                strokeWidth={wire.width}
+                style={wire.sweep >= 0 ? { strokeOpacity: sweepOpacity(dark, wire.sweep) } : undefined}
+              />
+            ))}
+            <line className="globe-base" x1={frame.cx - frame.r - 28} y1={frame.h - 20} x2={frame.cx + frame.r + 28} y2={frame.h - 20} />
+            {arcs.map((arc, i) => (
+              <path key={i} className="globe-link" d={arc.d} />
+            ))}
+            {placed.map((p) => (
+              <Pin key={p.key} p={p} />
+            ))}
+            {marker && (
+              <g className="globe-selected">
+                <circle className="globe-selected-ring" cx={marker.x} cy={marker.y} r={7} />
+                <circle className="globe-selected-core" cx={marker.x} cy={marker.y} r={2.4} />
+              </g>
+            )}
+            <text className="globe-caption" x={frame.cx} y={frame.h - 8} textAnchor="middle">
+              {globeCaption(view.lon, view.lat, profile.key)}
+            </text>
+          </svg>
+        </div>
+        <div ref={controls} className="globe-controls" role="group" aria-label="地球缩放">
+          <Button variant="ghost" size="icon-sm" className="globe-zoom-button" aria-label="缩小地球" title="缩小地球" disabled={zoom <= GLOBE_ZOOM.min} onClick={() => setZoom((value) => Math.max(GLOBE_ZOOM.min, value - 10))}>
+            <Minus />
+          </Button>
+          <input id={zoomId} type="range" min={GLOBE_ZOOM.min} max={GLOBE_ZOOM.max} step={GLOBE_ZOOM.step} value={zoom} aria-label="地球缩放比例" aria-valuetext={`${zoom}%`} onChange={(event) => setZoom(Number(event.target.value))} />
+          <Button variant="ghost" size="icon-sm" className="globe-zoom-button" aria-label="放大地球" title="放大地球" disabled={zoom >= GLOBE_ZOOM.max} onClick={() => setZoom((value) => Math.min(GLOBE_ZOOM.max, value + 10))}>
+            <Plus />
+          </Button>
+          <output htmlFor={zoomId} className="tnum">{zoom}%</output>
+          <Button variant="ghost" size="sm" className="globe-zoom-reset" aria-label="重置地球缩放" title="恢复默认缩放比例" disabled={zoom === GLOBE_ZOOM.default} onClick={() => setZoom(GLOBE_ZOOM.default)}>重置</Button>
+        </div>
       </div>
 
       <aside className="globe-side">
-        <div className="globe-side-title">
-          地区{pinned && region ? " · 已定位" : ""}
-        </div>
-        <button
-          type="button"
-          className="globe-reg globe-reg-all"
-          aria-pressed={!region}
-          onClick={() => pick(null)}
-          title={unplaced > 0 ? `共 ${nodes.length} 台，其中 ${unplaced} 台认不出国家（不上地球与地区列表）` : `共 ${nodes.length} 台`}
-        >
-          <span>全部</span>
-          <b>{nodes.length}</b>
-        </button>
-        {rows.map((row) => (
+        <div ref={regions} className="globe-regions">
+          <div className="globe-side-title">
+            地区{pinned && region ? " · 已定位" : ""}
+          </div>
           <button
-            key={row.region.key}
             type="button"
-            className="globe-reg"
-            aria-pressed={region === row.region.key}
-            onClick={() => pick(row.region.key, row.aim)}
-            title={row.offline > 0 ? `${row.count} 台 · ${row.offline} 台离线` : undefined}
+            className="globe-reg globe-reg-all"
+            aria-pressed={!region}
+            onClick={() => pick(null)}
+            title={unplaced > 0 ? `共 ${nodes.length} 台，其中 ${unplaced} 台认不出国家（不上地球与地区列表）` : `共 ${nodes.length} 台`}
           >
-            <span>
-              <RegionFlag code={row.region.code} />
-              {row.region.label}
-            </span>
-            <b>
-              {row.count}
-              {row.offline > 0 && <i className="globe-reg-dot" aria-hidden="true" />}
-            </b>
+            <span>全部</span>
+            <b>{nodes.length}</b>
           </button>
-        ))}
+          {rows.map((row) => (
+            <button
+              key={row.region.key}
+              type="button"
+              className="globe-reg"
+              aria-pressed={region === row.region.key}
+              onClick={() => pick(row.region.key, row.aim)}
+              title={row.offline > 0 ? `${row.count} 台 · ${row.offline} 台离线` : undefined}
+            >
+              <span>
+                <RegionFlag code={row.region.code} />
+                {row.region.label}
+              </span>
+              <b>
+                {row.count}
+                {row.offline > 0 && <i className="globe-reg-dot" aria-hidden="true" />}
+              </b>
+            </button>
+          ))}
+        </div>
       </aside>
     </section>
   )

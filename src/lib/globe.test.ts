@@ -6,7 +6,7 @@
 // 所以测试里把上游那两行公式**原样**再写一遍，逐点比对。
 import {
   camera, cityHint, clampLat, curvePath, globeCaption, globeNodes, globeProfile, graticule, inkWidth, landPaths, mergeRegion,
-  layoutLabels, links, prepareRings, regionOf, regionRows, regionView, sweepLonAt, sweepOpacity, trimLabel, VIEW, wrapLon,
+  layoutLabels, links, prepareRings, regionOf, regionRows, regionView, sweepLonAt, sweepOpacity, trimLabel, VIEW, wrapLon, zoomView,
 } from "./globe.ts"
 import { COARSE_WORLD_OUTLINES, COUNTRY_LL, WORLD_OUTLINES } from "./world.ts"
 import type { Node } from "./api.ts"
@@ -285,6 +285,40 @@ const right = laid.find((p) => !p.end)
 eq(left?.label, `${left?.name} · ${left?.code}`, "左侧标签是「名字 · 国家」")
 eq(right?.label, `${right?.code} · ${right?.name}`, "右侧标签是「国家 · 名字」")
 const laidRef = laid
+
+// 缩放保持地理位置、可见节点和逆投影；标签留在圆盘外，岸线仍正确裁在新半径上。
+eq(zoomView(100), VIEW, "默认缩放保持原构图")
+eq(zoomView(Number.NaN), VIEW, "非法缩放回到默认构图")
+eq(zoomView(0), zoomView(50), "缩放不越过下限")
+eq(zoomView(200), zoomView(150), "缩放不越过上限")
+const crowd = Array.from({ length: 52 }, (_, i) => ({ ...placed[i % placed.length], key: `zoom-${i}`, id: i, index: i }))
+for (const percent of [50, 100, 150]) {
+  const frame = zoomView(percent, crowd.length)
+  const labels = layoutLabels(camera(80, 30, frame), crowd, new Map())
+  ok(labels.length > 30 && labels.every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% 密集标签留在画布和底部说明之间`)
+  for (const end of [false, true]) {
+    const ys = labels.filter((p) => p.end === end).map((p) => p.ly).sort((a, b) => a - b)
+    ok(ys.slice(1).every((y, i) => y - ys[i] >= 11), `${percent}% 密集标签保留可读行距`)
+  }
+}
+for (const percent of [50, 150]) {
+  const frame = zoomView(percent)
+  const scaled = camera(80, 30, frame)
+  const pins = layoutLabels(scaled, placed, new Map())
+  eq(pins.map((p) => p.id), laid.map((p) => p.id), `${percent}% 缩放不改变可见节点`)
+  ok(pins.every((p) => Math.abs(p.lx - frame.cx) > frame.r), `${percent}% 标签留在圆盘外`)
+  ok(pins.every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% 标签留在画布内`)
+  for (const p of pins) {
+    const normal = laid.find((item) => item.id === p.id)!
+    const ratio = Math.hypot(p.px - frame.cx, p.py - frame.cy) / Math.hypot(normal.px - VIEW.cx, normal.py - VIEW.cy)
+    ok(Math.abs(ratio - percent / 100) < 1e-9, `${percent}% 节点跟随地球等比缩放`)
+    const ll = scaled.lonLat({ x: p.px, y: p.py, k: 1 })
+    ok(Math.abs(ll[0] - p.ll[0]) < 1e-7 && Math.abs(ll[1] - p.ll[1]) < 1e-7, `${percent}% 节点逆投影保持经纬度`)
+  }
+  const path = landPaths(scaled, prep).stroke
+  const points = [...path.matchAll(/(-?\d+\.\d) (-?\d+\.\d)/g)].map((m) => [Number(m[1]), Number(m[2])])
+  ok(points.length > 400 && points.every(([x, y]) => Math.hypot(x - frame.cx, y - frame.cy) <= frame.r + 0.08), `${percent}% 岸线不越出圆盘`)
+}
 
 // 投影不到的机器（在背面）不出现，也不留下标签。
 const backside = layoutLabels(camera(-100, -40), placed, new Map())

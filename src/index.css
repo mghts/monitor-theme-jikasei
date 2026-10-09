@@ -181,8 +181,8 @@
    换成本站的设计 token。规则**故意不放进 `@layer`**：SVG 内部那些类（.globe-land 等）
    上游是直接写的，不套层才能稳稳盖住 Tailwind 的工具类。
 
-   两列的比例 1.35fr / 0.65fr 与圆盘高度 280px 都照上游；窄到 900px 以下改成上下两段
-   （上游是干脆不画，本站留着，窄屏自动降到 low 档）。 */
+   两列的比例 1.35fr / 0.65fr 照上游；桌面左栏整体居中，基准高度随地区内容增高至 360px。
+   窄到 900px 以下改成上下两段。放大或标签密集时增加画布高度，避免圆盘与文字被裁掉。 */
 .globe-panel {
   display: grid;
   grid-template-columns: 1fr;
@@ -196,9 +196,16 @@
   .globe-panel { grid-template-columns: 1.35fr 0.65fr; }
 }
 
+.globe-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
 .globe-atlas {
   position: relative;
-  height: 280px;
+  flex: none;
+  height: calc(280px * var(--globe-height-ratio, 1));
   overflow: hidden;
   cursor: grab;
   /* 只让出竖向：手机上在地球上竖着划是滚页面（见组件注释），横着划才是转地球。 */
@@ -206,11 +213,37 @@
   user-select: none;
   -webkit-user-select: none;
 }
+@media (min-width: 900px) {
+  .globe-atlas { height: calc(var(--globe-fit-height, 280px) * var(--globe-height-ratio, 1)); }
+}
 .globe-atlas[data-drag="true"] { cursor: grabbing; }
 /* 手机上把圆盘压低一档：460×240 的画布在 390 宽的屏上，280 高会上下各空出 38px，
    地球只占中间那条；压在 210 就基本贴合（见 tools/verify_globe.mjs 的窄屏那几条）。 */
 @media (max-width: 720px) {
-  .globe-atlas { height: 210px; }
+  .globe-atlas { height: calc(210px * var(--globe-height-ratio, 1)); }
+}
+.globe-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px 14px;
+  color: var(--muted-foreground);
+}
+.globe-controls input {
+  width: 128px;
+  min-width: 48px;
+  min-height: 32px;
+  flex: 0 1 128px;
+  accent-color: var(--foreground);
+  cursor: ew-resize;
+}
+.globe-controls input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
+.globe-controls output { min-width: 40px; font-size: 12px; text-align: right; }
+.globe-zoom-reset { padding-inline: 8px; font-size: 12px; }
+@media (max-width: 899px) {
+  .globe-zoom-button { width: 40px; height: 40px; }
+  .globe-zoom-reset, .globe-controls input { min-height: 40px; }
 }
 .globe-atlas svg { display: block; width: 100%; height: 100%; color: var(--foreground); }
 /* 地球上的东西一律不吃指针事件，只有那几枚透明的命中圆吃 —— 于是"点地球"与
@@ -255,13 +288,16 @@
 }
 
 .globe-side {
+  min-width: 0;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.globe-regions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
   gap: 8px 18px;
-  padding: 14px 16px;
-  border-top: 1px solid var(--border);
-  font-size: 13px;
 }
 @media (min-width: 900px) {
   .globe-side { border-top: 0; border-left: 1px solid var(--border); }

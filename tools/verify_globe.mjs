@@ -57,6 +57,9 @@ const FLEET = [
   // 远超两摞距画布边缘的 126 —— 窄屏上必须靠画布留白（viewBox 往两边撑开）才不被裁。
   synth('Example Tokyo Datacenter Gen 2', 'JP', true, 27),
 ]
+// 地区栏确实比左栏高，才能发现「左栏仍贴顶」的回归；少量地区测不出这个问题。
+const MANY_REGIONS = 'US CA MX BR AR CL PE EC CO GB IE FR DE NL BE ES PT IT CH AT DK SE NO FI PL CZ HU RO GR TR UA RU JP KR CN HK TW SG MY TH VN IN ID PH AU NZ ZA EG KE IL AE SA'
+  .split(' ').map((country, i) => synth(`示例地区 ${country}`, country, true, 100 + i))
 
 let fleet = LIVE.nodes
 // 这台机群里有落点的台数：国家码为空或不在表里、又认不出城市的，不上地球。
@@ -99,6 +102,7 @@ mkdirSync(OUT, { recursive: true })
 const CHROME = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/usr/bin/google-chrome',
 ].find((p) => existsSync(p)) || 'chrome'
 
@@ -134,7 +138,7 @@ const check = (name, ok, extra = '') => { console.log(`  ${ok ? 'PASS' : 'FAIL'}
 /** 只截地球那一块（`clip` 按页面坐标裁）：README 里那张图和肉眼对照都用它。 */
 const shotPanel = async (name) => {
   const raw = await js(`(() => { const r = document.querySelector('.globe-panel').getBoundingClientRect(); return JSON.stringify({ x: Math.round(r.x), y: Math.round(r.y + scrollY), width: Math.round(r.width), height: Math.round(r.height), scale: 2 }) })()`)
-  const r = await send('Page.captureScreenshot', { format: 'png', clip: JSON.parse(raw) })
+  const r = await send('Page.captureScreenshot', { format: 'png', clip: JSON.parse(raw), captureBeyondViewport: true })
   if (r.result?.data) (await import('node:fs')).writeFileSync(join(OUT, name), Buffer.from(r.result.data, 'base64'))
 }
 const shot = async (name) => {
@@ -151,8 +155,13 @@ const shotSide = async (name) => {
 // 页面上要断言的都在这一段里取回来。**别在模板字符串里写反引号或正则**（踩过）。
 const READ = `(() => {
   const panel = document.querySelector('.globe-panel');
-  const svg = panel ? panel.querySelector('svg') : null;
+  const svg = panel ? panel.querySelector('.globe-atlas svg') : null;
   const atlas = panel ? panel.querySelector('.globe-atlas') : null;
+  const main = panel ? panel.querySelector('.globe-main') : null;
+  const controls = panel ? panel.querySelector('.globe-controls') : null;
+  const slider = controls ? controls.querySelector('input[type="range"]') : null;
+  const disk = svg ? svg.querySelector('.globe-disk') : null;
+  const rect = (el) => { const b = el.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom] };
   const land = svg ? svg.querySelector('.globe-land') : null;
   const coast = svg ? svg.querySelector('.globe-coast') : null;
   const labels = panel ? [...panel.querySelectorAll('.globe-label')] : [];
@@ -162,7 +171,9 @@ const READ = `(() => {
   const caption = panel ? panel.querySelector('.globe-caption') : null;
   const nums = (d) => (d || '').split(' ').filter((t) => t !== '' && !isNaN(Number(t))).map(Number);
   const coords = nums(coast ? coast.getAttribute('d') : '');
-  const cx = 230, cy = 112, r = 92;
+  const cx = disk ? Number(disk.getAttribute('cx')) : 230;
+  const cy = disk ? Number(disk.getAttribute('cy')) : 112;
+  const r = disk ? Number(disk.getAttribute('r')) : 92;
   let far = 0;
   for (let i = 0; i + 1 < coords.length; i += 2) if (Math.sqrt(Math.pow(coords[i] - cx, 2) + Math.pow(coords[i + 1] - cy, 2)) > r + 0.06) far++;
   const xs = labels.map((t) => Number(t.getAttribute('x')));
@@ -174,6 +185,13 @@ const READ = `(() => {
     viewBox: svg ? svg.getAttribute('viewBox') : null,
     ocean: svg ? svg.querySelectorAll('.globe-ocean').length : 0,
     disk: svg ? svg.querySelectorAll('.globe-disk').length : 0,
+    camera: disk ? { cx, cy, r, h: Number(svg.getAttribute('viewBox').split(' ')[3]), box: rect(disk) } : null,
+    panelBox: panel ? rect(panel) : null,
+    mainBox: main ? rect(main) : null,
+    fitHeight: main ? parseFloat(getComputedStyle(main).getPropertyValue('--globe-fit-height')) : null,
+    controlsBox: controls ? rect(controls) : null,
+    regionsHeight: panel && panel.querySelector('.globe-regions') ? panel.querySelector('.globe-regions').getBoundingClientRect().height : null,
+    zoom: slider ? { min: Number(slider.min), max: Number(slider.max), step: Number(slider.step), value: Number(slider.value), label: slider.getAttribute('aria-label'), text: slider.getAttribute('aria-valuetext'), output: controls.querySelector('output')?.textContent, buttons: [...controls.querySelectorAll('button')].map((b) => ({ label: b.getAttribute('aria-label'), disabled: b.disabled })) } : null,
     shade: svg ? svg.querySelectorAll('#globe-shade stop').length : 0,
     landPts: area.length / 2,
     coastPts: coords.length / 2,
@@ -190,19 +208,21 @@ const READ = `(() => {
     labelMinDist: xs.length ? Math.min.apply(null, xs.map((x) => Math.abs(x - cx))) : 999,
     labelY: ys.map((y) => y - 3),
     // 标签的**实际墨迹盒**（不是估的宽度）：比它跟 SVG 视口盒一比，就知道有没有被裁。
-    labelBox: labels.map((t) => { const r = t.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.right)] }),
+    labelBox: labels.map(rect),
     labelText: labels.map((t) => t.textContent),
-    svgBox: svg ? (() => { const r = svg.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.right)] })() : null,
+    svgBox: svg ? rect(svg) : null,
     caption: caption ? caption.textContent : null,
+    captionBox: caption ? rect(caption) : null,
     sideTitle: panel ? panel.querySelector('.globe-side-title').textContent : null,
     regs: regs.map((b) => ({ text: b.querySelector('span').textContent, count: Number(b.querySelector('b').textContent), on: b.getAttribute('aria-pressed') === 'true', title: b.getAttribute('title') || '', dot: b.querySelector('.globe-reg-dot') !== null })),
     flags: regs.length - 1 === (panel ? panel.querySelectorAll('.globe-reg-flag').length : 0),
     flagSrc: panel && panel.querySelector('.globe-reg-flag') ? panel.querySelector('.globe-reg-flag').getAttribute('src') : null,
-    atlas: atlas ? { h: Math.round(atlas.getBoundingClientRect().height), w: Math.round(atlas.getBoundingClientRect().width), touch: getComputedStyle(atlas).touchAction, cursor: getComputedStyle(atlas).cursor } : null,
+    atlas: atlas ? { h: Math.round(atlas.getBoundingClientRect().height), w: Math.round(atlas.getBoundingClientRect().width), box: rect(atlas), touch: getComputedStyle(atlas).touchAction, cursor: getComputedStyle(atlas).cursor } : null,
     cols: panel ? getComputedStyle(panel).gridTemplateColumns : null,
     landFill: land ? getComputedStyle(land).fill : null,
     pinStroke: pins.length ? getComputedStyle(pins[0]).stroke : null,
     labelFill: labels.length ? getComputedStyle(labels[0]).fill : null,
+    labelFont: labels.length ? getComputedStyle(labels[0]).fontSize : null,
     warn: (() => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       el.style.stroke = 'var(--warn)';
@@ -251,7 +271,32 @@ const expectLinks = (hits) => {
 }
 
 /** ★ 标签有没有被 SVG 的视口裁掉：逐行比"文字的墨迹盒"与"SVG 视口盒"。 */
-const clipped = (st) => st.labelBox.filter(([l, r]) => l < st.svgBox[0] - 1 || r > st.svgBox[1] + 1)
+const clipped = (st) => st.labelBox.filter(([l, t, r, b]) => l < st.svgBox[0] - 1 || r > st.svgBox[2] + 1 || t < st.svgBox[1] - 1 || b > st.svgBox[3] + 1)
+
+const read = async () => JSON.parse(await js(READ))
+const zoomButton = async (label) => {
+  const found = await js(`(() => { const b = [...document.querySelectorAll('.globe-controls button')].find((b) => b.getAttribute('aria-label') === ${JSON.stringify(label)}); if (b) b.click(); return !!b })()`)
+  check(`缩放按钮可找到：${label}`, found === true)
+  await sleep(150)
+  return read()
+}
+const zoomKey = async (key) => {
+  const focused = await js(`(() => { const input = document.querySelector('.globe-controls input[type="range"]'); if (!input) return false; input.focus(); return document.activeElement === input })()`)
+  check(`滑条可以获得键盘焦点（${key}）`, focused === true)
+  const keyCode = { Home: 36, End: 35, ArrowRight: 39, ArrowLeft: 37 }[key]
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: keyCode })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: keyCode })
+  await sleep(150)
+  return read()
+}
+const pinJapan = async () => {
+  const found = await js(`(() => { const flag = document.querySelector('.globe-reg-flag[src="/flags/JP.svg"]'); const row = flag?.closest('button'); if (row && row.getAttribute('aria-pressed') !== 'true') row.click(); return !!row })()`)
+  check('（缩放前置）日本地区可选中，避免自转干扰命中测量', found === true)
+  await sleep(600)
+  return read()
+}
+const sameSelection = (before, after) => before.url === after.url && before.cards === after.cards && before.caption === after.caption
+  && JSON.stringify(before.regs.filter((r) => r.on).map((r) => r.text)) === JSON.stringify(after.regs.filter((r) => r.on).map((r) => r.text))
 
 console.log('\n=== 一、七台演示机（合成夹具，桌面 1440×900） ===')
 fleet = LIVE.nodes
@@ -546,6 +591,109 @@ check('窄屏没有横向溢出（页面不左右滚）', await js('document.doc
 check('窄屏控制台无异常', errors.length === 0, errors.join(' | '))
 await sleep(400)
 await shot('05-synth-mobile.png')
+await send('Emulation.clearDeviceMetricsOverride')
+
+console.log('\n=== 十、大量地区：桌面左栏随内容适配并垂直居中 ===')
+await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 2, mobile: false })
+fleet = MANY_REGIONS
+await open()
+await sleep(500)
+const tall = await read()
+check('（前置）地区内容比左栏实际内容高，居中断言不是空测',
+  tall.regs.length > 35 && tall.regionsHeight > tall.controlsBox[3] - tall.atlas.box[1] + 20,
+  `${tall.regs.length} 行 / 地区 ${Math.round(tall.regionsHeight)}px / 左栏 ${Math.round(tall.controlsBox[3] - tall.atlas.box[1])}px`)
+check('大量地区的基准画布高度限制在 280~360px，实际高度按标签画布比例适配',
+  tall.fitHeight >= 280 && tall.fitHeight <= 360 && tall.camera.r === 92
+    && Math.abs(tall.atlas.h - tall.fitHeight * tall.camera.h / 240) <= 1,
+  `基准 ${tall.fitHeight}px / 画布 ${tall.camera.h} / 实际 ${tall.atlas.h}px`)
+check('★ 大量地区的密集标签没有被 SVG 水平或竖直裁切',
+  tall.labels > 20 && clipped(tall).length === 0, `${tall.labels} 个标签 / ${JSON.stringify(clipped(tall))}`)
+check('★ 大量地区的底部经纬度文案在所有密集标签下方',
+  tall.captionBox !== null && tall.labelBox.every((box) => box[3] <= tall.captionBox[1] + 0.5),
+  `标签最下沿 ${Math.max(...tall.labelBox.map((box) => box[3])).toFixed(1)} / 文案上沿 ${tall.captionBox?.[1].toFixed(1)}`)
+// globe-main 是被 grid 拉伸的整列；必须量 atlas + controls 的实际内容，量 main 自己会假绿。
+const contentMiddle = (tall.atlas.box[1] + tall.controlsBox[3]) / 2
+const panelMiddle = (tall.panelBox[1] + tall.panelBox[3]) / 2
+check('★ 左栏实际内容在高卡片里垂直居中（上下余量相同）',
+  Math.abs(contentMiddle - panelMiddle) <= 2,
+  `内容中点 ${contentMiddle.toFixed(1)} / 面板中点 ${panelMiddle.toFixed(1)}`)
+check('居中所需的左右列与内层地区 grid 都存在', tall.mainBox !== null && String(tall.cols).split(' ').length === 2 && tall.regionsHeight > 0, String(tall.cols))
+await shotPanel('06-many-regions-centered.png')
+
+console.log('\n=== 十一、滑条 / 按钮 / 极值倍率：保留视角与筛选，点针仍进正确机器 ===')
+fleet = FLEET
+for (const [width, height, tag] of [[1440, 900, '桌面'], [390, 844, '手机']]) {
+  await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: width < 500 })
+  await open()
+  const baseline = await pinJapan()
+  check(`${tag}：滑条范围、步长、读屏名称与倍率输出正确`,
+    baseline.zoom?.min === 50 && baseline.zoom?.max === 150 && baseline.zoom?.step === 5
+      && baseline.zoom?.value === 100 && baseline.zoom?.label === '地球缩放比例'
+      && baseline.zoom?.text === '100%' && baseline.zoom?.output === '100%', JSON.stringify(baseline.zoom))
+  check(`${tag}：默认倍率保留既有圆盘几何`,
+    baseline.camera.cx === 230 && baseline.camera.cy === 112 && baseline.camera.r === 92,
+    JSON.stringify(baseline.camera))
+
+  const plus = await zoomButton('放大地球')
+  check(`${tag}：放大按钮每次增加 10%，不会转动 / 改筛选 / 跳页`, plus.zoom?.value === 110 && sameSelection(baseline, plus), JSON.stringify(plus.zoom))
+  const minus = await zoomButton('缩小地球')
+  check(`${tag}：缩小按钮每次减少 10%，不会转动 / 改筛选 / 跳页`, minus.zoom?.value === 100 && sameSelection(baseline, minus), JSON.stringify(minus.zoom))
+  const low = await zoomKey('Home')
+  check(`${tag}：Home 到 50%，圆盘真实缩小且缩小按钮禁用`,
+    low.zoom?.value === 50 && low.camera.r === 46 && low.camera.box[2] - low.camera.box[0] < baseline.camera.box[2] - baseline.camera.box[0]
+      && low.zoom?.buttons.find((b) => b.label === '缩小地球')?.disabled === true && sameSelection(baseline, low), JSON.stringify(low.zoom))
+  const next = await zoomKey('ArrowRight')
+  check(`${tag}：方向键按滑条步长增加 5%`, next.zoom?.value === 55 && next.camera.r === 50.6 && sameSelection(baseline, next), JSON.stringify(next.zoom))
+  const high = await zoomKey('End')
+  check(`${tag}：End 到 150%，圆盘真实放大且放大按钮禁用`,
+    high.zoom?.value === 150 && high.camera.r === 138 && high.camera.box[2] - high.camera.box[0] > baseline.camera.box[2] - baseline.camera.box[0]
+      && high.zoom?.buttons.find((b) => b.label === '放大地球')?.disabled === true && sameSelection(baseline, high), JSON.stringify(high.zoom))
+  check(`${tag}：两个极值的岸线和标签仍适配新圆盘，文字字号保持`,
+    [low, high].every((state) => state.coastOutside === 0 && state.labelMinDist > state.camera.r && clipped(state).length === 0 && state.labelFont === baseline.labelFont),
+    `50% 裁切 ${clipped(low).length} / 150% 裁切 ${clipped(high).length} / 字号 ${baseline.labelFont}→${low.labelFont}/${high.labelFont}`)
+  check(`${tag}：50% 密集标签没有覆盖底部经纬度文案`, low.captionBox !== null && low.labelBox.every((box) => box[3] <= low.captionBox[1] + 0.5),
+    `标签最下沿 ${Math.max(...low.labelBox.map((box) => box[3])).toFixed(1)} / 文案上沿 ${low.captionBox?.[1].toFixed(1)}`)
+  const reset = await zoomButton('重置地球缩放')
+  check(`${tag}：重置恢复 100% 和默认几何并保留筛选`, reset.zoom?.value === 100 && reset.camera.r === 92 && reset.camera.cy === 112 && sameSelection(baseline, reset), JSON.stringify(reset.zoom))
+
+  // 真实鼠标拖动，不能用赋 value 冒充；滑条若被地球的 pointer capture 抢走，这里会失败。
+  const range = await js(`(() => { const r = document.querySelector('.globe-controls input[type="range"]').getBoundingClientRect(); return { left: r.left, right: r.right, y: r.top + r.height / 2 } })()`)
+  const start = (range.left + range.right) / 2
+  const end = range.right - 9
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start, y: range.y, button: 'left', buttons: 1, clickCount: 1 })
+  for (let i = 1; i <= 5; i++) await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start + (end - start) * i / 5, y: range.y, button: 'left', buttons: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end, y: range.y, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(250)
+  const moved = await read()
+  check(`${tag}：滑条真实拖动改变倍率，没有被地球拖拽捕获`, moved.zoom?.value > 100 && moved.zoom?.value <= 150 && sameSelection(baseline, moved) && moved.atlas.cursor === 'grab', JSON.stringify(moved.zoom))
+  check(`${tag}：缩放控件没有撑出页面宽度`, await js(`document.documentElement.scrollWidth <= ${width}`), String(await js('document.documentElement.scrollWidth')))
+
+  for (const [key, percent] of [['Home', 50], ['End', 150]]) {
+    // 上一次点针会离开页面，每次重新钉住地区与设置倍率，确保点位在截图与点击之间不会自转。
+    await open()
+    await pinJapan()
+    const zoomed = await zoomKey(key)
+    check(`${tag} ${percent}%：极值长标签没有被视口裁切`, clipped(zoomed).length === 0, JSON.stringify(clipped(zoomed)))
+    const target = await js(`(() => {
+      const hit = document.querySelector('.globe-atlas .hit');
+      if (!hit) return null;
+      const r = hit.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      // 同城命中圆可能重叠，期望值取这个像素最上层的真实命中圆，而非下面被遮挡的那台。
+      const top = document.elementFromPoint(x, y)?.closest('.hit');
+      return { x, y, id: top?.getAttribute('data-node'), hit: !!top, w: r.width, h: r.height };
+    })()`)
+    check(`${tag} ${percent}%：缩放后的屏幕命中位置仍是机器命中圆`, target?.hit === true && target.w >= 10 && target.h >= 10, JSON.stringify(target))
+    if (target?.hit) {
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', buttons: 1, clickCount: 1 })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', buttons: 0, clickCount: 1 })
+      await sleep(600)
+      const detail = await read()
+      check(`${tag} ${percent}%：点命中圆进入对应机器且详情正常渲染`, detail.url === `/node/${target.id}` && /CPU|内存/.test(String(await js('document.body.innerText'))), `${detail.url} 期望 /node/${target.id}`)
+    }
+  }
+  await open()
+  check(`${tag}：离开极值验收后恢复默认 100%`, (await read()).zoom?.value === 100)
+}
 await send('Emulation.clearDeviceMetricsOverride')
 
 console.log(`\n${fail ? '✗' : '✓'} globe: ${pass} 条通过 / ${fail} 条失败（截图在 ${OUT}/）`)

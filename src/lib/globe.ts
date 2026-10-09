@@ -22,6 +22,19 @@ import type { Node } from "@/lib/api"
 
 /** 画布与圆盘。上游 SVG 的 `viewBox="0 0 460 240"` 就是这几个数，改它们等于换一套构图。 */
 export const VIEW = { w: 460, h: 240, cx: 230, cy: 112, r: 92 } as const
+export type GlobeView = Readonly<{ w: number; h: number; cx: number; cy: number; r: number }>
+export const GLOBE_ZOOM = { min: 50, max: 150, step: 5, default: 100 } as const
+
+/** 缩放投影半径，保留文字大小；给完整圆盘、密集标签与底部说明留出空间。 */
+export function zoomView(percent: number, labelCount = 0): GlobeView {
+  const zoom = Number.isFinite(percent) ? Math.max(GLOBE_ZOOM.min, Math.min(GLOBE_ZOOM.max, percent)) : GLOBE_ZOOM.default
+  const r = VIEW.r * zoom / 100
+  // 左右数量差最多 2；用全部落点预留空间，避免自转过程中可见数量变化导致高度跳动。
+  const rows = Math.ceil(Math.max(0, Number.isFinite(labelCount) ? labelCount : 0) / 2) + 1
+  const gap = rows > 14 ? 11 : 13
+  const h = Math.max(VIEW.h, r * 2 + 56, 12 + (rows - 1) * gap + 36)
+  return { w: VIEW.w, h, cx: VIEW.cx, cy: (h - 16) / 2, r }
+}
 
 /** 极角余弦的可见阈值：`cos c > 0.02` 才画（≈ 中心 88.9° 以内，多留一点余量好裁边）。 */
 const LIMB_K = 0.02
@@ -85,7 +98,7 @@ export type Pt = { x: number; y: number; k: number }
  */
 export type Camera = {
   /** 这一帧的圆盘（圆心与半径）：收口时要贴着它走。 */
-  view: typeof VIEW
+  view: GlobeView
   /** 单个经纬度。网格线与标签用它。 */
   at(lon: number, lat: number): Pt | null
   /** 预计算好的单位向量（岸线用它，省掉每点每帧的三角函数）。 */
@@ -110,7 +123,7 @@ export type Camera = {
   lonLat(p: Pt): [number, number]
 }
 
-export function camera(lon0: number, lat0: number, view = VIEW): Camera {
+export function camera(lon0: number, lat0: number, view: GlobeView = VIEW): Camera {
   const a = (lon0 * Math.PI) / 180
   const b = (lat0 * Math.PI) / 180
   const sa = Math.sin(a)
@@ -816,7 +829,7 @@ export type Placed = GlobeNode & {
  *   ② 左右分流：以圆心为界，中心附近 ±18 的按上一帧的选择留在原侧（否则在这个角度上会左右闪烁）；
  *   ③ 两侧数量差超过 2 就把**离中心最近**的那几个挪到对面（地理位置仍然主导）；
  *   ④ 每摞按 y 排序、等距铺开（间距 13，超过 14 行时压到 11），整摞居中于它们的平均高度，
- *      再夹在 12~204 之间 —— 于是标签永远不会压到地球身上，也不会跑出画布。
+ *      再夹在画布上下边界之间（默认 12~204）—— 避开底部说明。
  *
  * `sides` 是跨帧记忆（节点键 → 左/右），由调用方持有（React 里放 ref）。
  *
@@ -824,7 +837,7 @@ export type Placed = GlobeNode & {
  * （两侧的空白也算进去），窄屏上就只剩两摞标签到画布边缘的那点地方 —— 超出的字用 `…` 截掉，
  * 绝不留给 SVG 视口去裁。`measure` 是那个**真量字宽**的函数（见 `inkWidthWith`）。
  */
-export function layoutLabels(cam: Camera, points: GlobeNode[], sides: Map<string, "L" | "R">, maxWidth = Infinity, cx = VIEW.cx, measure?: LabelMeasure): Placed[] {
+export function layoutLabels(cam: Camera, points: GlobeNode[], sides: Map<string, "L" | "R">, maxWidth = Infinity, cx: number = cam.view.cx, measure?: LabelMeasure): Placed[] {
   const items: Placed[] = []
   for (const point of points) {
     const p = cam.at(point.ll[0], point.ll[1])
@@ -865,10 +878,12 @@ export function layoutLabels(cam: Camera, points: GlobeNode[], sides: Map<string
     const gap = list.length > 14 ? 11 : 13
     const mean = list.reduce((sum, item) => sum + item.py, 0) / list.length
     let y0 = mean - ((list.length - 1) * gap) / 2
-    if (y0 < 12) y0 = 12
+    const top = 12
+    const bottom = cam.view.h - 36
+    if (y0 < top) y0 = top
     const last = y0 + (list.length - 1) * gap
-    if (last > 204) y0 -= last - 204
-    if (y0 < 12) y0 = 12
+    if (last > bottom) y0 -= last - bottom
+    if (y0 < top) y0 = top
     list.forEach((item, i) => {
       item.lx = x
       item.ly = y0 + i * gap
@@ -877,10 +892,10 @@ export function layoutLabels(cam: Camera, points: GlobeNode[], sides: Map<string
       sides.set(item.key, end ? "L" : "R")
     })
   }
-  // 两摞都要完全落在圆盘外面：460 宽的画布里留给它们的正是 123 / 337 这两条线
-  // —— 与上游那套的 `<text x>` 逐字一致（实测它的标签就是 123/337）。
-  stack(left, 123, true)
-  stack(right, 337, false)
+  // 两摞与圆盘保持 15 个用户单位间距；100% 时仍是上游的 123 / 337。
+  const offset = cam.view.r + 15
+  stack(left, cx - offset, true)
+  stack(right, cx + offset, false)
   return items
 }
 
@@ -888,7 +903,7 @@ export function layoutLabels(cam: Camera, points: GlobeNode[], sides: Map<string
  * 在线节点之间的连线：跨地区才算一对，再按 `(a·7 + b·3) % divisor === 1` 抽稀 ——
  * 26 台两两相连是 325 条，画出来是一团毛线。`linkMode` 越大越密（上游 1 → 8 抽一、2 → 4 抽一）。
  */
-export function links(placed: Placed[], mode: 0 | 1 | 2, center = VIEW): { d: string }[] {
+export function links(placed: Placed[], mode: 0 | 1 | 2, center: Pick<GlobeView, "cx" | "cy"> = VIEW): { d: string }[] {
   if (!mode) return []
   const online = placed.filter((item) => item.online)
   const out: { d: string }[] = []

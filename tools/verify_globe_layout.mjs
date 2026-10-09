@@ -2,8 +2,8 @@
 //   ① 陆地路径里没有「一步跨过半个圆盘」的直线 —— 那正是「陆地随自转残缺/多填」的元凶
 //      （收口没沿地平线走时，实测抓过 168.9 单位一步的弦，几乎就是直径）
 //   ② 定位点、连线、线路弧都落在圆盘里（≤ 半径）
-//   ③ 地区标签互不重叠、也不越过地平线
-// 三种视口各跑一遍（桌面 / 平板 / 手机）——手机上那档是站长最常看的那档。
+//   ③ 地区标签互不重叠、也不被 SVG 视口裁切
+// 七种视口均测默认与 50% / 150% 缩放；字号与命中行为由 verify_globe.mjs 另行验收。
 //
 // 用法：node tools/verify_globe_layout.mjs
 import { spawn } from 'node:child_process'
@@ -17,21 +17,21 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 // 桩数据：几个挤在一起的城市（同一个地区行）+ 跨洲分布，逼出「标签挤在一起」和「点贴地平线」两种情况
 const NODES = {
   nodes: [
-    { id: 'a', name: '东京一号', online: true, country: 'JP', group: '亚太', region: 'JP · Tokyo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 2147483648, disk_total: 42949672960, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'b', name: '东京二号', online: true, country: 'JP', group: '亚太', region: 'JP · Tokyo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 2147483648, disk_total: 42949672960, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'c', name: '东京三号', online: false, country: 'JP', group: '亚太', region: 'JP · Tokyo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 1073741824, disk_total: 21474836480, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'd', name: '法兰克福一号', online: true, country: 'DE', group: '欧洲', region: 'DE · Frankfurt am Main', os: 'Ubuntu 24.04', cpu_name: 'Xeon', cpu_cores: 4, mem_total: 8589934592, disk_total: 107374182400, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'e', name: '圣何塞', online: true, country: 'US', group: '北美', region: 'US · San Jose', os: 'AlmaLinux 9', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 4294967296, disk_total: 64424509440, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'f', name: '悉尼', online: true, country: 'AU', group: '亚太', region: 'AU · Sydney', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 2147483648, disk_total: 32212254720, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'g', name: '新加坡', online: false, country: 'SG', group: '亚太', region: 'SG · Singapore', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 1073741824, disk_total: 21474836480, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'h', name: '圣保罗', online: true, country: 'BR', group: '南美', region: 'BR · São Paulo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 4294967296, disk_total: 64424509440, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 1, name: '东京一号', online: true, country: 'JP', group: '亚太', region: 'JP · Tokyo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 2147483648, disk_total: 42949672960, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 2, name: '东京二号', online: true, country: 'JP', group: '亚太', region: 'JP · Tokyo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 2147483648, disk_total: 42949672960, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 3, name: '东京三号', online: false, country: 'JP', group: '亚太', region: 'JP · Tokyo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 1073741824, disk_total: 21474836480, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 4, name: '法兰克福一号', online: true, country: 'DE', group: '欧洲', region: 'DE · Frankfurt am Main', os: 'Ubuntu 24.04', cpu_name: 'Xeon', cpu_cores: 4, mem_total: 8589934592, disk_total: 107374182400, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 5, name: '圣何塞', online: true, country: 'US', group: '北美', region: 'US · San Jose', os: 'AlmaLinux 9', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 4294967296, disk_total: 64424509440, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 6, name: '悉尼', online: true, country: 'AU', group: '亚太', region: 'AU · Sydney', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 2147483648, disk_total: 32212254720, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 7, name: '新加坡', online: false, country: 'SG', group: '亚太', region: 'SG · Singapore', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 1073741824, disk_total: 21474836480, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 8, name: '圣保罗', online: true, country: 'BR', group: '南美', region: 'BR · São Paulo', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 4294967296, disk_total: 64424509440, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
     // ★ 赤道 + 西经 78 一带：那两处收口 bug（弦 + 走向判反）**只在这个视角露头**，
     //   默认视角（lon 80 / lat 30）与东京、法兰克福那些地区行都看不见 —— 反向自测就漏过。
-    { id: 'i', name: '基多', online: true, country: 'EC', group: '南美', region: 'EC · Quito', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 2147483648, disk_total: 32212254720, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'j', name: '利马', online: true, country: 'PE', group: '南美', region: 'PE · Lima', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 2147483648, disk_total: 32212254720, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 9, name: '基多', online: true, country: 'EC', group: '南美', region: 'EC · Quito', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 2147483648, disk_total: 32212254720, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 10, name: '利马', online: true, country: 'PE', group: '南美', region: 'PE · Lima', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 1, mem_total: 2147483648, disk_total: 32212254720, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
     // 两个**超长名字**：把「窄屏截断」这条路走出来（截断必须真的放得下，不能靠 SVG 视口去裁）。
-    { id: 'k', name: 'Demo Node Tokyo Datacenter Gen 2', online: true, country: 'JP', group: '亚太', region: 'JP · Tokyo Datacenter', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 2147483648, disk_total: 42949672960, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
-    { id: 'l', name: 'Demo Node Sao Paulo Datacenter Gen 3', online: true, country: 'BR', group: '南美', region: 'BR · Sao Paulo Datacenter', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 4294967296, disk_total: 64424509440, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 11, name: 'Demo Node Tokyo Datacenter Gen 2', online: true, country: 'JP', group: '亚太', region: 'JP · Tokyo Datacenter', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 2147483648, disk_total: 42949672960, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
+    { id: 12, name: 'Demo Node Sao Paulo Datacenter Gen 3', online: true, country: 'BR', group: '南美', region: 'BR · Sao Paulo Datacenter', os: 'Debian 12', cpu_name: 'EPYC', cpu_cores: 2, mem_total: 4294967296, disk_total: 64424509440, virt: 'kvm', arch: 'x86_64', last_seen: 1, public: true, weight: 1 },
   ],
 }
 
@@ -55,7 +55,12 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(PORT, '127.0.0.1', r))
 const BASE = `http://127.0.0.1:${PORT}`
 
-const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find((p) => existsSync(p)) || 'chrome'
+const CHROME = [
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/usr/bin/google-chrome',
+].find((p) => existsSync(p)) || 'chrome'
 const dbgPort = 9930 + Math.floor(Math.random() * 50)
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbgPort}`, '--remote-allow-origins=*', '--no-first-run', '--disable-gpu',
   '--hide-scrollbars', '--user-data-dir=' + (process.env.TEMP || '/tmp') + '/globelayout-' + dbgPort, 'about:blank'], { stdio: 'ignore' })
@@ -75,12 +80,14 @@ const js = async (expr) => (await send('Runtime.evaluate', { expression: expr, r
 ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
 await send('Runtime.enable'); await send('Page.enable')
 
-// 在页面里跑的那段：把地球里所有可见图元量一遍（VIEW = { w:460, h:240, cx:230, cy:112, r:92 }）
+// 在页面里跑的那段：默认 VIEW 不变，非默认倍率从实际圆盘读取参数，避免拿 r=92 误判。
 const PROBE = `(() => {
-  const svg = document.querySelector('.globe-atlas svg') || document.querySelector('svg')
+  const svg = document.querySelector('.globe-atlas svg')
   if (!svg) return { error: '找不到地球 SVG（.globe-atlas svg）' }
   const host = document.querySelector('.globe-atlas') || svg.parentElement
-  const CX = 230, CY = 112, R = 92
+  const disk = svg.querySelector('.globe-disk')
+  if (!disk) return { error: '找不到地球圆盘（.globe-disk）' }
+  const CX = +disk.getAttribute('cx'), CY = +disk.getAttribute('cy'), R = +disk.getAttribute('r')
   const num = (s) => { const m = String(s).match(/-?\\d+(\\.\\d+)?/g) || []; return m.map(Number) }
   const radius = (x, y) => Math.hypot(x - CX, y - CY)
   // ① 陆地（与海岸线）：逐步长 —— 弦 bug 会在这里露出来（实测抓过 168.9 单位一步）
@@ -123,7 +130,8 @@ const PROBE = `(() => {
       }
     }
   }
-  // ② 点（定位点 + 命中区）与线（连线/线路弧/引线）是否都在盘内
+  // ② 点（定位点 + 命中区）与线（连线/线路弧）是否都在盘内。
+  // 标签引线本来就延伸到圆盘之外，不能把它拿来判圆盘越界（50% 时尤其容易误报）。
   const outside = []
   const pins = [...svg.querySelectorAll('circle.globe-pin, circle.hit')]
   for (const c of pins) {
@@ -131,7 +139,7 @@ const PROBE = `(() => {
     if (rr > R + 0.6) outside.push('点(' + c.getAttribute('cx') + ',' + c.getAttribute('cy') + ') r=' + rr.toFixed(1) + ' .' + c.getAttribute('class'))
   }
   let lineWorst = 0, lineAt = '', lineCount = 0
-  for (const p of svg.querySelectorAll('path.globe-wire, path.globe-sweep, path.globe-link, path.globe-stem')) {
+  for (const p of svg.querySelectorAll('path.globe-wire, path.globe-sweep, path.globe-link')) {
     lineCount++
     const nums = num(p.getAttribute('d') || '')
     for (let i = 0; i + 1 < nums.length; i += 2) {
@@ -143,9 +151,10 @@ const PROBE = `(() => {
   // ③ 标签：互不重叠 + 不越界
   const labels = [...svg.querySelectorAll('text.globe-label, text.globe-count')].map((t) => {
     const b = t.getBBox()
+    const screen = t.getBoundingClientRect()
     const raw = t.textContent || ''
     // ★ 判「截没截」要看全文：显示用的那截（slice 16）会把结尾的省略号切掉，于是永远查不出来。
-    return { text: raw.slice(0, 16), full: raw, x: b.x, y: b.y, w: b.width, h: b.height, cx: b.x + b.width / 2, cy: b.y + b.height / 2 }
+    return { text: raw.slice(0, 16), full: raw, x: b.x, y: b.y, w: b.width, h: b.height, cx: b.x + b.width / 2, cy: b.y + b.height / 2, screen: { l: screen.left, t: screen.top, r: screen.right, b: screen.bottom } }
   }).filter((b) => b.w > 0)
   const overlaps = []
   for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
@@ -156,20 +165,20 @@ const PROBE = `(() => {
   }
   const spill = labels.filter((b) => radius(b.cx, b.cy) > R - 1).map((b) => b.text + ' r=' + radius(b.cx, b.cy).toFixed(1))
   // ★ 真裁切框是 SVG 元素本身（视口），不是 viewBox：宽屏时画布两侧的空白是给长名字溢出的。
-  const vbAll = (svg.getAttribute('viewBox') || '0 0 460 240').split(/ +/).map(Number)
   const hostBox = host.getBoundingClientRect()
-  const k = Math.min(hostBox.width / vbAll[2], hostBox.height / vbAll[3])
-  const offX = (hostBox.width - vbAll[2] * k) / 2
-  const toPx = (ux) => offX + (ux - vbAll[0]) * k
-  const clipped = labels.filter((b) => toPx(b.x) < -0.5 || toPx(b.x + b.w) > hostBox.width + 0.5)
-    .map((b) => b.text + ' px ' + toPx(b.x).toFixed(0) + '→' + toPx(b.x + b.w).toFixed(0) + '（盒宽 ' + hostBox.width.toFixed(0) + '）')
+  const svgBox = svg.getBoundingClientRect()
+  const clipped = labels.filter(({ screen: b }) => b.l < svgBox.left - 0.5 || b.r > svgBox.right + 0.5 || b.t < svgBox.top - 0.5 || b.b > svgBox.bottom + 0.5)
+    .map((b) => b.text + ' px ' + b.screen.l.toFixed(0) + ',' + b.screen.t.toFixed(0) + '→' + b.screen.r.toFixed(0) + ',' + b.screen.b.toFixed(0) + '（盒 ' + hostBox.width.toFixed(0) + '×' + hostBox.height.toFixed(0) + '）')
   const truncated = labels.filter((b) => b.full.includes('…')).map((b) => b.full)
+  const caption = svg.querySelector('.globe-caption')?.getBoundingClientRect()
+  const captionOverlap = caption ? labels.filter((b) => b.screen.b > caption.top + 0.5).map((b) => b.full) : ['找不到底部经纬度文案']
   // 标签本来就摆在圆盘两侧那两摞里（viewBox 460 宽、盘只占中间 184），所以「越出地平线」是设计。
   // 真正要钉住的是：**没有被 viewBox 裁掉的字**。
   const vb = (svg.getAttribute('viewBox') || '0 0 460 240').split(/ +/).map(Number)
   const outOfBox = labels.filter((b) => b.x < vb[0] - 1 || b.y < vb[1] - 1 || b.x + b.w > vb[0] + vb[2] + 1 || b.y + b.h > vb[1] + vb[3] + 1)
     .map((b) => b.text + ' @' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ' ' + b.w.toFixed(0) + '×' + b.h.toFixed(0))
-  return { landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, overlaps, spill, outOfBox, clipped, truncated, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
+  const slider = document.querySelector('.globe-controls input[type="range"]')
+  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, overlaps, spill, outOfBox, clipped, truncated, captionOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
 })()`
 
 let pass = 0, fail = 0
@@ -188,8 +197,8 @@ for (const [w, h, tag] of SIZES) {
   //   又超 16 单位就报错（旧收口在 200°E/65°N 实测 99.9 单位）。逐像素对账（globe-diff-image.mjs）
   //   是另一道网，两处都要绿。
   //   这里另外守的是：任何视角下都不该出现「一步跨过半个圆盘」的直线、点线越界、标签重叠或被裁。
-  const passes = [['默认视角', null], ['赤道视角（点 EC 地区行）', 'EC']]
-  for (const [label, region] of passes) {
+  const passes = [['默认视角', null, 100], ['赤道视角（点 EC 地区行）', 'EC', 100], ['赤道视角 · 缩小 50%', null, 50], ['赤道视角 · 放大 150%', null, 150]]
+  for (const [label, region, zoom] of passes) {
     if (region) {
       // ★ 这条必须断言「那一行找得到」：夹具里那台厄瓜多尔机器早先在 COUNTRY_LL 之外、
       //   根本不上地区列表，这里点了个寂寞 —— 那一趟量的其实还是上一个角度，而断言在空集上
@@ -198,6 +207,15 @@ for (const [w, h, tag] of SIZES) {
       check(`${tag}·${label}：那一行找得到（点了才真的转过去）`, found === true)
       await sleep(1400)
     }
+    if (zoom !== 100) {
+      const focused = await js(`(() => { const slider = document.querySelector('.globe-controls input[type="range"]'); if (!slider) return false; slider.focus(); return document.activeElement === slider })()`)
+      check(`${tag}·${label}：缩放滑条可获得焦点`, focused === true)
+      const key = zoom === 50 ? 'Home' : 'End'
+      const keyCode = zoom === 50 ? 36 : 35
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: keyCode })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: keyCode })
+      await sleep(400)
+    }
     const d = await js(PROBE)
     if (d?.error) { check(`${tag}·${label} 找到地球 SVG`, false, d.error); continue }
     console.log(`    ${label}：陆地 ${d.landPaths} 条 / ${d.segCount} 段 / ${d.ptCount} 点｜定位点 ${d.pins} 个｜线 ${d.lineCount} 条（最远 ${d.lineWorst.toFixed(1)}）｜标签 ${d.labelCount} 条`)
@@ -205,16 +223,24 @@ for (const [w, h, tag] of SIZES) {
     if (process.env.DEBUG) console.log('      标签宽：' + d.labels.map((l) => l.text + '=' + l.w.toFixed(0)).join(' | '))
     // ★ 先钉住「探针确实看到了东西」——否则下面几条会在空集上假 PASS
     check(`${tag}·${label} 探针确实量到了陆地/定位点/标签`, d.landPaths > 0 && d.pins > 0 && d.labelCount > 0, `land=${d.landPaths} pins=${d.pins} labels=${d.labelCount}`)
-    check(`${tag}·${label} 陆地路径没有「一步跨过半个圆盘」的直线（≤40 单位）`, d.maxStep <= 40, `最大 ${d.maxStep.toFixed(1)} @ ${d.maxStepAt}`)
+    check(`${tag}·${label} 圆盘半径与当前滑条倍率一致`, d.zoom === zoom && d.radius === 92 * zoom / 100, `倍率 ${d.zoom}% / r=${d.radius}`)
+    const scale = d.radius / 92
+    check(`${tag}·${label} 陆地路径没有「一步跨过半个圆盘」的直线`, d.maxStep <= 40 * scale + 0.1, `最大 ${d.maxStep.toFixed(1)} / 上限 ${(40 * scale).toFixed(1)} @ ${d.maxStepAt}`)
     // ★ 收口那刀：两头都贴地平线时，闭合弦必须短（旧版这里是 99.9 单位的横跨弦 → 丢一牙陆地）。
-    check(`${tag}·${label} 贴地平线的收口没有横跨圆盘的长弦（≤16 单位）`, d.maxChord <= 16, `最长 ${d.maxChord.toFixed(1)} @ ${d.maxChordAt}`)
+    check(`${tag}·${label} 贴地平线的收口没有横跨圆盘的长弦`, d.maxChord <= 16 * scale + 0.1, `最长 ${d.maxChord.toFixed(1)} / 上限 ${(16 * scale).toFixed(1)} @ ${d.maxChordAt}`)
     check(`${tag}·${label} 定位点/连线都在圆盘内`, d.outside.length === 0, d.outside.slice(0, 4).join(' | '))
     check(`${tag}·${label} 地区标签互不重叠`, d.overlaps.length === 0, d.overlaps.slice(0, 3).join(' | '))
     check(`${tag}·${label} 地区标签都落在 SVG 盒里（没有半个字被视口裁掉）`, d.clipped.length === 0, `盒宽 ${d.hostW}｜${d.clipped.slice(0, 3).join(' | ')}`)
+    check(`${tag}·${label} 底部经纬度文案在所有标签下方`, d.captionOverlap.length === 0, d.captionOverlap.slice(0, 3).join(' | '))
     if (d.truncated.length) console.log(`      截断 ${d.truncated.length} 条：${d.truncated.slice(0, 3).join(' | ')}`)
     // 宽屏两侧的空白本来就够长名字溢出（上游靠它）——有余量还截字，说明判据算窄了。
-    if (tag.startsWith('桌面 1440')) check(`${tag}·${label} 宽屏有余量时不截字`, d.truncated.length === 0, d.truncated.slice(0, 3).join(' | '))
+    if (tag.startsWith('桌面 1440') && zoom === 100) check(`${tag}·${label} 宽屏默认倍率有余量时不截字`, d.truncated.length === 0, d.truncated.slice(0, 3).join(' | '))
   }
+  // 后续几何验收从 100% 开始，不能留下上一趟的 150% 状态。
+  await js(`document.querySelector('.globe-controls button[aria-label="重置地球缩放"]')?.click()`)
+  await sleep(150)
+  const restored = await js(PROBE)
+  check(`${tag}：极值验收之后恢复默认倍率`, restored?.zoom === 100 && restored?.radius === 92)
 }
 
 console.log(`\n结果: PASS ${pass} / FAIL ${fail}`)

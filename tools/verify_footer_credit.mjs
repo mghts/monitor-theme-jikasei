@@ -26,7 +26,7 @@ const REAL = !!process.argv[2]
 const SETTLE = Number(process.env.FOOTER_WAIT_MS || 2500)
 const SHOT_DIR = process.env.SHOT_DIR || ''
 // 与 App.tsx 的 REPO_URL / theme.json 的 url 同一个地址（三处必须一致，改时一起改）。
-const REPO_URL = 'https://github.com/akanotanin/monitor-theme-jikasei'
+const REPO_URL = 'https://github.com/mghts/monitor-theme-jikasei'
 // 夹具配置钉死（理由见技能第 44 条：让判据只由代码决定，不取自那台 hub 上存的配置）。
 const CONFIG = { cardStyle: 'plain', listTop: 'none' }
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.webp': 'image/webp', '.woff2': 'font/woff2' }

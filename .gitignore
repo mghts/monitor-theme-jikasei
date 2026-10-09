@@ -14,6 +14,7 @@ dist-ssr
 
 # 打包与取景的临时产物
 /release/
+/release-backup-*/
 /shots/
 
 # Editor directories and files

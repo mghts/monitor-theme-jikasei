@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react"
 
 import { ChartTooltip } from "@/components/ChartTooltip"
 import { clockFor, quarters, timeTicks } from "@/lib/format"
+import { nearestTimeIndex, timeIndexAtRatio } from "@/lib/history"
 
 /**
  * 零依赖的时间序列图：替掉 recharts（它给详情页背了 384KB 原始 / 110KB gzip 的包，
@@ -270,10 +271,11 @@ export function TimeChart({
   const indexAt = (clientX: number, el: Element) => {
     const rect = el.getBoundingClientRect()
     const ratio = (clientX - rect.left) / Math.max(1, rect.width)
-    return Math.min(view.length - 1, Math.max(0, Math.round(ratio * (view.length - 1))))
+    return timeIndexAtRatio(view, ratio)
   }
 
-  const hovered = hover === null ? null : view[Math.min(Math.max(hover, 0), view.length - 1)]
+  // 悬停和正在拖选的两端也记时间；后台刷新替换数组时不会跳桶或越界。
+  const hovered = hover === null || view.length === 0 ? null : view[nearestTimeIndex(view, hover)]
   const payload = hovered
     ? series.map((s) => ({
         dataKey: s.key,
@@ -284,7 +286,9 @@ export function TimeChart({
       }))
     : []
   const zoomed = !!onZoom && (a > 0 || b < last)
-  const sel = drag ? { lo: Math.min(drag.from, drag.to), hi: Math.max(drag.from, drag.to) } : null
+  const sel = drag && view.length > 0
+    ? { lo: nearestTimeIndex(view, Math.min(drag.from, drag.to)), hi: nearestTimeIndex(view, Math.max(drag.from, drag.to)) }
+    : null
 
   return (
     // `data-chart`：给护栏一个稳定锚点（仓库里 `data-latency` / `data-card-style` 同一套做法）。
@@ -375,7 +379,7 @@ export function TimeChart({
             style={onZoom ? { touchAction: "pan-y" } : undefined}
             onMouseMove={(e) => {
               if (view.length === 0) return
-              setHover(indexAt(e.clientX, e.currentTarget))
+              setHover(view[indexAt(e.clientX, e.currentTarget)].ts)
               // 卡片要跟着鼠标走，所以纵坐标也记下来（原来是钉在图表顶端的）。
               const rect = (e.currentTarget as SVGRectElement).getBoundingClientRect()
               setPointerY(Math.min(Math.max(e.clientY - rect.top, 0), rect.height))
@@ -388,21 +392,22 @@ export function TimeChart({
               if (!onZoom || view.length < 3) return
               // 捕获失败不该让整段拖选失效（指针已经消失、或合成事件没有有效 id 时会抛）。
               try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 无所谓 */ }
-              const at = indexAt(e.clientX, e.currentTarget)
+              const at = view[indexAt(e.clientX, e.currentTarget)].ts
               setDrag({ from: at, to: at })
             }}
             onPointerMove={(e) => {
-              if (!drag) return
-              setDrag({ ...drag, to: indexAt(e.clientX, e.currentTarget) })
+              if (!drag || view.length === 0) return
+              setDrag({ ...drag, to: view[indexAt(e.clientX, e.currentTarget)].ts })
             }}
             onPointerUp={() => {
               if (!drag || !onZoom) return
-              const lo = Math.min(drag.from, drag.to)
-              const hi = Math.max(drag.from, drag.to)
+              const lo = nearestTimeIndex(view, Math.min(drag.from, drag.to))
+              const hi = nearestTimeIndex(view, Math.max(drag.from, drag.to))
               setDrag(null)
               // 只是点了一下（没拖开）就不动：重置交给那枚「重置」。
               if (hi - lo >= 2) onZoom(a + lo, a + hi)
             }}
+            onPointerCancel={() => setDrag(null)}
           />
         </svg>
       )}

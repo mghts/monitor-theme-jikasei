@@ -6,9 +6,23 @@
 `monitor-theme-default` v1.1.0 改造。纯静态前端，只读 hub 的公开接口，
 国旗与图标资源都自带。
 
+本仓库由 [mghts](https://github.com/mghts/monitor-theme-jikasei) 维护，fork 自
+[akanotanin/monitor-theme-jikasei](https://github.com/akanotanin/monitor-theme-jikasei)。
+保留原作者署名及上游 MIT 版权与许可，在原主题基础上持续改进。
+
 ## 安装
 
-首次安装需从 Releases 下载 theme.tar.gz 上传至探针后台，后续可在主题卡片上点击从 GitHub 更新。
+当前安装与更新来源为 [mghts/monitor-theme-jikasei](https://github.com/mghts/monitor-theme-jikasei)。
+
+在 Monitor 后台的主题 GitHub 安装入口输入 `https://github.com/mghts/monitor-theme-jikasei`，
+安装最新正式 Release。已经使用原作者仓库的实例，也需要从此地址安装一次，之后主题卡片上的
+GitHub 更新会从本 fork 获取新版本。
+
+手动安装：从本仓库的 [最新 Release](https://github.com/mghts/monitor-theme-jikasei/releases/latest)
+下载 `theme.tar.gz`，上传至探针后台。Release 同时提供 `theme.tar.gz.sha256`，可用
+`shasum -a 256 -c theme.tar.gz.sha256` 校验下载文件。
+
+安装包中的 `theme.json` 与页脚源码链接指向本 fork；原作者仓库用于追溯来源。
 
 ## 预览
 ![节点地球](preview-globe.png?v=3)
@@ -80,6 +94,21 @@
 |  | 显示的延迟线路 | 空（自动） | 卡片「三网延迟」与详情页延迟图上显示哪几条线路，一行一个 ping 任务名（最多三条）；留空按后台顺序自动取前三条。名字对不上的行会被跳过。 |
 | 外观 | 主题模式 | 随系统设置 | 整站的明暗，四选一：**随系统设置**（默认，跟访客的 `prefers-color-scheme` 走）／**随北京时间自动切换**／**亮色**／**暗色**。「自动」按**北京时间 19:00–07:00 用暗色、其余用亮色**（中国不实行夏令时，固定 UTC+8），页面开着跨过这两个点也会自己换过来（每分钟问一次钟点）。访客点过顶栏那枚太阳/月亮图标就以他的为准（同样只存在他自己的浏览器里，点回与这里相同的一档＝重新跟着这里走）。 |
 
+## 开发与发布
+
+每完成一批修改，发布一个新版本。缺陷修复递增 patch，新增兼容功能递增 minor，破坏兼容性的改动
+递增 major；版本采用 `x.x.x`，Git tag 使用同样的数字格式。
+
+1. 同步 `package.json`、`theme.json` 与 `package-lock.json` 中的版本号。
+2. 在新的空临时副本中执行 `npm ci`、`npm run lint`、`npm test`、`npm run check` 和
+   `npm run package`，完成构建、打包及包内容校验。已有 `dist/` 或发布产物应先保留备份，禁止直接清空。
+3. 提交修改，推送 `master` 和对应的数字 tag 至本 fork。
+4. 发布 GitHub Release，提供可安装的 `theme.tar.gz`、版本化主题包和各自的 SHA-256 校验文件，
+   并确认 Release 资产可下载。
+
+发布主题包后，线上探针的安装或升级由用户决定；发布流程不自动修改线上探针。
+
 ## 许可
 
-MIT（上游 `monitor-theme-default` 的版权与许可照留，见 `LICENSE`）
+MIT（上游 `monitor-theme-default` 的版权与许可照留，见 `LICENSE`）。
+本 fork 保留 `akanotanin` 的原主题作者署名与来源记录。

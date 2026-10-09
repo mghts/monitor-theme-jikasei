@@ -3,7 +3,7 @@
 //
 // 用法：npm run package（先 build 再打包）
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 const meta = JSON.parse(readFileSync('theme.json', 'utf8'))
@@ -36,7 +36,13 @@ for (const file of ['dist/favicon.svg', 'dist/favicon.ico', 'dist/apple-touch-ic
   if (!existsSync(file)) throw new Error(`dist/ 里缺 ${file}，public/ 没被拷进去？`)
 }
 
-rmSync('release', { recursive: true, force: true })
+// 已有产物整目录保留；唯一的备份目录在 release/ 之外，不会混进新包。
+if (existsSync('release')) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backup = `${mkdtempSync(`release-backup-${stamp}-`)}/release`
+  renameSync('release', backup)
+  console.log(`已保留上一轮产物: ${backup}`)
+}
 const staging = 'release/staging'
 mkdirSync(staging, { recursive: true })
 const files = ['theme.json', 'LICENSE', 'dist']
@@ -55,7 +61,7 @@ execFileSync('tar', ['-czf', archive, '-C', staging, ...files], { stdio: 'inheri
 // 按 CRLF 也切：Windows 的 bsdtar 列出的每行末尾带 \r，只切 \n 的话每个条目都多一个尾随字符，
 // 下面那些字面量比对就会全部落空（Linux / macOS 的 tar 不受影响）。
 const listing = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split(/\r?\n/)
-for (const need of ['theme.json', 'dist/index.html', 'dist/favicon.svg', 'preview.png']) {
+for (const need of ['theme.json', 'LICENSE', 'dist/index.html', 'dist/favicon.svg', ...(files.includes('preview.png') ? ['preview.png'] : [])]) {
   if (!listing.includes(need)) throw new Error(`包内缺 ${need}（共 ${listing.length} 项）`)
 }
 const size = statSync(archive).size
@@ -66,6 +72,8 @@ copyFileSync(archive, versioned)
 console.log(`版本化副本: ${versioned}`)
 
 // 校验和：发版页与回装复验都拿它比对
-const digest = createHash('sha256').update(readFileSync(versioned)).digest('hex')
-writeFileSync(`${versioned}.sha256`, `${digest}  ${versioned.split('/').pop()}\n`)
+const digest = createHash('sha256').update(readFileSync(archive)).digest('hex')
+for (const file of [archive, versioned]) {
+  writeFileSync(`${file}.sha256`, `${digest}  ${file.split('/').pop()}\n`)
+}
 console.log(`sha256: ${digest}`)

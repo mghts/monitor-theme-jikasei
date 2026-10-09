@@ -2,10 +2,11 @@ import { useLayoutEffect, useRef, type ReactNode } from "react"
 import { ArrowDown, ArrowUp } from "lucide-react"
 
 import { Card } from "@/components/ui/card"
-import { speedHistory, type Node } from "@/lib/api"
+import type { Node } from "@/lib/api"
 import { bytes, rate } from "@/lib/format"
 import { budgetOf, cny, fxNote } from "@/lib/money"
 import { summarize, type Fleet } from "@/lib/summary"
+import { speedSeriesOf } from "@/lib/speed-history"
 
 /**
  * 列表页顶上那行概览卡片，两副面孔（主题设置的「列表页顶部」里选）：
@@ -22,8 +23,8 @@ import { summarize, type Fleet } from "@/lib/summary"
  * `speedHistory`，每 2 秒一个采样、留最近 60 个 ≈ 2 分钟）：hub 没有「全站速率历史」
  * 这种接口，刷新页面就得重新攒，所以冷启动头几秒那里是空的。
  *
- * ★口径跟着分组标签走：传进来的是**当前分组筛选出的节点**（`group` 也跟着一起来，
- * 用来取那一条分组自己的速率走势线），与下面那批卡片是同一批机器。参考站（monitor 内置
+ * ★口径跟着筛选结果走：传进来的是**当前分组、地区与搜索筛选出的节点**，
+ * 读数与速率走势线都取这批机器，与下面那批卡片是同一批机器。参考站（monitor 内置
  * default 主题）的概览四格也是拿筛选后的节点算的；只让列表变、这一行不动，会出现
  * 「上面写着 3 / 4 · Node B，下面只剩一个分组那两张卡片」。
  *
@@ -254,14 +255,12 @@ function BusiestBlock({ fleet }: { fleet: Fleet }) {
   )
 }
 
-export function SummaryCards({ nodes, group, finance = false, searching = false }: { nodes: Node[]; group: string | null; finance?: boolean; searching?: boolean }) {
+export function SummaryCards({ nodes, finance = false, searching = false }: { nodes: Node[]; finance?: boolean; searching?: boolean }) {
   const fleet = summarize(nodes)
   const budget = budgetOf(nodes)
-  // 模块级的采样缓冲：`useNodes` 每次收到推送（或轮询回来）就追加一个点，
-  // 所以这里读到的是「打开页面到现在」的速率。**按分组取**（`group` = 当前选中的那一档，
-  // null = 全部）：同一个缓冲里每个分组各有一条线（api.ts 的 sample），拿全站那条线画在
-  // 分组标签下面，会出现「读数是这一组的、走势线是全站的」这种对不上的画面。
-  const series = speedHistory.get(group) ?? []
+  // 与上方读数使用相同节点集合：分组、地区、搜索三层筛选都作用于历史快照。
+  // 缓冲仍由 useNodes 维护，进详情再返回不会丢失已收集的历史。
+  const series = speedSeriesOf(nodes)
   // 折算说明：只列真的用到过的币种——各站的账混着 USD / EUR / CNY 记，合起来必须说明口径。
   const note = fxNote(budget.used, budget.skipped)
 

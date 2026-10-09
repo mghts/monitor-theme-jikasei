@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { api, type Node } from "@/lib/api"
+import { clockFor } from "@/lib/format"
+import { latestPing, withHistorySlot } from "@/lib/history"
 
 /** `/api/nodes/{id}/metrics?series=ping` 返回里，本组件用到的几块（形状同详情页）。 */
 type PingPoint = {
@@ -14,26 +16,6 @@ type Probes = Record<string, string>
 type Loss = Record<string, number>
 
 type Probe = { id: number; name: string; points: PingPoint[]; loss: number }
-
-/**
- * 每张卡片各要一条延迟历史，节点一多就是几十条并发。hub 建历史窗口是有并发上限的
- * （详情页那段注释写着它会把 agent 上报的那条连接占住），一次全打过去会换回一串 503。
- * 所以这里自己排个队：最多同时三条，其余排队等着，谁先下来谁放行下一个。
- */
-const MAX_CONCURRENT = 3
-let running = 0
-const waiting: Array<() => void> = []
-function acquire(): Promise<void> {
-  if (running < MAX_CONCURRENT) {
-    running++
-    return Promise.resolve()
-  }
-  return new Promise((resolve) => waiting.push(() => { running++; resolve() }))
-}
-function release() {
-  running--
-  waiting.shift()?.()
-}
 
 function normalize(d: { ping?: PingPoint[]; probes?: Probes; loss?: Loss }): Probe[] {
   const ping = d.ping ?? []
@@ -58,46 +40,63 @@ const TTL = 60_000
 
 /**
  * 拉本节点最近一小时的延迟：点数取 40，够画一条能看出起伏的走势线，又不至于让每张
- * 卡片多背一大坨。失败与「这段时间没有延迟数据」都收敛成空数组，卡片上什么都不画。
+ * 卡片多背一大坨。刷新失败保留上次结果，并明确标记失败，避免把网络错误当作没有探测。
  *
  * 每 `TTL` 刷新一次；页面切到后台时不发（省掉访客看不见的流量），回到前台时若手上这份
  * 已经过期就补一次。同一时刻只允许一条在飞，避免慢请求叠着打。
  */
-function useNodePing(id: number): Probe[] | null {
+function useNodePing(id: number) {
   const [probes, setProbes] = useState<Probe[] | null>(null)
+  const [failed, setFailed] = useState("")
+  const [now, setNow] = useState(Date.now)
   useEffect(() => {
     let alive = true
     let busy = false
     let fetchedAt = 0
+    let controller: AbortController | null = null
+    // oxlint-disable-next-line react/set-state-in-effect
+    setProbes(null)
+    // oxlint-disable-next-line react/set-state-in-effect
+    setFailed("")
     const load = () => {
-      if (busy || Date.now() - fetchedAt < TTL) return
+      if (document.visibilityState !== "visible" || busy || Date.now() - fetchedAt < TTL) return
       busy = true
       fetchedAt = Date.now()
-      acquire().then(() => {
-        if (!alive) {
-          busy = false
-          release()
-          return
-        }
-        api<{ ping?: PingPoint[]; probes?: Probes; loss?: Loss }>(
+      const request = new AbortController()
+      controller = request
+      withHistorySlot(
+        () => api<{ ping?: PingPoint[]; probes?: Probes; loss?: Loss }>(
           `/nodes/${id}/metrics?hours=1&points=40&series=ping`,
-        )
-          .then((d) => { if (alive) setProbes(normalize(d)) })
-          .catch(() => { if (alive) setProbes([]) })
-          .finally(() => { busy = false; release() })
-      })
+          { signal: request.signal },
+        ),
+        request.signal,
+      )
+        .then((d) => {
+          if (alive && !request.signal.aborted) { setProbes(normalize(d)); setFailed(""); setNow(Date.now()) }
+        })
+        .catch((e: Error) => {
+          if (alive && !request.signal.aborted) setFailed(e.message || "网络错误")
+        })
+        .finally(() => {
+          busy = false
+          if (alive && request.signal.aborted && document.visibilityState === "visible") load()
+        })
     }
-    const onVisible = () => { if (document.visibilityState === "visible") load() }
+    const onVisible = () => {
+      if (document.visibilityState === "visible") { setNow(Date.now()); load() }
+      else { fetchedAt = 0; controller?.abort() }
+    }
     load()
     const timer = window.setInterval(onVisible, TTL)
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       alive = false
+      controller?.abort()
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [id])
-  return probes
+  return { probes, failed, now }
 }
 
 // 延迟分档：顺畅 / 偏高 / 糟，三档都走灰阶——这一块不抢旁边网络数的颜色，只用深浅说话。
@@ -185,6 +184,30 @@ function pickRows(probes: Probe[] | null, lines: string): Probe[] {
     .slice(0, 3)
 }
 
+const sampleClock = clockFor(168)
+
+/** 卡面与浮层使用同一读数：最新桶超时就显示超时，旧桶明确附上样本时间。 */
+function ProbeRow({ probe, now, compact = false }: { probe: Probe; now: number; compact?: boolean }) {
+  const { sample, stale } = latestPing(probe.points, now)
+  const ms = sample?.latency ?? null
+  const gray = toneClass(toneOf(ms, probe.loss))
+  return (
+    <span className="block text-xs" title={sample ? `样本时间：${new Date(sample.ts * 1_000).toLocaleString("zh-CN")}` : "没有样本"}>
+      <span className="flex items-center gap-2">
+        <span className={`${compact ? "w-14" : "w-16"} shrink-0 truncate text-muted-foreground`}>{probe.name}</span>
+        <span className={`tnum ${compact ? "w-12" : "w-14"} shrink-0 text-right font-medium ${gray}`}>
+          {ms === null ? "超时" : `${ms} ms`}
+        </span>
+        <Sparkline values={probe.points.map((pt) => pt.latency)} className={gray} />
+        <span className={`tnum ${compact ? "w-9" : "w-10"} shrink-0 text-right text-muted-foreground`}>
+          {probe.loss > 0 ? `${probe.loss.toFixed(1)}%` : "0.0%"}
+        </span>
+      </span>
+      {stale && <span className="mt-0.5 block text-right text-[10px] text-muted-foreground">数据陈旧{sample ? ` · ${sampleClock(sample.ts * 1_000)}` : ""}</span>}
+    </span>
+  )
+}
+
 /**
  * 卡片底部那组「三网延迟」：一条线路一行——线路名、当前延迟、一小时走势、丢包率。
  * 数据来自 hub 的 ping 历史（同详情页的延迟图），按 `task_id` 一条一条摊开；线路名用的是
@@ -194,31 +217,15 @@ function pickRows(probes: Probe[] | null, lines: string): Probe[] {
  * 刷新一次（页面在后台时不取）。
  */
 export function LatencyPanel({ node, lines }: { node: Node; lines: string }) {
-  const probes = useNodePing(node.id)
+  const { probes, failed, now } = useNodePing(node.id)
   const rows = useMemo(() => pickRows(probes, lines), [probes, lines])
-  if (rows.length === 0) return null
+  if (rows.length === 0 && !failed) return null
   return (
     // `data-latency` 是给护栏认「这一档摊没摊三网延迟」的锚点（`data-net` 同一套做法：
     // 按类名找会在改版后失配，而失配的表现是"看着没坏"）。
     <div data-latency="" className="mt-4 space-y-1.5 border-t pt-4">
-      {rows.map((p) => {
-        const last = [...p.points].reverse().find((pt) => pt.latency !== null)
-        const ms = last?.latency ?? null
-        const tone = toneOf(ms, p.loss)
-        const gray = toneClass(tone)
-        return (
-          <div key={p.id} className="flex items-center gap-2 text-xs">
-            <span className="w-16 shrink-0 truncate text-muted-foreground">{p.name}</span>
-            <span className={`tnum w-14 shrink-0 text-right font-medium ${gray}`}>
-              {ms === null ? "超时" : `${ms} ms`}
-            </span>
-            <Sparkline values={p.points.map((pt) => pt.latency)} className={gray} />
-            <span className="tnum w-10 shrink-0 text-right text-muted-foreground">
-              {p.loss > 0 ? `${p.loss.toFixed(1)}%` : "0.0%"}
-            </span>
-          </div>
-        )
-      })}
+      {rows.map((p) => <ProbeRow key={p.id} probe={p} now={now} />)}
+      {failed && <span className="block text-xs text-destructive" role="status">延迟刷新失败：{failed}</span>}
     </div>
   )
 }
@@ -236,28 +243,13 @@ export function LatencyPanel({ node, lines }: { node: Node; lines: string }) {
  * 「现在通不通」分开；没有数据时整块不渲染，所以也不会留下一条孤零零的线。
  */
 export function PeekLatency({ node, lines }: { node: Node; lines: string }) {
-  const probes = useNodePing(node.id)
+  const { probes, failed, now } = useNodePing(node.id)
   const rows = useMemo(() => pickRows(probes, lines), [probes, lines])
-  if (rows.length === 0) return null
+  if (rows.length === 0 && !failed) return null
   return (
     <span data-peek-latency="" className="block space-y-1 border-t pt-2">
-      {rows.map((p) => {
-        // 最新一个非空样本 = 浮层里那个数字（与卡面同一口径：ping 每 60 秒一跳）。
-        const ms = [...p.points].reverse().find((pt) => pt.latency !== null)?.latency ?? null
-        const gray = toneClass(toneOf(ms, p.loss))
-        return (
-          <span key={p.id} className="flex items-center gap-2">
-            <span className="w-14 shrink-0 truncate text-muted-foreground">{p.name}</span>
-            <span className={`tnum w-12 shrink-0 text-right font-medium ${gray}`}>
-              {ms === null ? "超时" : `${ms} ms`}
-            </span>
-            <Sparkline values={p.points.map((pt) => pt.latency)} className={gray} />
-            <span className="tnum w-9 shrink-0 text-right text-muted-foreground">
-              {p.loss > 0 ? `${p.loss.toFixed(1)}%` : "0.0%"}
-            </span>
-          </span>
-        )
-      })}
+      {rows.map((p) => <ProbeRow key={p.id} probe={p} now={now} compact />)}
+      {failed && <span className="block text-xs text-destructive" role="status">延迟刷新失败：{failed}</span>}
     </span>
   )
 }

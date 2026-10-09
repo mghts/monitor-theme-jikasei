@@ -2,7 +2,12 @@
 import assert from "node:assert/strict"
 import { groupView, groupsOf, safeNodes, sample, speedHistory, type Node } from "./api.ts"
 
-const node = { id: 1, metrics: { uptime: 100, cpu: 1, load: [0.1, 0.2, 0.3],
+const node = { id: 1, name: "测试节点", sort: 0, public: true, online: true, country: "JP", last_seen: 0,
+  os: "Linux", kernel: "", arch: "", virt: "", cpu_name: "", cpu_cores: 1,
+  mem_total: 1024, swap_total: 0, disk_total: 2048, agent_version: "", price: 0, currency: "",
+  billing_cycle: "", expires_at: null, traffic_limit: 0, traffic_mode: "", traffic_reset_day: 1,
+  total_rx: 100, total_tx: 200, month_rx: 50, month_tx: 100, month_start: "", day_rx: 0, day_tx: 0,
+  metrics: { uptime: 100, cpu: 1, load: [0.1, 0.2, 0.3],
   mem_total: 1024, mem_used: 512, swap_total: 0, swap_used: 0, disk_total: 2048, disk_used: 1024,
   net_rx: 10, net_tx: 20, total_rx: 100, total_tx: 200, month_rx: 50, month_tx: 100,
   tcp: 3, udp: 4, procs: 20 } } as Node
@@ -14,6 +19,20 @@ for (const patch of [{ load: null }, { load: [1, "bad", 3] }, { cpu: "bad" }, { 
   assert.equal(result[1], node)
 }
 console.log("invalid live reports are isolated")
+assert.throws(() => safeNodes(null), /节点数据格式错误/)
+assert.deepEqual(safeNodes([null, {}, { id: "1" }, { id: -1 }, node]), [node])
+const metadata = safeNodes([{ ...node, country: "../api", public_remark: 123, remark: 456,
+  group: {}, mem_total: "bad", expires_in: "bad", month_used: -1 }])[0]
+assert.equal(metadata.country, "")
+assert.equal(metadata.public_remark, "")
+assert.equal(metadata.remark, "")
+assert.equal(metadata.group, "")
+assert.equal(metadata.mem_total, 0)
+assert.equal(metadata.expires_in, undefined)
+assert.equal(metadata.month_used, undefined)
+assert.equal(node.country, "JP", "validation does not mutate input")
+assert.equal(safeNodes([{ id: 2 }])[0].metrics, null, "missing fields on old hubs have safe defaults")
+console.log("invalid metadata and malformed nodes are isolated")
 
 // Tabs follow the node order; ungrouped nodes and a hub without the field add none.
 assert.deepEqual(groupsOf([{ group: "东京" }, { group: "" }, {}, { group: "香港" }, { group: "东京" }]), ["东京", "香港"])

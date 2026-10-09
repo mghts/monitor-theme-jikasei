@@ -7,6 +7,22 @@
 import { existsSync, readFileSync } from 'node:fs'
 
 const manifest = JSON.parse(readFileSync('theme.json', 'utf8'))
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'))
+if (!/^\d+\.\d+\.\d+$/.test(manifest.version || '')) throw new Error('主题版本必须是 x.x.x 格式')
+for (const [file, version] of [
+  ['package.json', pkg.version],
+  ['package-lock.json', lock.version],
+  ['package-lock.json packages[""]', lock.packages?.['']?.version],
+]) {
+  if (version !== manifest.version) throw new Error(`${file} 的版本 ${version} 与 theme.json 的 ${manifest.version} 不一致`)
+}
+for (const file of ['src/App.tsx', 'tools/verify_footer_credit.mjs']) {
+  const url = readFileSync(file, 'utf8').match(/const REPO_URL\s*=\s*["']([^"']+)["']/)?.[1]
+  if (url !== manifest.url) throw new Error(`${file} 的 REPO_URL 与 theme.json.url 不一致`)
+}
+console.log(`版本与更新源一致：${manifest.version}，${manifest.url}`)
+
 const fields = (manifest.config || []).filter((entry) => entry.type !== 'title' && entry.key)
 if (!fields.length) throw new Error('theme.json 的 config 里没有任何设置项')
 

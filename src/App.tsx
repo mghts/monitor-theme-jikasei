@@ -14,7 +14,7 @@ import { regionView } from "@/lib/globe"
 import { hasDetailRemarks } from "@/lib/notes"
 import { searchNodes } from "@/lib/search"
 import { hasGroupTabs, hasSummary, isBudgetLayout, useCardStyle, useGlobeVisible, useLocalFarm, useThemeConfig } from "@/lib/theme-config"
-import { isBeijingNight, resolveDark, type ThemeMode } from "@/lib/site-settings"
+import { isBeijingNight, readThemePreference, resolveDark, type ThemeMode } from "@/lib/site-settings"
 import type { RemarkPlacement } from "@/lib/site-settings"
 import { FarmIcon } from "@/components/FarmIcon"
 
@@ -33,7 +33,7 @@ const TITLE_CACHE_KEY = "jikasei:site_name"
 
 // 页脚署名（右下角那行）里指向的源码仓库 —— 与 theme.json 的 `url` 是同一个地址
 // （面板卡片上的「源码」也指这里）。两处一起改。
-const REPO_URL = "https://github.com/akanotanin/monitor-theme-jikasei"
+const REPO_URL = "https://github.com/mghts/monitor-theme-jikasei"
 
 // Split out because recharts is most of this bundle and the list page draws no
 // chart. The landing page is 242 kB rather than 629 kB (77 kB gzipped against
@@ -90,6 +90,7 @@ function DetailSkeleton({ hasRemarks = false }: { hasRemarks?: boolean }) {
           <Skeleton className="h-6 w-16" />
           <Skeleton className="h-6 w-16" />
         </div>
+        <Skeleton className="h-4 w-36" />
       </div>
       {/* 四张资源图：整页详情的默认页签就是它，所以骨架照它的高度来。
           ★它是上面那个页签块的**兄弟**（真实页里也是），别嵌进去。 */}
@@ -144,7 +145,7 @@ const DARK_MEDIA = matchMedia("(prefers-color-scheme: dark)")
  * listener is otherwise never heard, and the next one is a day away.
  */
 function useTheme(siteMode: ThemeMode) {
-  const [saved, setSaved] = useState(() => localStorage.getItem("theme"))
+  const [saved, setSaved] = useState(readThemePreference)
   const system = useSyncExternalStore(
     (notify) => {
       DARK_MEDIA.addEventListener("change", notify)
@@ -509,7 +510,7 @@ export default function App() {
           <>
             {/* 概览卡片行：设置里没选它时整个不挂载（不是藏起来），首屏与没有这个功能时一致。
                 「月度预算剩余价值版」只是同一行换一副面孔，组件另收一个 finance 开关。 */}
-            {hasSummary(config.listTop) && <SummaryCards nodes={found.shown} group={view.current} finance={isBudgetLayout(config.listTop)} searching={found.active} />}
+            {hasSummary(config.listTop) && <SummaryCards nodes={found.shown} finance={isBudgetLayout(config.listTop)} searching={found.active} />}
             {/* 节点地球：概览卡片之下、列表之上（上游就是这个次序）。 */}
             {globeOn && (
               <Globe nodes={view.shown} dark={dark} region={regions.current} onRegion={setRegion} onOpen={go} onWarm={warmDetail} />

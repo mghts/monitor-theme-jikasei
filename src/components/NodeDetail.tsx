@@ -13,6 +13,7 @@ import {
 import { hasDetailRemarks, remarkChips } from "@/lib/notes"
 import { remarksOnCards, type RemarkPlacement } from "@/lib/site-settings"
 import { rangesFor } from "@/lib/ranges"
+import { timeRangeIndices, withHistorySlot } from "@/lib/history"
 
 type Point = {
   ts: number
@@ -63,6 +64,8 @@ const TABS = [
   { key: "resources", label: "资源" },
   { key: "latency", label: "网络延迟" },
 ] as const
+
+const HISTORY_TTL = 60_000
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -181,14 +184,20 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
   // the connection the agents report through. Rendered as an empty window, a 503
   // would misdirect the reader.
   const [failed, setFailed] = useState("")
-  // Where the brush has been dragged, so the axis reticks for the visible span
-  // rather than retaining the whole window's ticks.
+  const [updatedAt, setUpdatedAt] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const reload = useRef<() => void>(() => {})
+  // 缩放记时间戳，不记数组下标：刷新后窗口左端滑走一桶，仍看同一段时间。
   const [zoom, setZoom] = useState<[number, number] | null>(null)
   // Where the chart begins on screen, so its height can occupy the remainder.
   const [chartTop, setChartTop] = useState(0)
 
   useEffect(() => {
     let active = true
+    let busy = false
+    let hadData = false
+    let attemptedAt = 0
+    let controller: AbortController | null = null
     // The charts must not continue drawing the old range while the new one is in
     // flight.
     // oxlint-disable-next-line react/set-state-in-effect
@@ -197,6 +206,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
     setZoom(null)
     // oxlint-disable-next-line react/set-state-in-effect
     setFailed("")
+    // oxlint-disable-next-line react/set-state-in-effect
+    setUpdatedAt(0)
     // What this screen can resolve, in device pixels, which is the unit the line
     // is drawn in: a 1280-wide retina panel has 2560 of them for a day of minutes.
     // Read here rather than from a ref, since the hub only thins further, an
@@ -207,17 +218,56 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
     // to two thirds of every response and was never drawn.
     const points = Math.round(globalThis.innerWidth * (globalThis.devicePixelRatio || 1))
     const series = tab === "latency" ? "ping" : "metrics"
-    api<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss }>(
-      `/nodes/${node.id}/metrics?hours=${hours}&points=${points}&series=${series}`,
-    )
-      .then((next) => { if (active) setData(next) })
-      .catch((e: Error) => {
-        // `|| "..."` as in App.tsx: HTTP/2 dropped statusText, so a bodiless
-        // failure from a proxy arrives as the empty string and renders as no
-        // error.
-        if (active) { setFailed(e.message || "网络错误"); setData({ metrics: [], ping: [], probes: {} }) }
-      })
-    return () => { active = false }
+    const load = (force = false) => {
+      if (!active || busy || document.visibilityState !== "visible" || (!force && Date.now() - attemptedAt < HISTORY_TTL)) return
+      busy = true
+      attemptedAt = Date.now()
+      setRefreshing(true)
+      const request = new AbortController()
+      controller = request
+      withHistorySlot(
+        () => api<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss }>(
+          `/nodes/${node.id}/metrics?hours=${hours}&points=${points}&series=${series}`,
+          { signal: request.signal },
+        ),
+        request.signal,
+      )
+        .then((next) => {
+          if (!active || request.signal.aborted) return
+          hadData = true
+          setData(next)
+          setUpdatedAt(Date.now())
+          setFailed("")
+        })
+        .catch((e: Error) => {
+          if (!active || request.signal.aborted) return
+          setFailed(e.message || "网络错误")
+          if (!hadData) setData({ metrics: [], ping: [], probes: {} })
+        })
+        .finally(() => {
+          busy = false
+          if (active) {
+            setRefreshing(false)
+            // 快速切回前台时，旧的取消请求可能尚未结束，结束后补取一次。
+            if (request.signal.aborted && document.visibilityState === "visible") load()
+          }
+        })
+    }
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load()
+      else { attemptedAt = 0; controller?.abort() }
+    }
+    reload.current = () => load(true)
+    load()
+    const timer = window.setInterval(onVisible, HISTORY_TTL)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      active = false
+      controller?.abort()
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+      reload.current = () => {}
+    }
   }, [node.id, hours, tab])
 
   const m = node.metrics
@@ -328,6 +378,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
   // 延迟 tooltip 要按时间戳回查整行：recharts 只把光标下那几条曲线交给它，而丢包率
   // 挂在同一行的另一列上（`l<id>`），得连行一起拿到。
   const rowByTs = useMemo(() => new Map(pingRows.map((row) => [row.ts, row])), [pingRows])
+  const zoomIndices = timeRangeIndices(pingRows, zoom)
 
   return (
     <div className="space-y-4">
@@ -470,12 +521,23 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
             </span>
           )}
         </div>
+        {(updatedAt > 0 || refreshing) && (
+          <p className="text-[11px] text-muted-foreground" role="status">
+            {updatedAt > 0 && <span title={new Date(updatedAt).toLocaleString("zh-CN")}>历史更新于 {new Date(updatedAt).toLocaleTimeString("zh-CN")}</span>}
+            {refreshing && <span>{updatedAt > 0 ? " · " : ""}刷新中…</span>}
+          </p>
+        )}
+        {failed && updatedAt > 0 && (
+          <p className="text-xs text-destructive" role="alert">
+            刷新失败：{failed}；当前保留上次结果。<button className="ml-1 underline" onClick={() => reload.current()}>重试</button>
+          </p>
+        )}
       </div>
 
       {!data ? (
         <Skeleton className="h-40 w-full" />
-      ) : failed ? (
-        <p className="py-8 text-center text-sm text-destructive" role="alert">读取历史数据失败：{failed}</p>
+      ) : failed && updatedAt === 0 ? (
+        <p className="py-8 text-center text-sm text-destructive" role="alert">读取历史数据失败：{failed} <button className="underline" onClick={() => reload.current()}>重试</button></p>
       ) : tab === "latency" ? (
         pingSeries.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有延迟数据</p>
@@ -533,11 +595,11 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                   domain="auto"
                   unit="ms"
                   left={52}
-                  from={Math.min(zoom?.[0] ?? 0, pingRows.length - 1)}
-                  to={Math.min(zoom?.[1] ?? pingRows.length - 1, pingRows.length - 1)}
+                  from={zoomIndices?.[0] ?? 0}
+                  to={zoomIndices?.[1] ?? pingRows.length - 1}
                   // 原来 recharts 的 Brush（22px 高的拖两端把手）换成「在图上横向拖选一段」+
                   // 一枚「重置」：手机上那对手指头太细，而且这样代码少一半。
-                  onZoom={(from, to) => setZoom([from, to])}
+                  onZoom={(from, to) => setZoom(from === 0 && to === pingRows.length - 1 ? null : [pingRows[from].ts, pingRows[to].ts])}
                   label="节点延迟走势"
                   renderTooltip={(row) => (
                     <PingTooltip active label={row.ts} rowByTs={rowByTs} probes={shownProbes} smooth={smooth} style={style} />

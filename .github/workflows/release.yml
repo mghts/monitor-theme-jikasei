@@ -37,6 +37,8 @@ jobs:
             }
           '
       - run: npm ci
+      - run: npm run lint
+      - run: npm test
       # package 自己会先 build，再校验 dist/ 是否比源码新，最后打 theme.tar.gz 并开包核对
       - name: 构建并打包
         run: npm run package
@@ -44,4 +46,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" release/theme.tar.gz release/*.sha256 --verify-tag --title "$TAG" --generate-notes
+        run: gh release create "$TAG" release/*.tar.gz release/*.sha256 --verify-tag --title "$TAG" --generate-notes

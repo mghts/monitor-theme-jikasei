@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react"
+import { recordNodeSpeeds } from "./speed-history.ts"
+import { ApiError, requestJSON, startNodeTransport } from "./transport.ts"
+export { ApiError } from "./transport.ts"
 
 export type Metrics = {
   uptime: number
@@ -107,21 +110,8 @@ export function groupView(nodes: Node[], group: string | null, showTabs: boolean
   return { groups, ungrouped, current, shown, tabs, total: nodes.length, showTabs }
 }
 
-export class ApiError extends Error {
-  status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
-
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: init?.body ? { "content-type": "application/json", ...init?.headers } : init?.headers,
-  })
-  if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText)
-  return res.status === 204 ? (undefined as T) : res.json()
+  return requestJSON<T>(`/api${path}`, init)
 }
 
 /**
@@ -138,6 +128,7 @@ const KEEP = 60
 export const speedHistory = new Map<string | null, { rx: number; tx: number }[]>()
 
 export function sample(nodes: Node[]) {
+  recordNodeSpeeds(nodes)
   const totals = new Map<string | null, { rx: number; tx: number }>()
   for (const n of nodes) {
     for (const key of [null, n.group ?? ""]) {
@@ -159,14 +150,39 @@ export function sample(nodes: Node[]) {
 }
 
 /** A malformed report must not remove every other node from the page. */
-export function safeNodes(nodes: Node[]): Node[] {
+export function safeNodes(nodes: unknown): Node[] {
+  if (!Array.isArray(nodes)) throw new Error("节点数据格式错误")
   const number = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0
   const fields = ["uptime", "cpu", "mem_total", "mem_used", "swap_total", "swap_used", "disk_total", "disk_used",
     "net_rx", "net_tx", "total_rx", "total_tx", "month_rx", "month_tx", "tcp", "udp", "procs"] as const
-  return nodes.map((node) => {
-    const m = node.metrics
-    return !m || (fields.every((key) => number(m[key])) && Array.isArray(m.load) && m.load.length === 3 && m.load.every(number))
-      ? node : { ...node, metrics: null }
+  return nodes.flatMap((raw) => {
+    if (!raw || typeof raw !== "object" || !Number.isSafeInteger(raw.id) || raw.id <= 0) return []
+    const node = raw as Node
+    const safe = { ...node }
+    for (const key of ["name", "country", "os", "kernel", "arch", "virt", "cpu_name", "agent_version",
+      "currency", "billing_cycle", "traffic_mode", "month_start"] as const) {
+      if (typeof safe[key] !== "string") safe[key] = ""
+    }
+    // Old hubs omit optional metadata; normalize only fields that are actually present.
+    for (const key of ["group", "public_remark", "remark", "hostname", "ip"] as const) {
+      if (safe[key] != null && typeof safe[key] !== "string") safe[key] = ""
+    }
+    if (!/^[A-Za-z]{2}$/.test(safe.country)) safe.country = ""
+    for (const key of ["last_seen", "cpu_cores", "mem_total", "swap_total", "disk_total", "price", "traffic_limit",
+      "traffic_reset_day", "total_rx", "total_tx", "month_rx", "month_tx", "day_rx", "day_tx"] as const) {
+      if (!number(safe[key])) safe[key] = 0
+    }
+    if (safe.month_used !== undefined && !number(safe.month_used)) delete safe.month_used
+    if (typeof safe.expires_in !== "number" || !Number.isFinite(safe.expires_in)) delete safe.expires_in
+    if (typeof safe.expires_at !== "string") safe.expires_at = null
+    if (typeof safe.sort !== "number" || !Number.isFinite(safe.sort)) safe.sort = 0
+    safe.online = safe.online === true
+    safe.public = safe.public === true
+    const m = safe.metrics
+    safe.metrics = m && typeof m === "object" && fields.every((key) => number(m[key])) &&
+      Array.isArray(m.load) && m.load.length === 3 && m.load.every(number) ? m : null
+    return [Object.keys(safe).every((key) => safe[key as keyof Node] === node[key as keyof Node]) &&
+      Object.keys(safe).length === Object.keys(node).length ? node : safe]
   })
 }
 
@@ -184,63 +200,28 @@ export function useNodes() {
   const [closed, setClosed] = useState(false)
 
   useEffect(() => {
-    let socket: WebSocket | null = null
-    let poll: ReturnType<typeof setInterval> | null = null
-    let retry: ReturnType<typeof setTimeout> | null = null
-    let closed = false
-
-    const receive = (list: Node[]) => {
-      const safe = safeNodes(list)
-      sample(safe)
-      setNodes(safe)
-      setError(null)
-      setClosed(false)
-    }
-
-    const fetchOnce = () =>
-      api<{ nodes: Node[] }>("/nodes")
-        .then((d) => receive(d.nodes))
-        .catch((e: Error) => {
-          setError(e.message)
-          if (e instanceof ApiError && e.status === 401) setClosed(true)
-        })
-
-    fetchOnce()
-
     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`
-    // A hub restart closes every stream. Without reconnecting, a page that
-    // outlives a deploy would remain on the fallback poll for the rest of its
-    // life, refreshing at a fifth of the live rate with no indication.
-    const connect = () => {
-      try {
-        socket = new WebSocket(url)
-      } catch {
-        poll ??= setInterval(fetchOnce, 5000)
-        return
+    const readNodes = (data: unknown) => {
+      if (!data || typeof data !== "object" || !Array.isArray((data as { nodes?: unknown }).nodes)) {
+        throw new Error("节点数据格式错误")
       }
-      socket.onmessage = (event) => {
-        receive(JSON.parse(event.data).nodes)
-        // The stream has returned; the poll was only covering for it.
-        if (poll) {
-          clearInterval(poll)
-          poll = null
-        }
-      }
-      socket.onerror = () => socket?.close()
-      socket.onclose = () => {
-        if (closed) return
-        poll ??= setInterval(fetchOnce, 5000)
-        retry = setTimeout(connect, 5000)
-      }
+      return safeNodes((data as { nodes: unknown[] }).nodes)
     }
-    connect()
-
-    return () => {
-      closed = true
-      socket?.close()
-      if (poll) clearInterval(poll)
-      if (retry) clearTimeout(retry)
-    }
+    return startNodeTransport({
+      fetchNodes: (signal) => api<unknown>("/nodes", { signal }).then(readNodes),
+      openSocket: () => new WebSocket(url),
+      parseMessage: (data) => readNodes(JSON.parse(data)),
+      receive: (safe) => {
+        sample(safe)
+        setNodes(safe)
+        setError(null)
+        setClosed(false)
+      },
+      fail: (error) => {
+        setError(error instanceof Error ? error.message || "网络错误" : "网络错误")
+        if (error instanceof ApiError && error.status === 401) setClosed(true)
+      },
+    })
   }, [])
 
   return { nodes, error, closed }

@@ -12,7 +12,7 @@
 // 读不出来的表现不是报错，而是「站长开着的那一项自己关了」。
 import { readFileSync } from "node:fs"
 
-import { CARD_STYLES, DEFAULTS, cardStyleOf, cardStyleOrNull, hasGroupTabs, hasSummary, isBudgetLayout, listTopOf, normalizeConfig, remarksOnCards, remarksOnDetail } from "./site-settings.ts"
+import { CARD_STYLES, DEFAULTS, cardStyleOf, cardStyleOrNull, hasGroupTabs, hasSummary, isBudgetLayout, listTopOf, normalizeConfig, readThemePreference, remarksOnCards, remarksOnDetail } from "./site-settings.ts"
 
 let failed = 0
 function eq(got: unknown, want: unknown, what: string) {
@@ -22,6 +22,12 @@ function eq(got: unknown, want: unknown, what: string) {
     console.error(`✗ ${what}\n    得到 ${a}\n    期望 ${b}`)
   }
 }
+
+eq(readThemePreference({ getItem: () => "dark" }), "dark", "有效明暗偏好保留")
+eq(readThemePreference({ getItem: () => "light" }), "light", "亮色偏好保留")
+eq(readThemePreference({ getItem: () => null }), null, "未保存偏好时跟随站点")
+eq(readThemePreference({ getItem: () => "invalid" }), null, "无效偏好时跟随站点")
+eq(readThemePreference({ getItem: () => { throw new DOMException("Storage denied", "SecurityError") } }), null, "存储访问拒绝不抛出异常")
 
 // ── cardStyle：旧名迁移 ───────────────────────────────────────────────
 eq(cardStyleOf("detail"), "latency", '旧值 "detail" 迁到 "latency"')

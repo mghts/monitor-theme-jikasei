@@ -44,6 +44,16 @@ export type ThemeConfig = {
 /** 四档明暗：`system` 随系统、`auto` 按北京时间自动、`light`/`dark` 固定。 */
 export type ThemeMode = "system" | "auto" | "light" | "dark"
 
+/** 存储被浏览器拒绝或偏好值无效时，回落到站点的默认明暗。 */
+export function readThemePreference(storage?: Pick<Storage, "getItem">): "light" | "dark" | null {
+  try {
+    const saved = (storage ?? globalThis.localStorage).getItem("theme")
+    return saved === "light" || saved === "dark" ? saved : null
+  } catch {
+    return null
+  }
+}
+
 /** 四档的取值与顺序（后台那格下拉、`normalizeConfig` 都照它）。 */
 export const THEME_MODES: ThemeMode[] = ["system", "auto", "light", "dark"]
 

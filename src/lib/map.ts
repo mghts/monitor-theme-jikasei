@@ -199,3 +199,69 @@ export function flatNodes(points: GlobeNode[], cam: FlatCamera): FlatNode[] {
     return p ? [{ ...node, px: p.x, py: p.y, visible: p.visible }] : []
   })
 }
+
+/**
+ * 供圆形 hit 使用的最近中心裁切区（全局 SVG 坐标），不移动标记或改变地区语义。
+ * 只裁切距离 < 2r 的邻点；方框圆外的角落不影响实际圆形命中。
+ * 完全重复的中心按输入顺序等角分区，中心及分界线仍是不可唯一分配的共同边界。
+ * 非法半径返回全空；非法坐标、溢出或浮点精度不足以表示方框的点只返回自身空区。
+ */
+export function mapHitAreas(points: readonly { px: number; py: number }[], radius: number): string[] {
+  if (!Number.isFinite(radius) || radius <= 0) return points.map(() => "")
+  type Vertex = [number, number]
+  // 在单位半径坐标里裁切，避免大坐标的平方、点积和中点运算溢出。
+  const clip = (polygon: Vertex[], nx: number, ny: number, limit: number): Vertex[] => {
+    const next: Vertex[] = []
+    if (!polygon.length) return next
+    let previous = polygon[polygon.length - 1]
+    let before = nx * previous[0] + ny * previous[1] - limit
+    for (const current of polygon) {
+      const after = nx * current[0] + ny * current[1] - limit
+      if ((before <= 0) !== (after <= 0)) {
+        const t = before / (before - after)
+        next.push([previous[0] + (current[0] - previous[0]) * t, previous[1] + (current[1] - previous[1]) * t])
+      }
+      if (after <= 0) next.push(current)
+      previous = current
+      before = after
+    }
+    return next
+  }
+  const valid = points.map((point) => {
+    if (!point || !Number.isFinite(point.px) || !Number.isFinite(point.py)) return false
+    const x0 = point.px - radius, x1 = point.px + radius, y0 = point.py - radius, y1 = point.py + radius
+    return [x0, x1, y0, y1].every(Number.isFinite) && x0 < x1 && y0 < y1
+  })
+  const duplicates = new Map<string, number[]>()
+  points.forEach((point, index) => {
+    if (!valid[index]) return
+    const key = `${point.px}:${point.py}`
+    const indices = duplicates.get(key) ?? []
+    indices.push(index)
+    duplicates.set(key, indices)
+  })
+  return points.map((point, index) => {
+    if (!valid[index]) return ""
+    let polygon: Vertex[] = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+    const identical = duplicates.get(`${point.px}:${point.py}`)!
+    if (identical.length > 1) {
+      const rank = identical.indexOf(index)
+      const start = rank * Math.PI * 2 / identical.length
+      const end = (rank + 1) * Math.PI * 2 / identical.length
+      // 2 个及以上重复中心的每片角度 <= 180°，可用两条过中心半平面表达。
+      polygon = clip(polygon, Math.sin(start), -Math.cos(start), 0)
+      polygon = clip(polygon, -Math.sin(end), Math.cos(end), 0)
+    }
+    for (let otherIndex = 0; otherIndex < points.length && polygon.length; otherIndex++) {
+      if (otherIndex === index || !valid[otherIndex]) continue
+      const other = points[otherIndex]
+      const dx = other.px - point.px, dy = other.py - point.py
+      const distance = Math.hypot(dx, dy)
+      if (!distance || !Number.isFinite(distance) || distance / radius >= 2) continue
+      polygon = clip(polygon, dx / distance, dy / distance, distance / radius / 2)
+    }
+    return polygon.length >= 3
+      ? polygon.map(([x, y]) => `${point.px + x * radius},${point.py + y * radius}`).join(" ")
+      : ""
+  })
+}

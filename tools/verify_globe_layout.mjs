@@ -13,6 +13,7 @@ import { extname, join, normalize } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 const PORT = Number(process.env.LAYOUT_PORT || 5201)
+const DIST = process.env.LAYOUT_DIST || process.env.MAP_DIST || 'dist'
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' }
 // 桩数据：几个挤在一起的城市（同一个地区行）+ 跨洲分布，逼出「标签挤在一起」和「点贴地平线」两种情况
 const NODES = {
@@ -44,10 +45,10 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     return res.end(JSON.stringify(body))
   }
-  const file = join('dist', normalize(path === '/' ? '/index.html' : path).replace(/^(\.[/\\])+/, ''))
+  const file = join(DIST, normalize(path === '/' ? '/index.html' : path).replace(/^(\.[/\\])+/, ''))
   if (!existsSync(file) || statSync(file).isDirectory()) {
     res.writeHead(200, { 'Content-Type': TYPES['.html'] })
-    return res.end(readFileSync('dist/index.html'))
+    return res.end(readFileSync(join(DIST, 'index.html')))
   }
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' })
   res.end(readFileSync(file))
@@ -63,7 +64,7 @@ const CHROME = [
 ].find((p) => existsSync(p)) || 'chrome'
 const dbgPort = 9930 + Math.floor(Math.random() * 50)
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbgPort}`, '--remote-allow-origins=*', '--no-first-run', '--disable-gpu',
-  '--hide-scrollbars', '--user-data-dir=' + (process.env.TEMP || '/tmp') + '/globelayout-' + dbgPort, 'about:blank'], { stdio: 'ignore' })
+  '--hide-scrollbars', '--user-data-dir=' + (process.env.TEMP || '/tmp') + '/globelayout-' + dbgPort + '-' + Date.now(), 'about:blank'], { stdio: 'ignore' })
 let wsUrl = null
 for (let i = 0; i < 100 && !wsUrl; i++) {
   try { wsUrl = (await (await fetch(`http://127.0.0.1:${dbgPort}/json/list`)).json()).find((t) => t.type === 'page')?.webSocketDebuggerUrl } catch { }
@@ -176,9 +177,8 @@ const PROBE = `(() => {
   const unnecessaryTruncation = []
   for (const text of svg.querySelectorAll('text.globe-label')) {
     if (!(text.textContent || '').includes('…')) continue
-    const hit = text.parentElement.querySelector('.hit')
-    const node = ${JSON.stringify(NODES.nodes.map(({id, name, country}) => ({id, name, country})))}.find((item) => item.id === Number(hit?.getAttribute('data-node')))
-    if (!node || Number(hit?.getAttribute('data-count')) !== 1) continue
+    const node = ${JSON.stringify(NODES.nodes.map(({id, name, country}) => ({id, name, country})))}.find((item) => item.id === Number(text.getAttribute('data-label-node')))
+    if (!node) continue
     const end = text.getAttribute('text-anchor') === 'end'
     const full = end ? node.name + ' · ' + node.country : node.country + ' · ' + node.name
     const matrix = text.getScreenCTM()
@@ -200,7 +200,20 @@ const PROBE = `(() => {
   const outOfBox = labels.filter((b) => b.x < vb[0] - 1 || b.y < vb[1] - 1 || b.x + b.w > vb[0] + vb[2] + 1 || b.y + b.h > vb[1] + vb[3] + 1)
     .map((b) => b.text + ' @' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ' ' + b.w.toFixed(0) + '×' + b.h.toFixed(0))
   const slider = document.querySelector('.globe-controls input[type="range"]')
-  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, captionOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
+  const hits = [...svg.querySelectorAll('.hit[data-node]')]
+  const memberLabels = [...svg.querySelectorAll('text.globe-label')]
+  const memberStems = [...svg.querySelectorAll('path.globe-stem')]
+  const groups = [[1, 2, 3, 11], [8, 12]]
+  const expected = hits.flatMap((hit) => (groups.find((group) => group.includes(Number(hit.dataset.node))) || [Number(hit.dataset.node)]).map((id) => ({ id, key: hit.dataset.pinKey, x: Number(hit.getAttribute('cx')), y: Number(hit.getAttribute('cy')) })))
+  const memberIssues = []
+  if (memberLabels.length !== expected.length || memberStems.length !== expected.length) memberIssues.push('数量 ' + memberLabels.length + '/' + memberStems.length + '/' + expected.length)
+  for (const item of expected) {
+    const names = memberLabels.filter((text) => Number(text.dataset.labelNode) === item.id && text.dataset.pinKey === item.key)
+    const stems = memberStems.filter((path) => Number(path.dataset.labelNode) === item.id && path.dataset.pinKey === item.key)
+    const origin = stems.length === 1 ? num(stems[0].getAttribute('d')).slice(0, 2) : []
+    if (names.length !== 1 || stems.length !== 1 || origin.length !== 2 || Math.abs(origin[0] - item.x) > 0.15 || Math.abs(origin[1] - item.y) > 0.15) memberIssues.push('成员 ' + item.id + ' 标签/引线或起点不符')
+  }
+  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, memberIssues, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, captionOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
 })()`
 
 let pass = 0, fail = 0
@@ -251,6 +264,7 @@ for (const [w, h, tag] of SIZES) {
     // ★ 收口那刀：两头都贴地平线时，闭合弦必须短（旧版这里是 99.9 单位的横跨弦 → 丢一牙陆地）。
     check(`${tag}·${label} 贴地平线的收口没有横跨圆盘的长弦`, d.maxChord <= 16 * scale + 0.1, `最长 ${d.maxChord.toFixed(1)} / 上限 ${(16 * scale).toFixed(1)} @ ${d.maxChordAt}`)
     check(`${tag}·${label} 定位点/连线都在圆盘内`, d.outside.length === 0, d.outside.slice(0, 4).join(' | '))
+    check(`${tag}·${label} 同地点每成员保留独立标签与同起点引线`, d.memberIssues.length === 0, d.memberIssues.slice(0, 4).join(' | '))
     check(`${tag}·${label} 地区标签互不重叠`, d.overlaps.length === 0, d.overlaps.slice(0, 3).join(' | '))
     check(`${tag}·${label} 地区标签都落在 SVG 盒里（没有半个字被视口裁掉）`, d.clipped.length === 0, `盒宽 ${d.hostW}｜${d.clipped.slice(0, 3).join(' | ')}`)
     check(`${tag}·${label} 底部经纬度文案在所有标签下方`, d.captionOverlap.length === 0, d.captionOverlap.slice(0, 3).join(' | '))

@@ -7,7 +7,7 @@ import {
   GLOBE_ZOOM, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
-import { flatCamera, flatNodes, mapGraticule, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
+import { flatCamera, flatNodes, mapGraticule, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
 import type { Node } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
@@ -104,6 +104,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   )
   const flatPrep = useMemo(() => prepareMapRings(WORLD_OUTLINES), [])
   const points = useMemo(() => globeNodes(nodes), [nodes])
+  const labelCount = points.reduce((count, point) => count + point.nodeIds.length, 0)
   const pointByKey = useMemo(() => new Map(points.map((point) => [point.key, point])), [points])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const rows = useMemo(() => regionRows(nodes), [nodes])
@@ -138,7 +139,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
   const frame = useMemo(() => mode === "2d"
     ? { w: viewport.w, h: viewport.h, cx: viewport.w / 2, cy: viewport.bounds.y + viewport.bounds.h / 2, r: viewport.bounds.w / 2 }
-    : zoomView(zoom, points.length), [mode, zoom, points.length, viewport])
+    : zoomView(zoom, labelCount), [mode, zoom, labelCount, viewport])
   const mapBounds = viewport.bounds
   const reduced = useReducedMotion()
   const pageVisible = useSyncExternalStore(subscribeVisibility, () => !document.hidden)
@@ -353,10 +354,10 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const canvas = useMemo(() => {
     const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${frame.w} ${frame.h}` }
     if (mode === "2d" || !box || !points.length) return plain
-    const ink = Math.max(0, ...points.map((p) => Math.max(
-      inkWidthWith(measured, `${p.name} · ${p.code}`),
-      inkWidthWith(measured, `${p.code} · ${p.name}`),
-    )))
+    const ink = Math.max(0, ...points.flatMap((p) => p.memberLabels.map((member) => Math.max(
+      inkWidthWith(measured, `${member.name} · ${member.code}`),
+      inkWidthWith(measured, `${member.code} · ${member.name}`),
+    ))))
     const scale = Math.min(box.w / frame.w, box.h / frame.h)
     // 一侧还剩多少余量（用户单位）：宽屏是"容器比画布宽"留下的空白，窄屏约等于 0。
     const room = (box.w / scale - frame.w) / 2
@@ -371,10 +372,11 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
       viewBox: pad ? `${-pad.toFixed(1)} 0 ${(frame.w + pad * 2).toFixed(1)} ${frame.h}` : `0 0 ${frame.w} ${frame.h}`,
     }
   }, [mode, box, points, measured, frame])
-  // 信标规格按屏幕像素固定，与获批预览一致；窄屏与缩放不会把核心挤成小光点。
-  const markerScale = box && box.w > 0 && box.h > 0
+  // 100% 保留获批信标大小，再按缩放倍率同步核心、光晕和命中区域。
+  const pixelScale = box && box.w > 0 && box.h > 0
     ? Math.max((frame.w + canvas.pad * 2) / box.w, frame.h / box.h)
     : 1
+  const markerScale = pixelScale * zoom / 100
   /**
    * 标签至画布边缘的距离加上留白，就是这一行最多能有多宽 ——
    * ★ 是 `max(room, pad)`，**不是** `room + pad`（这里踩过一次，`clipped` 那条护栏当时
@@ -404,6 +406,8 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   // eslint-disable-next-line react/refs -- 跨帧记忆，见上
   const placed = mode === "3d" ? layoutLabels(cam, points, sides.current, labelMax, frame.cx, measured)
     : flatNodes(points, flat).filter((point) => point.visible)
+  // 不同城市的信标仍保留真实位置；重叠点击区按最近中心分开，不再被上层的针盖住。
+  const hitAreas = mapHitAreas(placed, 9 * markerScale)
   const aim = region ? rows.find((row) => row.region.key === region)?.aim : undefined
   const projectedAim = aim ? (mode === "3d" ? cam.at(aim[0], aim[1]) : flat.at(aim[0], aim[1])) : null
   const marker = projectedAim && (!("visible" in projectedAim) || projectedAim.visible) ? projectedAim : null
@@ -473,8 +477,8 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
                 <circle className="globe-selected-core" cx={marker.x} cy={marker.y} r={2.4} />
               </g>
               )}
-              {placed.map((p) => (
-                <Pin key={p.key} p={p} members={p.nodeIds.flatMap((id) => { const node = nodeById.get(id); return node ? [node] : [] })} markerScale={markerScale} glowId={beaconGlowId} active={hoveredKey === p.key || focusedKey === p.key} tooltipOpen={hoveredKey === p.key && !dragging && !choosing} choiceId={choiceId} choosing={choiceKey === p.key && choosing} onHover={hoverPoint} onFocus={setFocusedKey} onActivate={activatePoint} onWarm={onWarm} />
+              {placed.map((p, index) => (
+                <Pin key={p.key} p={p} hitArea={hitAreas[index]} members={p.nodeIds.flatMap((id) => { const node = nodeById.get(id); return node ? [node] : [] })} markerScale={markerScale} glowId={beaconGlowId} active={hoveredKey === p.key || focusedKey === p.key} tooltipOpen={hoveredKey === p.key && !dragging && !choosing} choiceId={choiceId} choosing={choiceKey === p.key && choosing} onHover={hoverPoint} onFocus={setFocusedKey} onActivate={activatePoint} onWarm={onWarm} />
               ))}
             </g>
             <text className="globe-caption" aria-hidden="true" x={frame.cx} y={frame.h - 8} textAnchor="middle">
@@ -586,12 +590,13 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
 }
 
 /**
- * 接近原版的柔光信标：核心 6.4px、外圈 11.52px（含描边）、光晕 15.04px。
+ * 100% 时的柔光信标：核心 6.4px、外圈 11.52px（含描边）、光晕 15.04px，随缩放同步变化。
  * 在线绿芯绿圈，离线红芯红圈带短横，部分离线绿芯红圈；核心常亮且不描黑边。
- * 3D 保留引线与标签，2D 仅画标记。透明命中圆的半径与坐标保持不变。
+ * 3D 每个成员各有引线与标签，2D 仅画标记；每个地点只有一个命中区域。
  */
-function Pin({ p, members, markerScale, glowId, active, tooltipOpen, choiceId, choosing, onHover, onFocus, onActivate, onWarm }: {
+function Pin({ p, hitArea, members, markerScale, glowId, active, tooltipOpen, choiceId, choosing, onHover, onFocus, onActivate, onWarm }: {
   p: Placed | FlatNode
+  hitArea: string
   members: Node[]
   markerScale: number
   glowId: string
@@ -604,39 +609,44 @@ function Pin({ p, members, markerScale, glowId, active, tooltipOpen, choiceId, c
   onActivate: (key: string, target: SVGCircleElement | null) => void
   onWarm: () => void
 }) {
-  const cx = p.px.toFixed(1)
-  const cy = p.py.toFixed(1)
-  const label = "label" in p ? p : null
+  const hitClipId = useId()
+  const cx = p.px
+  const cy = p.py
+  const labels = "labels" in p ? p.labels : []
   const state = p.offlineCount === 0 ? "online" : p.offlineCount === p.count ? "offline" : "mixed"
   const title = p.count > 1
-    ? `${p.name}：在线 ${p.count - p.offlineCount} 台，离线 ${p.offlineCount} 台（点击选择节点）`
-    : `${p.name} · ${state === "online" ? "在线" : "离线"}（点击打开）`
+    ? `${p.name}：在线 ${p.count - p.offlineCount} 台，离线 ${p.offlineCount} 台`
+    : `${p.name} · ${state === "online" ? "在线" : "离线"}`
   return (
     <Tooltip.Root open={tooltipOpen} onOpenChange={(open) => onHover(p.key, open)}>
     <g>
-      {label && <path className="globe-stem" aria-hidden="true" d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />}
+      <defs><clipPath id={hitClipId} clipPathUnits="userSpaceOnUse"><polygon points={hitArea} /></clipPath></defs>
+      {labels.map((label) => <path key={label.key} className="globe-stem" aria-hidden="true" data-label-node={label.id} data-pin-key={p.key} d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />)}
       <g className="globe-beacon" aria-hidden="true" data-marker-active={active ? "true" : "false"} data-marker-state={state} transform={`translate(${cx} ${cy}) scale(${markerScale})`}>
         <g className="globe-beacon-shape">
         <circle className="globe-pin-halo" cx={0} cy={0} r={7.52} fill={`url(#${glowId}-${state === "online" ? "online" : "offline"})`} />
-        <circle className="globe-pin-ring" cx={0} cy={0} r={5.44} vectorEffect="non-scaling-stroke" />
+        <circle className="globe-pin-ring" cx={0} cy={0} r={5.44} />
         <circle className={state === "mixed" ? "globe-pin globe-pin-core" : "globe-pin"} data-marker-state={state} data-marker-x={cx} data-marker-y={cy} cx={0} cy={0} r={3.2} />
         {state === "offline"
-          ? <path className="globe-pin-detail" d="M -1.376 0 L 1.376 0" vectorEffect="non-scaling-stroke" />
+          ? <path className="globe-pin-detail" d="M -1.376 0 L 1.376 0" />
           : <circle className="globe-pin-highlight" cx={-0.768} cy={-0.864} r={0.384} />}
         </g>
       </g>
-      {/* 多台地区：针边上挂一个小小的台数（标签里也写着「地区 ×N」，两处都在，
-          因为标签可能被挤掉、针本身也常常落在标签的另一头）。 */}
-      {label && p.count > 1 && (
+      {/* 多节点地点只画一枚信标，旁边显示台数；每个成员的名称分别列在两侧。 */}
+      {labels.length > 0 && p.count > 1 && (
         <text className="globe-count" aria-hidden="true" x={p.px + 10.5 * markerScale} y={p.py - 9.5 * markerScale}>
           {p.count}
         </text>
       )}
-      {label && <text className="globe-label" aria-hidden="true" x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
+      {labels.map((label) => <text key={label.key} className="globe-label" aria-hidden="true" data-label-node={label.id} data-pin-key={p.key} x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
         {label.label}
-      </text>}
+      </text>)}
       <Tooltip.Trigger asChild>
-        <circle className="hit" cx={cx} cy={cy} r={9} fill="transparent" data-node={p.id} data-pin-key={p.key} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count} data-offline-count={p.offlineCount} data-marker-state={state} role="button" tabIndex={0} focusable="true" aria-label={title} aria-haspopup={p.count > 1 ? "dialog" : undefined} aria-expanded={p.count > 1 ? choosing : undefined} aria-controls={choosing ? choiceId : undefined}
+        <circle className="hit" cx={cx} cy={cy} r={9 * markerScale} clipPath={`url(#${hitClipId})`} fill="transparent" data-node={p.id} data-pin-key={p.key} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count} data-offline-count={p.offlineCount} data-marker-state={state} role="button" tabIndex={0} focusable="true" aria-label={title} aria-haspopup={p.count > 1 ? "dialog" : undefined} aria-expanded={p.count > 1 ? choosing : undefined} aria-controls={choosing ? choiceId : undefined}
+          onPointerEnter={(event) => {
+            // 相邻信标直接切换，避免旧 Tooltip 的缓冲区阻止新信标打开提示。
+            if (event.pointerType !== "touch") onHover(p.key, true)
+          }}
           onFocus={(event) => {
             onFocus(p.key)
             onWarm()
@@ -664,7 +674,6 @@ function Pin({ p, members, markerScale, glowId, active, tooltipOpen, choiceId, c
             <span className="globe-node-status">{node.online ? "在线" : "离线"}</span>
           </li>)}
         </ul>
-        <p>{p.count > 1 ? "点击信标选择要查看的节点" : "点击信标查看详情"}</p>
       </Tooltip.Content>
     </Tooltip.Portal>
     </Tooltip.Root>

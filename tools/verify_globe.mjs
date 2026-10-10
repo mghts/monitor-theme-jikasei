@@ -203,7 +203,9 @@ const READ = `(() => {
     base: panel ? panel.querySelectorAll('.globe-base').length : 0,
     selected: panel ? panel.querySelectorAll('.globe-selected').length : 0,
     labels: labels.length, pins: pins.length, hits: hits.length,
-    hitData: hits.map((h) => ({ node: h.getAttribute('data-node'), index: Number(h.getAttribute('data-index')), region: h.getAttribute('data-region'), online: h.getAttribute('data-online') === '1' })),
+    hitData: hits.map((h) => ({ node: h.getAttribute('data-node'), key: h.getAttribute('data-pin-key'), count: Number(h.getAttribute('data-count')), x: Number(h.getAttribute('cx')), y: Number(h.getAttribute('cy')), index: Number(h.getAttribute('data-index')), region: h.getAttribute('data-region'), online: h.getAttribute('data-online') === '1' })),
+    memberLabels: labels.map((t) => ({ id: Number(t.getAttribute('data-label-node')), key: t.getAttribute('data-pin-key') })),
+    memberStems: panel ? [...panel.querySelectorAll('.globe-stem')].map((p) => ({ id: Number(p.getAttribute('data-label-node')), key: p.getAttribute('data-pin-key'), origin: nums(p.getAttribute('d')).slice(0, 2) })) : [],
     labelSide: xs.map((x) => (x < cx ? 'L' : 'R')),
     labelMinDist: xs.length ? Math.min.apply(null, xs.map((x) => Math.abs(x - cx))) : 999,
     labelY: ys.map((y) => y - 3),
@@ -286,6 +288,31 @@ const pinJapan = async () => {
 }
 const sameSelection = (before, after) => before.url === after.url && before.cards === after.cards && before.caption === after.caption
   && JSON.stringify(before.regs.filter((r) => r.on).map((r) => r.text)) === JSON.stringify(after.regs.filter((r) => r.on).map((r) => r.text))
+const memberStructure = (state) => {
+  const total = state.hitData.reduce((sum, hit) => sum + hit.count, 0)
+  return total > 0 && state.pins === state.hits && state.labels === total && state.stems === total
+    && new Set(state.hitData.map((hit) => hit.key)).size === state.hits
+    && new Set(state.memberLabels.map((label) => label.id)).size === total
+    && state.hitData.every((hit) => {
+      const labels = state.memberLabels.filter((label) => label.key === hit.key)
+      const stems = state.memberStems.filter((stem) => stem.key === hit.key)
+      return labels.length === hit.count && stems.length === hit.count && labels.every((label) => stems.filter((stem) => stem.id === label.id && Math.abs(stem.origin[0] - hit.x) <= 0.15 && Math.abs(stem.origin[1] - hit.y) <= 0.15).length === 1)
+    })
+}
+// 旧工具仍测真实点击；聚合必须先打开窗口，再实际选择非首成员，不能把代表ID当作自动导航。
+const selectAggregateMember = async (target, tag) => {
+  if (target.count <= 1) return target.id
+  const dialog = await js(`(() => { const d = document.querySelector('[data-map-node-dialog]'); return { open: !!d, path: location.pathname, options: d ? [...d.querySelectorAll('[data-map-node-option]')].map((b) => Number(b.dataset.mapNodeOption)) : [] } })()`)
+  check(`${tag}：聚合点击只打开成员选择，未自动进入第一台`, dialog?.open && dialog.path === '/' && dialog.options.length === target.count, JSON.stringify(dialog))
+  const wanted = dialog?.options.find((id) => id !== Number(target.id))
+  if (wanted === undefined) return null
+  const option = await js(`(() => { const b = document.querySelector('[data-map-node-option="${wanted}"]'); if (!b) return null; b.scrollIntoView({block:'nearest'}); const r = b.getBoundingClientRect(); return { x:r.left+r.width/2, y:r.top+r.height/2 } })()`)
+  if (!option) return null
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...option, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...option, button: 'left', clickCount: 1 })
+  await sleep(500)
+  return wanted
+}
 
 console.log('\n=== 一、七台演示机（合成夹具，桌面 1440×900） ===')
 fleet = LIVE.nodes
@@ -299,7 +326,7 @@ check('经纬网在（medium 档 12 条经 + 5 条纬 + 赤道）', s.wires >= 1
 check('扫掠经线 1 条（medium 档）', s.sweeps === 1, `${s.sweeps} 条`)
 check('圆盘下沿那条基线 1 条', s.base === 1)
 const visible = s.hits
-check('每台看得见的机器一枚针、一条引线、一行字', s.pins === visible && s.stems === visible && s.labels === visible, `${s.pins}/${s.stems}/${s.labels} vs ${visible}`)
+check('每可见地点一枚针，每成员独立标签和同起点引线', memberStructure(s), `${s.pins} 地点/${s.stems} 引线/${s.labels} 标签 vs ${visible} 命中`)
 check('★ 标签全在圆盘之外（不压在地球上）', s.labelMinDist > 92, `最近的 ${Math.round(s.labelMinDist)} > 92`)
 check('★ 没有一行标签被画布裁掉', clipped(s).length === 0, JSON.stringify(clipped(s)))
 check('标签落在画布内（y 在 12~204）', s.labelY.every((y) => y >= 12 && y <= 204), JSON.stringify(s.labelY))
@@ -436,18 +463,19 @@ const pin = await js(`(() => {
   const hit = document.querySelector('.hit');
   if (!hit) return null;
   const r = hit.getBoundingClientRect();
-  return JSON.stringify({ id: hit.getAttribute('data-node'), x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), w: Math.round(r.width), h: Math.round(r.height) });
+  return JSON.stringify({ id: hit.getAttribute('data-node'), count: Number(hit.getAttribute('data-count')), x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), w: Math.round(r.width), h: Math.round(r.height) });
 })()`)
 const p = JSON.parse(pin)
-check('命中圆有手指点得中的尺寸（半径 9 → 屏幕上更大）', p.w >= 12 && p.h >= 12, `${p.w}×${p.h}`)
+check('100%命中圆保留18px设计基准', Math.abs(p.w - 18) <= 1 && Math.abs(p.h - 18) <= 1, `${p.w}×${p.h}`)
 // 点之前先记下那个像素上最顶上是谁：`hit` 才对（地球本身、标签、引线都是 pointer-events: none，
 // 只有命中圆吃指针）。点不动机器时，这条 INFO 是第一现场。
 console.log(`  INFO  该像素上是 ${await js(`(() => { const el = document.elementFromPoint(${p.x}, ${p.y}); return el ? (el.getAttribute('class') || el.tagName) : 'none' })()`)}`)
 await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
 await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 })
 await sleep(700)
+const chosenId = await selectAggregateMember(p, '点针')
 const opened = JSON.parse(await js(READ))
-check('★ 点针进得去那台机器的详情页', opened.url === `/node/${p.id}`, `${opened.url} 期望 /node/${p.id}`)
+check('★ 点针或选择聚合成员打开准确详情页', chosenId !== null && opened.url === `/node/${chosenId}`, `${opened.url} 期望 /node/${chosenId}`)
 // 光比 URL 不够：详情页整页崩掉时 URL 也照样变（pushState 在渲染之前）。比它真的画出来了。
 const detailText = String(await js('document.body.innerText')).slice(0, 200)
 check('  详情页真的画出来了（不是整页空白）', detailText.length > 40 && /CPU|内存/.test(detailText), JSON.stringify(detailText.slice(0, 60)))
@@ -482,7 +510,7 @@ fleet = FLEET
 s = await open()
 check('面板照常', s.panel === true)
 const many = s.hits
-check('每台看得见的机器都排上了（针 = 引线 = 标签 = 命中圆）', s.pins === many && s.stems === many && s.labels === many && s.hits === many, `针 ${s.pins} / 引线 ${s.stems} / 字 ${s.labels} / 命中圆 ${s.hits}`)
+check('每地点一枚针与命中圆，每成员各标签与同起点引线', memberStructure(s), `针 ${s.pins} / 引线 ${s.stems} / 字 ${s.labels} / 命中圆 ${many}`)
 check('★ 标签还是不压地球', s.labelMinDist > 92, `${Math.round(s.labelMinDist)}`)
 check('★ 两摞都排得整整齐齐（互不重叠、都在画布内）', (() => {
   for (const side of ['L', 'R']) {
@@ -669,15 +697,16 @@ for (const [width, height, tag] of [[1440, 900, '桌面'], [390, 844, '手机']]
       const r = hit.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
       // 同城命中圆可能重叠，期望值取这个像素最上层的真实命中圆，而非下面被遮挡的那台。
       const top = document.elementFromPoint(x, y)?.closest('.hit');
-      return { x, y, id: top?.getAttribute('data-node'), hit: !!top, w: r.width, h: r.height };
+      return { x, y, id: top?.getAttribute('data-node'), count: Number(top?.getAttribute('data-count')), hit: !!top, w: r.width, h: r.height };
     })()`)
-    check(`${tag} ${percent}%：缩放后的屏幕命中位置仍是机器命中圆`, target?.hit === true && target.w >= 10 && target.h >= 10, JSON.stringify(target))
+    check(`${tag} ${percent}%：缩放后命中中心正确，直径按18px基准同比缩放`, target?.hit === true && Math.abs(target.w - 18 * percent / 100) <= 0.3 && Math.abs(target.h - 18 * percent / 100) <= 0.3, JSON.stringify(target))
     if (target?.hit) {
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', buttons: 1, clickCount: 1 })
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', buttons: 0, clickCount: 1 })
       await sleep(600)
+      const chosenId = await selectAggregateMember(target, `${tag} ${percent}%`)
       const detail = await read()
-      check(`${tag} ${percent}%：点命中圆进入对应机器且详情正常渲染`, detail.url === `/node/${target.id}` && /CPU|内存/.test(String(await js('document.body.innerText'))), `${detail.url} 期望 /node/${target.id}`)
+      check(`${tag} ${percent}%：点针或选成员进入准确机器且详情正常渲染`, chosenId !== null && detail.url === `/node/${chosenId}` && /CPU|内存/.test(String(await js('document.body.innerText'))), `${detail.url} 期望 /node/${chosenId}`)
     }
   }
   await open()

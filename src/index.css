@@ -334,7 +334,6 @@
 .globe-node-tooltip-heading { font-weight: 600; margin-bottom: 6px; }
 .globe-node-tooltip ul, .globe-node-options { list-style: none; margin: 0; padding: 0; }
 .globe-node-tooltip li { display: flex; align-items: start; gap: 16px; padding-block: 4px; }
-.globe-node-tooltip p { margin: 8px 0 0; color: var(--muted-foreground); }
 .globe-node-name { min-width: 0; flex: 1; overflow-wrap: anywhere; text-align: left; }
 .globe-node-status { flex: none; white-space: nowrap; font-size: 12px; color: var(--globe-pin-offline); }
 [data-online="1"] > .globe-node-status { color: var(--globe-pin-online); }

@@ -263,20 +263,19 @@ const fleet = [
 ]
 
 const placed = globeNodes(fleet)
-// ★合并门槛：**整队 ≥30 台，或同一个地区 ≥5 台**（「或」）。这份夹具是 10 台、JP 4 台 ——
-//   两条都不满足，所以**不合并**：一台一枚针，同地区的按角度岔开。
-eq(mergeRegion(10, 4), false, "10 台、同地区 4 台 → 不合并")
-eq(mergeRegion(10, 5), true, "同地区到 5 台 → 合并")
-eq(mergeRegion(30, 2), true, "整队到 30 台 → 合并（哪怕这个地区只有 2 台）")
-eq(placed.length, 9, "不合并：9 台有落点的机器各一枚针")
-eq(placed.map((p) => p.key), ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "顺序与节点列表一致（连线抽样要靠 index）")
-eq(placed.map((p) => p.nodeIds), [[1], [2], [3], [4], [5], [6], [7], [8], [9]], "未合并信标只包含自身，不混入同地区节点")
-eq(placed.every((p) => p.count === 1), true, "不合并时针上没有台数")
-eq(placed.every((p) => p.offlineCount === 0), true, "单台全在线时真实离线计数为 0")
-// JP 那 4 台必须岔开：坐标两两不同，且都在落点附近（不是随便乱扔）。
+// 同地点两台起始终共用信标；每个真实节点仍各有一条成员标签。
+eq(mergeRegion(10, 4), true, "小队同地区 4 台也合并")
+eq(mergeRegion(2, 2), true, "只有两台同地点节点也合并")
+eq(mergeRegion(100, 1), false, "整队数量不改变单台信标")
+eq(placed.length, 5, "9 台有落点的机器按实际地区只出 5 枚信标")
+eq(placed.map((p) => p.key), ["1", "2", "HK · Hong Kong", "JP · Japan", "9"], "信标按代表节点输入顺序排列")
+eq(placed.map((p) => p.nodeIds), [[1], [2], [3, 4], [5, 6, 7, 8], [9]], "聚合精确持有地区成员，单台仅含自身")
+eq(placed.map((p) => p.count), [1, 1, 2, 4, 1], "信标台数始终等于实际成员数")
+eq(placed.every((p) => p.offlineCount === 0), true, "全在线地区真实离线计数为 0")
+eq(placed.flatMap((p) => p.memberLabels).sort((a, b) => a.index - b.index), fleet.slice(0, 9).map((n, index) => ({ id: n.id, name: n.name, code: n.country, index })), "成员名称、国家和索引完整保留")
 const jp = placed.filter((p) => p.region.key === "JP · Japan")
-eq(new Set(jp.map((p) => p.ll.join(","))).size, 4, "同地区 4 台岔开（一枚不盖住另一枚）")
-ok(jp.every((p) => Math.abs(p.ll[0] - p.region.base[0]) < 6 && Math.abs(p.ll[1] - p.region.base[1]) < 6), "岔开的点都在落点附近")
+eq(jp.length, 1, "同地区 4 台只出一个信标，不留下重叠命中区域")
+eq(jp[0].ll, COUNTRY_LL.JP, "同地点信标保留真实地区落点，不再人为散开")
 eq(globeNodes(fleet).map((p) => p.ll), placed.map((p) => p.ll), "同一份节点算两次，落点完全一样（不会每帧抖）")
 
 // 同地区到 5 台 → 聚成一枚针：台数 5、标签「Japan ×5」、落在地区中心。
@@ -290,16 +289,18 @@ eq(globeNodes([...fleet, node(11, "第五台 JP", "JP")]).map((p) => p.nodeIds),
 eq(jpMerged[0].offlineCount, 0, "全在线聚合的真实离线计数为 0")
 eq(jpMerged.map((p) => p.name), ["Japan ×5"], "多台的针标签是「地区 × 台数」")
 eq(jpMerged[0].ll, regionRows(fleet).find((r) => r.region.key === "JP · Japan")?.aim, "合并的针落在地区中心")
-eq(five.filter((p) => p.region.key === "CN").map((p) => p.count), [1], "没到门槛的地区照旧一台一枚")
+eq(five.filter((p) => p.region.key === "CN").map((p) => p.count), [1], "单台地区仍是普通信标")
 // 有一台离线，那枚针就按离线画（不能被「多数在线」盖过去）。
 const jpOffline = globeNodes([...fleet, node(11, "第五台 JP", "JP")].map((n) => (n.id === 7 ? { ...n, online: false } : n)))
 eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.online, false, "合并的那枚针：地区里有一台离线就按离线画")
 eq(jpOffline.find((p) => p.region.key === "CN")?.online, true, "别的地区不受影响")
 eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.offlineCount, 1, "部分离线聚合记录实际离线 1 台，不把所有台数判为离线")
 eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.nodeIds, [5, 6, 7, 8, 11], "在线状态更新不丢失聚合成员")
-const singlesOffline = globeNodes(fleet.map((n) => n.id === 7 ? { ...n, online: false } : n))
-eq(singlesOffline.find((p) => p.id === 7)?.offlineCount, 1, "不合并时离线单台的真实计数为 1")
-eq(singlesOffline.filter((p) => p.id !== 7).every((p) => p.offlineCount === 0), true, "离线单台不影响邻近节点")
+const smallOffline = globeNodes(fleet.map((n) => n.id === 7 ? { ...n, online: false } : n))
+eq(smallOffline.find((p) => p.region.code === "JP")?.offlineCount, 1, "小队聚合也按真实离线成员统计")
+eq(smallOffline.filter((p) => p.region.code !== "JP").every((p) => p.offlineCount === 0), true, "离线成员不影响其它地区")
+const singleOffline = globeNodes([node(7, "离线 JP", "JP", { online: false })])[0]
+eq([singleOffline.count, singleOffline.offlineCount, singleOffline.nodeIds], [1, 1, [7]], "单台信标保留自己的状态与成员")
 const mixedSource = [...fleet, node(11, "第五台 JP", "JP")].map((n) => [5, 7].includes(n.id) ? { ...n, online: false } : n)
 const mixedBefore = JSON.stringify(mixedSource)
 const mixedGroup = globeNodes(mixedSource).find((p) => p.region.key === "JP · Japan")!
@@ -310,8 +311,8 @@ const largeGroup = globeNodes([
   node(50, "日本在线", "JP"), node(51, "日本离线", "JP", { online: false }),
   ...Array.from({ length: 28 }, (_, i) => node(100 + i, "无落点", "")),
 ]).find((p) => p.region.key === "JP · Japan")!
-eq([largeGroup.count, largeGroup.offlineCount, largeGroup.online], [2, 1, false], "总台数触发合并时也按实际两台统计状态")
-eq(largeGroup.nodeIds, [50, 51], "总台数触发合并时也只保留桶内两台，不包含无落点节点")
+eq([largeGroup.count, largeGroup.offlineCount, largeGroup.online], [2, 1, false], "无落点队员不影响同地区合并状态")
+eq(largeGroup.nodeIds, [50, 51], "信标仅包含有落点桶内成员")
 eq(JSON.stringify(mixedSource), mixedBefore, "统计状态不修改输入节点")
 
 // 两个国家的节点交错输入，ID 故意不排序：成员只属于当前桶，顺序跟随 API 列表。
@@ -328,7 +329,8 @@ const memberPoints = globeNodes(memberSource)
 eq(memberPoints.map((p) => [p.region.key, p.nodeIds]), [["JP · Japan", [90, 5, 44, 3, 9]], ["CN", [70, 6, 45, 4, 10]]], "跨国家聚合成员准确且按原始输入顺序排列")
 eq(globeNodes([...memberSource].reverse()).find((p) => p.region.code === "JP")?.nodeIds, [9, 3, 44, 5, 90], "改变输入顺序时成员列表同步，不使用数字 ID 排序")
 const reducedMembers = globeNodes(memberSource.filter((n) => n.id !== 9))
-eq(reducedMembers.filter((p) => p.region.code === "JP").map((p) => p.nodeIds), [[90], [5], [44], [3]], "删除一个输入成员后低于合并门槛，每枚针恢复为仅含自身")
+eq(reducedMembers.filter((p) => p.region.code === "JP").map((p) => p.nodeIds), [[90, 5, 44, 3]], "减少成员后同地点仍只保留一个信标")
+eq(globeNodes(memberSource.filter((n) => n.id === 90)).map((p) => [p.key, p.nodeIds, p.memberLabels.map((member) => member.id)]), [["90", [90], [90]]], "筛到单台时信标键和成员标签恢复为自身")
 eq(reducedMembers.find((p) => p.region.code === "CN")?.nodeIds, [70, 6, 45, 4, 10], "另一个国家的成员不受更新影响")
 const movedMembers = globeNodes(memberSource.map((n) => n.id === 9 ? { ...n, country: "CN" } : n))
 eq(movedMembers.find((p) => p.region.code === "CN")?.nodeIds, [70, 6, 45, 4, 9, 10], "国家更新后成员移动到正确桶，保留输入顺序")
@@ -336,6 +338,31 @@ eq(movedMembers.filter((p) => p.region.code === "JP").flatMap((p) => p.nodeIds),
 eq(globeNodes(regionView(memberSource, "JP · Japan").shown).map((p) => p.nodeIds), [[90, 5, 44, 3, 9]], "地区筛选后生成的信标只包含筛选成员")
 eq(layoutLabels(camera(139.7, 35.7), memberPoints, new Map()).map((p) => [p.key, p.nodeIds]), memberPoints.map((p) => [p.key, p.nodeIds]), "球面标签布局完整保留聚合成员")
 eq(JSON.stringify(memberSource), memberBefore, "成员构建、筛选和标签布局不修改输入节点")
+
+// 国家兜底只归一到唯一同国近点；地区筛选仍按真实识别结果保留，未知成员不会被猜成城市。
+const nearSource = [node(61, "Tokyo-01", "JP"), node(62, "未注明城市", "JP", { online: false })]
+const nearBefore = JSON.stringify(nearSource)
+const nearPoint = globeNodes(nearSource)[0]
+eq(globeNodes(nearSource).length, 1, "Tokyo 与日本兜底近点合为一个显示信标")
+eq([nearPoint.key, nearPoint.id, nearPoint.index, nearPoint.name, nearPoint.ll], ["JP · Japan", 61, 0, "Japan ×2", COUNTRY_LL.JP], "兜底保留 canonical 地区与坐标，代表 ID 仍按输入顺序")
+eq([nearPoint.nodeIds, nearPoint.offlineCount, nearPoint.memberLabels.map((member) => member.name)], [[61, 62], 1, ["Tokyo-01", "未注明城市"]], "近点合并不丢失真实名字和离线成员")
+eq(regionRows(nearSource).map((row) => row.region.key).sort(), ["JP · Japan", "JP · Tokyo"], "显示归一化不改变地区列表")
+eq(globeNodes(regionView(nearSource, "JP · Tokyo").shown).map((point) => [point.key, point.region.key, point.ll]), [["61", "JP · Tokyo", cityHint(nearSource[0])?.ll]], "筛选已知城市时保留该城市落点")
+eq(JSON.stringify(nearSource), nearBefore, "显示近点归一化不修改输入")
+eq(globeNodes([node(63, "未注明城市", "DE"), node(64, "Frankfurt-01", "DE")]).map((point) => [point.key, point.ll, point.nodeIds]), [["DE", COUNTRY_LL.DE, [63, 64]]], "德国兜底与 Frankfurt 近点同样只留一个信标")
+eq(globeNodes([node(65, "Tokyo-01", "JP"), node(66, "Osaka-01", "JP")]).length, 2, "两个已识别城市始终保持各自信标")
+const originalUsBase = COUNTRY_LL.US
+try {
+  // 测试内临时锚点制造两个相邻城市均符合阈值，验证不通过 fallback 串联合并。
+  COUNTRY_LL.US = [-121.921, 37.3465]
+  const ambiguous = globeNodes([node(71, "未注明城市", "US"), node(72, "San Jose-01", "US"), node(73, "Santa Clara-01", "US")])
+  eq(ambiguous.map((point) => point.nodeIds), [[71], [72], [73]], "两个同国近点候选时保守保持独立，不 bridge 不同城市")
+  COUNTRY_LL.US = [...COUNTRY_LL.JP]
+  const crossCountry = globeNodes([...nearSource, node(74, "未注明城市", "US")])
+  eq(crossCountry.map((point) => [point.code, point.nodeIds]), [["JP", [61, 62]], ["US", [74]]], "相同坐标仍不跨国家合并")
+} finally {
+  COUNTRY_LL.US = originalUsBase
+}
 
 const rows = regionRows(fleet)
 // ★ 一个 HK 只有一行：名字里写着 HK 的（`华纳云 HK`）与没写的（`野草云`）都落 `HK · Hong Kong`
@@ -362,21 +389,30 @@ eq(regionView([], "JP").current, null, "没有节点时不存在悬空选中")
 
 const sides = new Map<string, "L" | "R">()
 const laid = layoutLabels(cam, placed, sides)
-eq(laid.length, 9, "9 枚针都排上了标签")
-eq(laid.map((p) => [p.id, p.nodeIds]), placed.map((p) => [p.id, p.nodeIds]), "球面标签布局保留每枚未合并信标的精确成员")
-ok(laid.every((p) => Math.abs(p.lx - VIEW.cx) > VIEW.r), "两摞标签都在圆盘之外（不压在地球上）")
-ok(laid.every((p) => p.ly >= 12 && p.ly <= 204), "标签不出画布上下边")
-ok(laid.every((p) => p.end === (p.lx < VIEW.cx)), "左侧标签右对齐、右侧标签左对齐")
+const laidLabels = laid.flatMap((point) => point.labels)
+eq(laid.length, 5, "5 枚信标各返回一条 Placed，不重复信标命中区域")
+eq(laidLabels.length, 9, "9 个真实成员各有一条独立标签与引线落点")
+eq(laid.map((p) => [p.id, p.nodeIds]), placed.map((p) => [p.id, p.nodeIds]), "球面标签布局保留信标代表 ID 与完整成员")
+eq(laidLabels.map((label) => [label.id, label.name, label.code, label.index]).sort((a, b) => Number(a[3]) - Number(b[3])), fleet.slice(0, 9).map((n, index) => [n.id, n.name, n.country, index]), "布局不以地区名称替换真实成员名字")
+eq(laid.map((p) => p.memberLabels), placed.map((p) => p.memberLabels), "球面投影完整保留成员标签源数据")
+for (const point of laid) {
+  eq(point.labels.map((label) => label.key), point.nodeIds.map((id) => `${point.key}:${id}`), "标签键由信标键和真实成员 ID 组成")
+  ok(point.labels.every((label) => label.px === point.px && label.py === point.py), "同信标成员共用同一个真实地理落点")
+  eq([point.lx, point.ly, point.end, point.label, point.left, point.right, point.width], [point.labels[0].lx, point.labels[0].ly, point.labels[0].end, point.labels[0].label, point.labels[0].left, point.labels[0].right, point.labels[0].width], "兼容布局字段准确取第一成员，不覆盖信标字段")
+}
+ok(laidLabels.every((p) => Math.abs(p.lx - VIEW.cx) > VIEW.r), "所有成员标签都在圆盘之外")
+ok(laidLabels.every((p) => p.ly >= 12 && p.ly <= 204), "成员标签不出画布上下边")
+ok(laidLabels.every((p) => p.end === (p.lx < VIEW.cx)), "左侧标签右对齐、右侧标签左对齐")
 for (const side of ["L", "R"] as const) {
-  const ys = laid.filter((p) => (side === "L") === p.end).map((p) => p.ly)
+  const ys = laidLabels.filter((p) => (side === "L") === p.end).map((p) => p.ly)
   eq(new Set(ys).size, ys.length, `${side} 侧没有两行标签压在同一条线上`)
 }
-const counts = [laid.filter((p) => p.end).length, laid.filter((p) => !p.end).length]
+const counts = [laidLabels.filter((p) => p.end).length, laidLabels.filter((p) => !p.end).length]
 ok(Math.abs(counts[0] - counts[1]) <= 2, `左右两摞数量均衡（${counts[0]} / ${counts[1]}）`)
-eq(sides.size, 9, "每枚针的左右侧都被记下来了（下一帧不会左右跳）")
+eq(sides.size, 9, "每个成员的左右侧都独立记忆")
 // 左侧写「名字 · 国家」，右侧写「国家 · 名字」—— 上游如此，两侧都从外侧往内读。
-const left = laid.find((p) => p.end)
-const right = laid.find((p) => !p.end)
+const left = laidLabels.find((p) => p.end)
+const right = laidLabels.find((p) => !p.end)
 eq(left?.label, `${left?.name} · ${left?.code}`, "左侧标签是「名字 · 国家」")
 eq(right?.label, `${right?.code} · ${right?.name}`, "右侧标签是「国家 · 名字」")
 const laidRef = laid
@@ -386,23 +422,33 @@ eq(zoomView(100), VIEW, "默认缩放保持原构图")
 eq(zoomView(Number.NaN), VIEW, "非法缩放回到默认构图")
 eq(zoomView(0), zoomView(50), "缩放不越过下限")
 eq(zoomView(200), zoomView(150), "缩放不越过上限")
-const crowd = Array.from({ length: 52 }, (_, i) => ({ ...placed[i % placed.length], key: `zoom-${i}`, id: i, index: i }))
-for (const percent of [50, 100, 150]) {
-  const frame = zoomView(percent, crowd.length)
-  const labels = layoutLabels(camera(80, 30, frame), crowd, new Map())
-  ok(labels.length > 30 && labels.every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% 密集标签留在画布和底部说明之间`)
-  for (const end of [false, true]) {
-    const ys = labels.filter((p) => p.end === end).map((p) => p.ly).sort((a, b) => a - b)
-    ok(ys.slice(1).every((y, i) => y - ys[i] >= 11), `${percent}% 密集标签保留可读行距`)
+for (const size of [52, 120, 200]) {
+  const crowd = globeNodes(Array.from({ length: size }, (_, i) => node(1000 + i, `Tokyo-${i}`, "JP")))
+  eq(crowd.length, 1, `${size} 个同地点节点仅保留一枚信标`)
+  for (const percent of [50, 100, 150]) {
+    const frame = zoomView(percent, size)
+    const beacons = layoutLabels(camera(139.7, 35.7, frame), crowd, new Map())
+    const labels = beacons.flatMap((point) => point.labels)
+    eq(beacons.length, 1, `${percent}% / ${size} 成员布局不重复信标`)
+    eq(labels.map((label) => label.id), crowd[0].nodeIds, `${percent}% / ${size} 成员标签全部保留且顺序确定`)
+    ok(labels.every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% / ${size} 密集标签留在画布和底部说明之间`)
+    const counts = [labels.filter((label) => label.end).length, labels.filter((label) => !label.end).length]
+    ok(Math.abs(counts[0] - counts[1]) <= 2, `${percent}% / ${size} 按全部成员重平衡两侧`)
+    for (const end of [false, true]) {
+      const ys = labels.filter((p) => p.end === end).map((p) => p.ly).sort((a, b) => a - b)
+      ok(ys.slice(1).every((y, i) => y - ys[i] >= 11 - 1e-9), `${percent}% / ${size} 密集标签保留可读行距`)
+    }
   }
 }
+const cramped = layoutLabels(camera(139.7, 35.7), globeNodes(Array.from({ length: 120 }, (_, i) => node(2000 + i, `Tokyo-${i}`, "JP"))), new Map())
+ok(cramped.flatMap((point) => point.labels).every((label) => label.ly >= 12 && label.ly <= VIEW.h - 36), "调用方高度不足时仍保守夹在画布内，不裁切尾部成员")
 for (const percent of [50, 150]) {
   const frame = zoomView(percent)
   const scaled = camera(80, 30, frame)
   const pins = layoutLabels(scaled, placed, new Map())
   eq(pins.map((p) => p.id), laid.map((p) => p.id), `${percent}% 缩放不改变可见节点`)
-  ok(pins.every((p) => Math.abs(p.lx - frame.cx) > frame.r), `${percent}% 标签留在圆盘外`)
-  ok(pins.every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% 标签留在画布内`)
+  ok(pins.flatMap((p) => p.labels).every((p) => Math.abs(p.lx - frame.cx) > frame.r), `${percent}% 所有成员标签留在圆盘外`)
+  ok(pins.flatMap((p) => p.labels).every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% 所有成员标签留在画布内`)
   for (const p of pins) {
     const normal = laid.find((item) => item.id === p.id)!
     const ratio = Math.hypot(p.px - frame.cx, p.py - frame.cy) / Math.hypot(normal.px - VIEW.cx, normal.py - VIEW.cy)
@@ -432,8 +478,8 @@ function labelWidthOf4() { return (5.05 * 4 + 2) * 1.18 }
 
 // 同一份节点、给定很小的余量：每一行都截到余量之内，位置排布不受影响。
 const tightlaid = layoutLabels(cam, placed, new Map(), 100)
-ok(tightlaid.every((p) => inkWidth(p.label) <= 100), "窄余量下每一行都在余量之内")
-eq(tightlaid.map((p) => [p.lx, p.ly]), laidRef.map((p) => [p.lx, p.ly]), "截字不影响落点与堆叠位置")
+ok(tightlaid.flatMap((p) => p.labels).every((p) => inkWidth(p.label) <= 100), "窄余量下每一个成员标签都在余量之内")
+eq(tightlaid.flatMap((p) => p.labels).map((p) => [p.lx, p.ly]), laidRef.flatMap((p) => p.labels).map((p) => [p.lx, p.ly]), "截字不影响成员落点与堆叠位置")
 
 // 单侧空掉也不能崩：只有一台机器时它独自成摞。
 const solo = layoutLabels(cam, placed.slice(0, 1), new Map())

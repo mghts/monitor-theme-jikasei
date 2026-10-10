@@ -2,6 +2,8 @@
 // 用法：node tools/verify_map_controls.mjs [输出目录]；可指定 CHROME_PATH / MAP_DIST。
 // MAP_BASELINE_DIST 可指向保留的旧 dist，实测同夹具的地图尺寸作为前后对照。
 // MAP_CHECK_GROUP=interactions 仅运行节点悬停、选择与实时更新，便于失败后定向复验。
+// MAP_CHECK_GROUP=locations 仅运行小队同地点合并、逐成员引线、缩放与准确详情。
+// 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
 import { spawn } from 'node:child_process'
@@ -17,8 +19,11 @@ const OUT = mkdtempSync(join(parentOutput, 'monitor-map-controls-'))
 const DIST = resolve(process.env.MAP_DIST || 'dist')
 const BASELINE_DIST = process.env.MAP_BASELINE_DIST ? resolve(process.env.MAP_BASELINE_DIST) : null
 const INTERACTIONS_ONLY = process.env.MAP_CHECK_GROUP === 'interactions'
+const LOCATIONS_ONLY = process.env.MAP_CHECK_GROUP === 'locations'
+const NEIGHBORS_ONLY = LOCATIONS_ONLY && process.env.MAP_LOCATION_NEIGHBORS_ONLY === '1'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
-let servingDist = INTERACTIONS_ONLY ? DIST : BASELINE_DIST || DIST
+let servingDist = TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -58,6 +63,27 @@ const interactionNodes = () => [
   ...Array.from({ length: 6 }, (_, i) => makeNode(401 + i, i === 5 ? xssName : `Tokyo 交互${i + 1}`, 'JP', '交互', i < 3)),
   ...Array.from({ length: 6 }, (_, i) => makeNode(501 + i, `Frankfurt 交互${i + 1}`, 'DE', '交互', false)),
   ...Array.from({ length: 6 }, (_, i) => makeNode(601 + i, `Singapore 交互${i + 1}`, 'SG', '交互')),
+]
+// 总数 10 台，复现旧 <30 总量且同地点 <5 不合并；同国不同城市必须分开。
+const smallLocationGroups = [
+  { ids: [801, 802, 803], code: 'HK', city: 'Hong Kong' },
+  { ids: [811, 812], code: 'SG', city: 'Singapore' },
+  { ids: [821, 822], code: 'US', city: 'Los Angeles' },
+  { ids: [831], code: 'US', city: 'Seattle' },
+  { ids: [841], code: 'JP', city: 'Tokyo' }, { ids: [842], code: 'JP', city: 'Osaka' },
+]
+const smallLocationNodes = () => [
+  makeNode(801, 'Hong Kong 一号', 'HK', '小队'), makeNode(802, '香港离线二号', 'HK', '小队', false), makeNode(803, 'HK 三号', 'HK', '小队'),
+  makeNode(811, 'Singapore 一号', 'SG', '小队'), makeNode(812, 'Singapore 二号', 'SG', '小队'),
+  makeNode(821, 'Los Angeles 离线一号', 'US', '小队', false), makeNode(822, 'Los Angeles 离线二号', 'US', '小队', false),
+  makeNode(831, 'Seattle 独立节点', 'US', '小队'),
+  makeNode(841, 'Tokyo 近城市单节点', 'JP', '小队'), makeNode(842, 'Osaka 近城市单节点', 'JP', '小队', false),
+]
+// 预期成员来自夹具声明，不能按同一国家推断，否则不同美国城市误合并会假绿。
+const fixtureGroups = [
+  [1, 2], ...[101, 201, 301].map((start) => Array.from({ length: 5 }, (_, i) => start + i)),
+  ...[401, 501, 601].map((start) => Array.from({ length: 6 }, (_, i) => start + i)),
+  ...smallLocationGroups.map((group) => group.ids),
 ]
 const NODE_UI = {
   tooltip: '[data-map-tooltip]', tooltipMember: '[data-map-tooltip-member]',
@@ -229,7 +255,7 @@ function inspect() {
       stops: gradient ? [...gradient.querySelectorAll('stop')].map((stop) => ({ color: color(getComputedStyle(stop).stopColor), opacity: Number(getComputedStyle(stop).stopOpacity) })) : [],
     }
   }
-  const pins = [...svg.querySelectorAll('[data-node]')].map((el) => {
+  const pins = [...svg.querySelectorAll('.hit[data-node]')].map((el) => {
     const x = Number(el.getAttribute('cx')), y = Number(el.getAttribute('cy'))
     const marker = [...(el.parentElement?.querySelectorAll('.globe-pin') || [])].find((candidate) => {
       if (candidate.hasAttribute('data-marker-x')) return Math.abs(Number(candidate.dataset.markerX) - x) < 0.15 && Math.abs(Number(candidate.dataset.markerY) - y) < 0.15
@@ -241,7 +267,7 @@ function inspect() {
     const halo = el.parentElement?.querySelector('.globe-pin-halo')
     const detail = el.parentElement?.querySelector('.globe-pin-detail')
     return {
-      id: Number(el.dataset.node), online: el.dataset.online, count: Number(el.dataset.count),
+      id: Number(el.dataset.node), key: el.dataset.pinKey, online: el.dataset.online, count: Number(el.dataset.count),
       offlineCount: Number(el.dataset.offlineCount), markerState: el.dataset.markerState,
       region: el.dataset.region, x: el.getAttribute('cx'), y: el.getAttribute('cy'), hitBox: rect(el),
       title: el.querySelector('title')?.textContent.trim() || el.getAttribute('aria-label'), hit: el.classList.contains('hit'), ring: !!marker,
@@ -257,6 +283,11 @@ function inspect() {
     zoom: Number(panel.querySelector('input[type="range"]')?.value), drag: panel.querySelector('.globe-atlas')?.dataset.drag,
     touchAction: getComputedStyle(panel.querySelector('.globe-atlas')).touchAction,
     paths, caption: caption?.textContent, pins,
+    memberLabels: [...svg.querySelectorAll('text.globe-label')].map((el) => ({ id: Number(el.dataset.labelNode), key: el.dataset.pinKey, text: el.textContent, ...rect(el) })),
+    memberStems: [...svg.querySelectorAll('path.globe-stem')].map((el) => {
+      const d = el.getAttribute('d') || '', origin = d.match(/^M\s*(-?[\d.]+)[,\s]+(-?[\d.]+)/)
+      return { id: Number(el.dataset.labelNode), key: el.dataset.pinKey, d, x: origin ? Number(origin[1]) : null, y: origin ? Number(origin[2]) : null }
+    }),
     sweepTime: svg.hasAttribute('data-sweep-time') ? Number(svg.dataset.sweepTime) : null,
     sweepLongitude: svg.hasAttribute('data-sweep-longitude') ? Number(svg.dataset.sweepLongitude) : null,
     cameraLongitude: svg.hasAttribute('data-camera-longitude') ? Number(svg.dataset.cameraLongitude) : null,
@@ -409,8 +440,10 @@ async function pinTarget(preferred = 4, exact = false) {
   if (!target) throw new Error(`找不到可实际命中的节点：${preferred}${exact ? '（精确）' : ''}`)
   return target
 }
-// 聚合夹具每个国家只有一个城市地区；普通夹具均为单针，预期成员独立于 UI 列表。
-const expectedMembers = (target) => target.count === 1 ? nodes.filter((node) => node.id === target.id) : nodes.filter((node) => node.country === nodes.find((candidate) => candidate.id === target.id)?.country)
+const expectedMembers = (target) => {
+  const ids = fixtureGroups.find((group) => group.includes(target.id)) || [target.id]
+  return nodes.filter((node) => ids.includes(node.id))
+}
 function inspectNodeUi(selectors) {
   const rect = (element) => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom } }
   const read = (selector, memberSelector, idAttribute) => {
@@ -420,6 +453,7 @@ function inspectNodeUi(selectors) {
     return {
       ...box, visible: box.w > 0 && box.h > 0 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0,
       role: element.getAttribute('role') || element.querySelector('[role="tooltip"]')?.getAttribute('role'), text: element.textContent,
+      accessibleName: element.getAttribute('aria-label'),
       modal: element.getAttribute('aria-modal'), labelledBy: element.getAttribute('aria-labelledby'),
       members: [...element.querySelectorAll(memberSelector)].map((member) => {
         const r = rect(member), hit = document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)
@@ -487,6 +521,7 @@ function renderingChecks(tag, snapshot) {
   check(`${tag}：没有节点间装饰性路径`, snapshot.links === 0, `globe-link=${snapshot.links}`)
   check(`${tag}：节点圈、命中区域与名称状态说明保留`, snapshot.pins.length > 0 && snapshot.pins.every((p) => p.hit && p.ring && p.title && p.count > 0), `pins=${snapshot.pins.length}`)
   markerChecks(tag, snapshot)
+  sharedOriginChecks(tag, snapshot)
   if (snapshot.mode === '2d') {
     check(`${tag}：2D没有节点名称、引线和计数字样`, snapshot.nameLabels === 0 && snapshot.stems === 0 && snapshot.countLabels === 0, `names=${snapshot.nameLabels}, stems=${snapshot.stems}, counts=${snapshot.countLabels}`)
     const { host, projection } = snapshot
@@ -497,15 +532,27 @@ function renderingChecks(tag, snapshot) {
     check(`${tag}：矩形地图用满实际可用区且保留底注空间`, projection && Math.abs(projection.w - worldWidth) <= 2 && Math.abs(projection.h - worldHeight) <= 2 && Math.abs(projection.x - expectedX) <= 2 && Math.abs(projection.y - expectedY) <= 2, projection ? `map=${projection.w.toFixed(1)}×${projection.h.toFixed(1)}, usable=${worldWidth.toFixed(1)}×${worldHeight.toFixed(1)}` : 'missing map frame')
   }
 }
+function sharedOriginChecks(tag, snapshot) {
+  if (snapshot.mode !== '3d') return
+  const expected = snapshot.pins.flatMap((pin) => expectedMembers(pin).map((node) => ({ id: node.id, key: pin.key, x: Number(pin.x), y: Number(pin.y) })))
+  const labels = snapshot.memberLabels, stems = snapshot.memberStems
+  check(`${tag}：每个可见地点一枚信标，每成员各一标签与引线`, expected.length > 0 && labels.length === expected.length && stems.length === expected.length && new Set(labels.map((label) => label.id)).size === expected.length && new Set(stems.map((stem) => stem.id)).size === expected.length && expected.every((member) => labels.some((label) => label.id === member.id && label.key === member.key) && stems.some((stem) => stem.id === member.id && stem.key === member.key)), `pins=${snapshot.pins.length}, members=${expected.length}, labels=${labels.length}, stems=${stems.length}`)
+  check(`${tag}：同地点全部成员引线从唯一信标中心出发`, expected.every((member) => {
+    const stem = stems.find((candidate) => candidate.id === member.id && candidate.key === member.key)
+    return stem && Number.isFinite(stem.x) && Number.isFinite(stem.y) && Math.abs(stem.x - member.x) <= 0.15 && Math.abs(stem.y - member.y) <= 0.15 && !/NaN|Infinity/.test(stem.d)
+  }), stems.map((stem) => `${stem.id}@${stem.x},${stem.y}`).join(' | '))
+}
 function markerChecks(tag, snapshot) {
   const expectedState = (p) => p.offlineCount === 0 ? 'online' : p.offlineCount === p.count ? 'offline' : 'mixed'
   const green = (rgba) => rgba?.[1] > rgba[0] + 12 && rgba[1] > rgba[2] + 4
   const red = (rgba) => rgba?.[0] > rgba[1] + 20 && rgba[0] > rgba[2] + 20
   const close = (value, expected) => Number.isFinite(value) && Math.abs(value - expected) <= 0.2
+  const scale = snapshot.zoom / 100
   check(`${tag}：信标结构与真实在线计数一致`, snapshot.pins.length > 0 && snapshot.pins.every((p) => Number.isInteger(p.offlineCount) && p.offlineCount >= 0 && p.offlineCount <= p.count && p.markerState === expectedState(p) && p.marker?.state === expectedState(p) && p.online === String(p.offlineCount === 0 ? 1 : 0) && p.marker.tag === 'circle' && p.marker.beacon && p.marker.ring?.tag === 'circle' && p.marker.halo?.tag === 'circle' && (p.markerState !== 'mixed' || p.marker.core?.tag === 'circle')), snapshot.pins.map((p) => `${p.id}:${p.markerState}/${p.offlineCount}/${p.count}`).join(' | '))
-  check(`${tag}：实际核心6.4px、外圈含描边11.52px、光晕15.04px`, snapshot.pins.every((p) => close(p.marker?.w, 6.4) && close(p.marker?.h, 6.4) && close(p.marker?.ring?.outerWidth, 11.52) && close(p.marker?.ring?.outerHeight, 11.52) && close(p.marker?.halo?.w, 15.04) && close(p.marker?.halo?.h, 15.04)), snapshot.pins.map((p) => `${p.id}:${p.marker?.w?.toFixed(2)}/${p.marker?.ring?.outerWidth?.toFixed(2)}/${p.marker?.halo?.w?.toFixed(2)}px`).join(' | '))
+  check(`${tag}：核心、外圈含描边与光晕按当前${snapshot.zoom}%同比缩放`, snapshot.pins.every((p) => close(p.marker?.w, 6.4 * scale) && close(p.marker?.h, 6.4 * scale) && close(p.marker?.ring?.outerWidth, 11.52 * scale) && close(p.marker?.ring?.outerHeight, 11.52 * scale) && close(p.marker?.halo?.w, 15.04 * scale) && close(p.marker?.halo?.h, 15.04 * scale)), snapshot.pins.map((p) => `${p.id}:${p.marker?.w?.toFixed(2)}/${p.marker?.ring?.outerWidth?.toFixed(2)}/${p.marker?.halo?.w?.toFixed(2)}px`).join(' | '))
+  check(`${tag}：透明命中区域随倍率缩放，保持100%直径18px基准`, snapshot.pins.every((p) => close(p.hitBox.w, 18 * scale) && close(p.hitBox.h, 18 * scale)), snapshot.pins.map((p) => `${p.id}:${p.hitBox.w.toFixed(2)}×${p.hitBox.h.toFixed(2)}`).join(' | '))
   check(`${tag}：可见核心与原透明命中圆中心一致`, snapshot.pins.every((p) => p.marker && Math.abs(p.marker.x + p.marker.w / 2 - p.hitBox.x - p.hitBox.w / 2) <= 0.2 && Math.abs(p.marker.y + p.marker.h / 2 - p.hitBox.y - p.hitBox.h / 2) <= 0.2))
-  check(`${tag}：核心常亮无黑描边，外圈保持同色细描边`, snapshot.pins.every((p) => p.marker?.stroke === 'none' && p.marker.opacity === 1 && p.marker.effectiveOpacity === 1 && p.marker.fillOpacity === 1 && p.marker.animationName === 'none' && Math.abs(p.marker.ring?.strokePixels - 0.64) <= 0.05 && (p.markerState === 'online' ? green(p.marker.ring?.strokeColor) : red(p.marker.ring?.strokeColor))))
+  check(`${tag}：核心常亮无黑描边，外圈描边与倍率同步`, snapshot.pins.every((p) => p.marker?.stroke === 'none' && p.marker.opacity === 1 && p.marker.effectiveOpacity === 1 && p.marker.fillOpacity === 1 && p.marker.animationName === 'none' && Math.abs(p.marker.ring?.strokePixels - 0.64 * scale) <= 0.05 && (p.markerState === 'online' ? green(p.marker.ring?.strokeColor) : red(p.marker.ring?.strokeColor))))
   check(`${tag}：在线绿芯、离线红芯短横线、部分离线绿芯红圈`, snapshot.pins.every((p) => p.markerState === 'offline' ? red(p.marker?.fillColor) && p.marker.detail?.tag === 'path' && p.marker.detail.d?.length > 5 && p.marker.detail.w > 1 && p.marker.detail.h <= 0.2 : green(p.marker?.fillColor) && !p.marker.detail && (p.markerState !== 'mixed' || red(p.marker.ring?.strokeColor))))
   check(`${tag}：光晕渐隐且非在线状态没有呼吸动画`, snapshot.pins.every((p) => p.marker?.halo?.stops.length >= 3 && p.marker.halo.stops.at(-1).opacity === 0 && (p.markerState === 'online' ? green(p.marker.halo.stops[0].color) : red(p.marker.halo.stops[0].color) && p.marker.halo.animationName === 'none')))
   check(`${tag}：title说明真实在线/离线状态与台数`, snapshot.pins.every((p) => p.count > 1 ? new RegExp(`在线\\s*${p.count - p.offlineCount}\\s*台`).test(p.title) && new RegExp(`离线\\s*${p.offlineCount}\\s*台`).test(p.title) : p.title?.includes(p.offlineCount ? '离线' : '在线') && p.offlineCount === Number(!nodes.find((node) => node.id === p.id)?.online)))
@@ -588,11 +635,13 @@ async function hoverNode(tag, preferred = 4, exact = false) {
   check(`${tag}：真实悬停命中节点并有完整无障碍名称`, node && (target.count > 1 ? target.title?.includes(`×${target.count}`) && new RegExp(`在线\\s*${target.count - target.offlineCount}\\s*台`).test(target.title) && new RegExp(`离线\\s*${target.offlineCount}\\s*台`).test(target.title) : target.title?.includes(node.name)) && await evaluate((id) => document.querySelector(`svg[data-map-canvas] [data-node="${id}"]`)?.matches(':hover'), target.id), `${target.id}:${target.title}`)
   const beforePin = before.pins.find((pin) => pin.id === target.id), activePin = hovered.pins.find((pin) => pin.id === target.id)
   check(`${tag}：只有当前信标实际放大约1.25倍`, beforePin && activePin && Math.abs(activePin.marker.w / beforePin.marker.w - 1.25) <= 0.04 && hovered.pins.filter((pin) => pin.id !== target.id).every((pin) => Math.abs(pin.marker.w - before.pins.find((old) => old.id === pin.id)?.marker.w) <= 0.2), `core ${beforePin?.marker?.w.toFixed(2)}→${activePin?.marker?.w.toFixed(2)}px`)
+  check(`${tag}：悬停只放大可见信标，不改变透明命中区域`, beforePin && activePin && Math.abs(activePin.hitBox.w - beforePin.hitBox.w) <= 0.2 && Math.abs(activePin.hitBox.h - beforePin.hitBox.h) <= 0.2)
   check(`${tag}：悬停内容有tooltip语义且不会导航`, ui.tooltip?.role === 'tooltip' && ui.path === '/' && await evaluate((id) => {
     const trigger = document.querySelector(`svg[data-map-canvas] .hit[data-node="${id}"]`)
     return trigger?.getAttribute('aria-describedby')?.split(' ').some((descriptionId) => document.getElementById(descriptionId)?.getAttribute('role') === 'tooltip')
   }, target.id))
   memberChecks(`${tag}/tooltip`, ui.tooltip?.members, expectedMembers(target))
+  check(`${tag}：Tooltip只显示节点、状态与计数，不含操作提示`, ui.tooltip && !/(点击|请选择|选择要|查看详情|click|tap|press|select a node)/i.test(`${ui.tooltip.text} ${ui.tooltip.accessibleName || ''}`), ui.tooltip?.text)
   uiBoundsChecks(tag, ui, 'tooltip')
   await screenshot(`hover-${tag.replaceAll('/', '-')}`)
   await clearPointer()
@@ -601,8 +650,11 @@ async function hoverNode(tag, preferred = 4, exact = false) {
   return target
 }
 async function openNodeAndReturn(tag, target, selectedMode) {
-  await clickAt(target)
   const node = nodes.find((n) => n.id === target.id)
+  if (target.count > 1) {
+    await openChoice(`${tag}/同地点选择`, target.id)
+    await chooseMember(tag, target.id)
+  } else await clickAt(target)
   await waitFor((id, name) => location.pathname === `/node/${id}` && document.querySelector('h2')?.textContent === name, target.id, node.name)
   check(`${tag}：无侧边名称后真实点针仍打开正确节点`, await evaluate(() => !!document.querySelector('main')))
   await evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === '地图控件验收')?.click())
@@ -826,6 +878,107 @@ async function nodeInteractionChecks() {
   nodes = ordinaryNodes
   await navigate()
 }
+async function locateSmallGroup(group) {
+  await allRegions() // 清掉上一个筛选；点同一地区会取消筛选，不能当作再次定位。
+  const found = await evaluate((code, city) => {
+    const row = [...document.querySelectorAll('.globe-reg:not(.globe-reg-all)')].find((button) => button.dataset.regionCode === code && button.querySelector('span')?.textContent.trim() === city)
+    row?.click()
+    return !!row
+  }, group.code, group.city)
+  if (!found) throw new Error(`小队夹具缺少地区：${group.code}/${group.city}`)
+  await sleep(250)
+}
+async function neighboringHoverChecks(tag) {
+  await clearPointer()
+  const before = await state(`${tag}:neighbor-before`)
+  const centers = new Map([841, 842].map((id) => {
+    const pin = before.pins.find((candidate) => candidate.id === id)
+    return [id, pin?.marker && { x: pin.marker.x + pin.marker.w / 2, y: pin.marker.y + pin.marker.h / 2 }]
+  }))
+  for (const id of [841, 842, 841]) {
+    const center = centers.get(id)
+    if (!center) throw new Error(`连续悬停夹具缺少近城市针：${id}`)
+    // 不移远、不blur，模拟指针直接跨过两个城市的最近中心分界。
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...center })
+    await sleep(500)
+    const ui = await nodeUi(`${tag}:continuous-${id}`), current = await state(`${tag}:continuous-marker-${id}`)
+    const actual = await evaluate(({ x, y }) => Number(document.elementFromPoint(x, y)?.closest('.hit[data-node]')?.dataset.node), center)
+    check(`${tag}：连续移入${id}真实命中自身且Tooltip立即切换`, actual === id && ui.tooltip?.visible && ui.tooltip.members.length === 1 && ui.tooltip.members[0].id === id, `hit=${actual}, tooltip=${ui.tooltip?.members?.map((member) => member.id).join(',') ?? 'none'}`)
+    check(`${tag}：连续悬停仅放大当前${id}，邻针恢复`, [841, 842].every((wanted) => {
+      const marker = current.pins.find((pin) => pin.id === wanted)?.marker, old = before.pins.find((pin) => pin.id === wanted)?.marker
+      return marker && old && Math.abs(marker.w / old.w - (wanted === id ? 1.25 : 1)) <= 0.04
+    }), current.pins.filter((pin) => [841, 842].includes(pin.id)).map((pin) => `${pin.id}:${pin.marker?.w.toFixed(2)}`).join(' | '))
+    memberChecks(`${tag}/连续悬停${id}`, ui.tooltip?.members, nodes.filter((node) => node.id === id))
+    await screenshot(`neighbor-hover-${tag.replaceAll('/', '-')}-${id}`)
+  }
+  await clearPointer()
+}
+async function smallLocationChecks() {
+  const ordinaryNodes = nodes
+  for (const [width, height] of [[1440, 1000], [320, 720]]) {
+    await viewport(width, height)
+    for (const selectedMode of ['2d', '3d']) for (const dark of [false, true]) {
+      nodes = smallLocationNodes()
+      const tag = `小队10台/${selectedMode}/${width}/${dark ? '暗' : '亮'}`
+      await media(dark)
+      await preferences(selectedMode, '0')
+      await resetZoom()
+      const initial = await state(`${tag}:default`)
+      if (selectedMode === '2d') {
+        check(`${tag}：HK3、Singapore2、LA2各一信标，同国不同城市保持独立`, initial.pins.length === 6 && smallLocationGroups.every((group) => {
+          const pins = initial.pins.filter((pin) => group.ids.includes(pin.id))
+          return pins.length === 1 && pins[0].count === group.ids.length
+        }), initial.pins.map((pin) => `${pin.id}×${pin.count}`).join(' | '))
+        check(`${tag}：所有10台成员完整保留，没有同地点重复hit或丢成员`, JSON.stringify(initial.pins.flatMap((pin) => expectedMembers(pin).map((node) => node.id)).sort((a, b) => a - b)) === JSON.stringify(nodes.map((node) => node.id).sort((a, b) => a - b)) && new Set(initial.pins.map((pin) => pin.key)).size === initial.pins.length)
+      }
+      await neighboringHoverChecks(tag)
+      if (NEIGHBORS_ONLY) continue
+      for (const id of [841, 842]) {
+        await clearPointer()
+        const snapshot = await state(`${tag}:near-city-${id}`), pin = snapshot.pins.find((candidate) => candidate.id === id)
+        const center = pin?.marker && { x: pin.marker.x + pin.marker.w / 2, y: pin.marker.y + pin.marker.h / 2 }
+        const actual = center && await evaluate(({ x, y }) => Number(document.elementFromPoint(x, y)?.closest('.hit[data-node]')?.dataset.node), center)
+        check(`${tag}：近城市${id}真实核心中心命中自身，未被另一城市截走`, pin?.count === 1 && actual === id, `center=${JSON.stringify(center)}, hit=${actual}`)
+        await hoverNode(`${tag}/近城市${id}`, id, true)
+        await clickAt(await pinTarget(id, true), width <= 360)
+        const node = nodes.find((candidate) => candidate.id === id)
+        await waitFor((id, name) => location.pathname === `/node/${id}` && document.querySelector('h2')?.textContent === name, id, node.name)
+        check(`${tag}：近城市${id}分别激活准确详情且不打开聚合选择`, (await nodeUi()).path === `/node/${id}` && !(await nodeUi()).dialog)
+        await preferences(selectedMode, '0')
+      }
+      for (const group of smallLocationGroups.filter((item) => item.ids.length > 1)) {
+        const pointTag = `${tag}/${group.city}`
+        await locateSmallGroup(group)
+        await resetZoom()
+        const before = await state(`${pointTag}:100`)
+        const locationPins = before.pins.filter((pin) => group.ids.includes(pin.id))
+        check(`${pointTag}：不足旧门槛仍只有一处可见hit与信标，台数准确`, locationPins.length === 1 && locationPins[0].count === group.ids.length && locationPins[0].marker?.beacon, locationPins.map((pin) => `${pin.id}×${pin.count}`).join(' | '))
+        layoutChecks(`${pointTag}/100%`, before)
+        await hoverNode(`${pointTag}/100%`, group.ids[0], true)
+        for (const [key, percent] of [['Home', 50], ['End', 150]]) {
+          await zoom(key)
+          const snapshot = await state(`${pointTag}:${percent}`)
+          check(`${pointTag}/${percent}%：缩放不导航、不拖动且目标地点只有一枚针`, snapshot.zoom === percent && snapshot.drag === 'false' && (await nodeUi()).path === '/' && snapshot.pins.filter((pin) => group.ids.includes(pin.id)).length === 1)
+          layoutChecks(`${pointTag}/${percent}%`, snapshot)
+          await hoverNode(`${pointTag}/${percent}%`, group.ids[0], true)
+        }
+        await resetZoom()
+        // 每一名成员都实际选择，尤其非首台及离线台；不能只验证Dialog列出了名字。
+        for (const id of group.ids) {
+          await locateSmallGroup(group)
+          await openChoice(`${pointTag}/成员${id}`, group.ids[0], width <= 360 ? 'touch' : 'mouse')
+          if (id === group.ids[0]) await screenshot(`small-choice-${selectedMode}-${width}-${dark ? 'dark' : 'light'}-${group.city.replaceAll(' ', '-')}`)
+          await chooseMember(pointTag, id, width <= 360 ? 'touch' : 'mouse')
+          await preferences(selectedMode, '0') // 重载清除地区筛选，下一名成员重新定位，避免沿用旧相机。
+          check(`${pointTag}：详情返回首页保持地图模式`, (await state()).mode === selectedMode && (await nodeUi()).path === '/')
+        }
+      }
+      await screenshot(`small-locations-${selectedMode}-${width}-${dark ? 'dark' : 'light'}`)
+    }
+  }
+  nodes = ordinaryNodes
+  await navigate()
+}
 function installRafGate() {
   let next = 0
   const callbacks = new Map()
@@ -1005,7 +1158,7 @@ try {
   }
   await send('Runtime.enable')
   await send('Page.enable')
-  if (BASELINE_DIST && !INTERACTIONS_ONLY) {
+  if (BASELINE_DIST && !TARGETED) {
     await viewport(1440, 1000)
     await media(false)
     await navigate()
@@ -1027,7 +1180,7 @@ try {
   await media(false)
   await navigate()
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
-  if (!INTERACTIONS_ONLY) {
+  if (!TARGETED) {
   const initial = await state('first-visit')
   check('首访默认 3D、旋转开启、两个模式按钮语义明确', initial.mode === '3d' && initial.spin === 'true' && initial.spinning === 'true' && await evaluate(() => document.querySelector('[data-map-control="mode-3d"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-map-control="mode-2d"]')?.getAttribute('aria-pressed') === 'false'))
   renderingChecks('首访3D', initial)
@@ -1059,8 +1212,8 @@ try {
   const flat = await state('2d-default')
   check('2D模式是真平面且无扫掠，保留旋转偏好', flat.mapFrame && !flat.globeDisk && flat.spin === 'true' && flat.spinDisabled && flat.spinning === 'false' && !flat.paths.some((p) => p.kind === 'globe-sweep'))
   renderingChecks('默认2D', flat)
-  check('2D默认显示所有可定位节点，不画缺失国家的假针', JSON.stringify([...new Set(flat.pins.map((p) => p.id))].sort((a, b) => a - b)) === JSON.stringify(locatedIds), JSON.stringify(flat.pins.map((p) => p.id)))
-  check('2D保留离线节点与地区离线提示', flat.pins.some((p) => p.id === 2 && p.online === '0') && flat.rows.some((r) => r.code === 'JP' && r.count === 2 && r.offline && r.title.includes('1 台离线')))
+  check('2D默认完整表示所有可定位成员，不画缺失国家的假针', JSON.stringify(flat.pins.flatMap((p) => expectedMembers(p).map((node) => node.id)).sort((a, b) => a - b)) === JSON.stringify(locatedIds), JSON.stringify(flat.pins.map((p) => ({ id: p.id, count: p.count }))))
+  check('2D保留离线成员与地区离线提示', flat.pins.some((p) => p.id === 1 && p.count === 2 && p.offlineCount === 1 && p.markerState === 'mixed') && flat.rows.some((r) => r.code === 'JP' && r.count === 2 && r.offline && r.title.includes('1 台离线')))
   check('国家兜底显示全名、Unicode单引号城市正确、跨国城市不串落点', flat.rows.some((r) => r.code === 'FI' && r.text === 'Finland') && flat.rows.some((r) => r.code === 'CN' && r.text === "Xi'an") && flat.rows.some((r) => r.code === 'CN' && r.text === 'China') && flat.pins.some((p) => p.id === 13 && p.region === 'CN'))
   await stable('2D岸线与节点位置保持静止')
   check('地图按钮不额外请求站点配置', requests.filter((r) => r.path.endsWith('/config')).length === configCalls + 1)
@@ -1084,7 +1237,7 @@ try {
   check('2D150%可鼠标平移，松手保持静止', zoomed.zoom === 150 && geometry(zoomed) !== geometry(panned) && panned.drag === 'false' && await evaluate(() => location.pathname === '/'))
   await stable('2D平移后没有惯性动画')
   await resetZoom()
-  check('2D重置还原全图100%与所有节点', (await state()).zoom === 100 && new Set((await state()).pins.map((p) => p.id)).size === locatedIds.length)
+  check('2D重置还原全图100%与全部地点成员', (await state()).zoom === 100 && (await state()).pins.reduce((sum, p) => sum + p.count, 0) === locatedIds.length)
   const pin = await evaluate(() => {
     const el = document.querySelector('svg[data-map-canvas] [data-node="4"]')
     if (!el) return null
@@ -1099,13 +1252,13 @@ try {
   await evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === '地图控件验收')?.click())
   await ready()
   check('SPA返回首页保留2D偏好', (await state()).mode === '2d')
-  const offlineMarker = (await state('single-live-offline-before')).pins.find((p) => p.id === 2)
+  const offlineMarker = (await state('small-pair-live-mixed-before')).pins.find((p) => p.id === 1)
   nodes = nodes.map((n) => n.id === 2 ? { ...n, online: true } : n)
-  await waitFor(() => document.querySelector('svg[data-map-canvas] [data-node="2"]')?.dataset.online === '1')
-  const live = await state('single-live-online-after')
-  const onlineMarker = live.pins.find((p) => p.id === 2)
+  await waitFor(() => document.querySelector('svg[data-map-canvas] [data-node="1"]')?.dataset.markerState === 'online')
+  const live = await state('small-pair-live-online-after')
+  const onlineMarker = live.pins.find((p) => p.id === 1)
   check('节点恢复在线后2D针与地区离线提示同步更新', !live.rows.find((r) => r.code === 'JP')?.offline)
-  check('真实单台上线由红芯短横变绿芯，颜色和title同步', offlineMarker?.markerState === 'offline' && offlineMarker.offlineCount === 1 && offlineMarker.marker?.tag === 'circle' && offlineMarker.marker.detail?.tag === 'path' && offlineMarker.title.includes('离线') && onlineMarker?.markerState === 'online' && onlineMarker.offlineCount === 0 && onlineMarker.marker?.tag === 'circle' && !onlineMarker.marker.detail && onlineMarker.title.includes('在线') && offlineMarker.marker.fill !== onlineMarker.marker.fill)
+  check('两台同地点离线成员上线后由绿芯红圈变绿圈，计数与title同步', offlineMarker?.markerState === 'mixed' && offlineMarker.count === 2 && offlineMarker.offlineCount === 1 && offlineMarker.marker?.tag === 'circle' && /离线\s*1\s*台/.test(offlineMarker.title) && onlineMarker?.markerState === 'online' && onlineMarker.count === 2 && onlineMarker.offlineCount === 0 && onlineMarker.marker?.tag === 'circle' && !onlineMarker.marker.detail && /在线\s*2\s*台/.test(onlineMarker.title) && offlineMarker.marker.ring.stroke !== onlineMarker.marker.ring.stroke)
   await evaluate(() => [...document.querySelectorAll('[role="group"][aria-label="分组"] button')].find((b) => b.textContent.startsWith('欧洲'))?.click())
   await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 2)
   check('2D分组筛选同步地图、地区与卡片', (await state()).pins.every((p) => p.id === 3 || p.id === 10) && (await state()).rows.filter((r) => r.code).every((r) => r.code === 'DE' || r.code === 'FI'))
@@ -1221,12 +1374,13 @@ try {
   await sweepContinuity()
   await aggregateMarkerChecks()
   }
-  await nodeInteractionChecks()
+  if (!LOCATIONS_ONLY) await nodeInteractionChecks()
+  if (!TOUCH_ONLY) await smallLocationChecks()
   check('验收期间无未捕获页面异常', exceptions.length === 0, exceptions.join(' ; '))
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

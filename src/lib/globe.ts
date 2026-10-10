@@ -674,12 +674,14 @@ export function regionOf(node: Node): Region | null {
 }
 
 export type GlobeNode = {
-  /** 稳定键（地区键）：标签左右侧的记忆与 React 的 key 都靠它。 */
+  /** 稳定信标键：聚合时为地区键，单台时为节点 ID。 */
   key: string
   /** 代表节点的稳定命中 ID；聚合信标的具体打开目标由 nodeIds 列表选择。 */
   id: number
   /** 这枚针实际代表的节点 ID，按输入节点顺序排列；未合并时只含自身。 */
   nodeIds: number[]
+  /** 每个真实成员各有一行侧标签，顺序与 nodeIds 一致，名称不替换为聚合地区名。 */
+  memberLabels: { id: number; name: string; code: string; index: number }[]
   name: string
   code: string
   /** 这个地区里**每一台**都在线才是 true；标记通过 offlineCount 区分全离线与部分离线。 */
@@ -695,65 +697,72 @@ export type GlobeNode = {
   ll: [number, number]
 }
 
-/**
- * 合并的门槛：**整队 ≥30 台，或同一个地区 ≥5 台**（「或」）。
- *
- * 两条都不满足时**不合并** —— 一台一枚针，同地区的按角度岔开。小队里一台一枚针信息更多
- * （站长起的名字、每台各自的在线状态都看得见），扎堆的毛病等队伍大了再说。
- * 单台地区永远就是那台机器本身（合并不合并都是它）。
- */
-export const MERGE_TOTAL = 30
-export const MERGE_REGION = 5
-
-/** 这个地区要不要并成一枚针（`total` 是整队台数、`count` 是这个地区的台数）。 */
-export function mergeRegion(total: number, count: number): boolean {
-  return total >= MERGE_TOTAL || count >= MERGE_REGION
+/** 同地点两台起始终合并；保留原函数签名，整队台数不再影响信标数量。 */
+export function mergeRegion(_total: number, count: number): boolean {
+  return count > 1
 }
 
 /**
- * 把节点排到地球上。
- *
- * 合并时：**一个地区一枚针**，针上带台数（标签「地区 ×N」、针边挂数字）。原来是一台一枚、
- * 同城的多台用 `scatter` 岔开，机器一多就糊成一团（100 台、20 个城市时看得见的那半边有
- * 65 枚针挤在一起）。不合并时：回到一台一枚针 + 岔开。
+ * 每个地区落点只留一枚针，成员保留各自名称和输入顺序，不人为挪动地理落点。
+ * 未识别城市的国家兜底可能与已有城市坐标仅差 0.01°：同国且两轴差 ≤0.05°时，
+ * 只与唯一的已识别地区合并，以兜底为显示落点；多个候选则保持独立，避免串联不同城市。
+ * 这个显示归一化不修改 regionOf / regionRows，也不把未知节点认作某个城市。
  */
 export function globeNodes(nodes: Node[]): GlobeNode[] {
   const placed: GlobeNode[] = []
-  const byRegion = new Map<string, { node: Node; index: number; region: Region }[]>()
+  type Member = { node: Node; index: number; region: Region; knownCity: boolean }
+  const byRegion = new Map<string, { region: Region; members: Member[] }>()
   nodes.forEach((node, index) => {
     const region = regionOf(node)
     if (!region) return
-    const bucket = byRegion.get(region.key) ?? []
-    bucket.push({ node, index, region })
+    const knownCity = cityHint(node) !== null
+    const bucket = byRegion.get(region.key) ?? { region, members: [] }
+    bucket.members.push({ node, index, region, knownCity })
+    // 历史 HK 等地区键可以同时含已识别与兜底成员；兜底坐标作为稳定显示锚点。
+    if (!knownCity) bucket.region = region
     byRegion.set(region.key, bucket)
   })
-  for (const bucket of byRegion.values()) {
-    const scope: "city" | "country" = bucket[0].region.city ? "city" : "country"
-    // 单台地区不并（并了也只是它自己），多台才按门槛决定。
-    if (bucket.length > 1 && mergeRegion(nodes.length, bucket.length)) {
+  for (const [key, bucket] of byRegion) {
+    if (!bucket.members.some((member) => !member.knownCity)) continue
+    const candidates = [...byRegion].filter(([otherKey, other]) =>
+      otherKey !== key && other.region.code === bucket.region.code && other.members.every((member) => member.knownCity)
+      && Math.abs(wrapLon(other.region.base[0] - bucket.region.base[0])) <= 0.05
+      && Math.abs(other.region.base[1] - bucket.region.base[1]) <= 0.05,
+    )
+    if (candidates.length !== 1) continue
+    const [otherKey, other] = candidates[0]
+    bucket.members.push(...other.members)
+    bucket.members.sort((a, b) => a.index - b.index)
+    byRegion.delete(otherKey)
+  }
+  for (const { region, members: bucket } of byRegion.values()) {
+    const memberLabels = bucket.map(({ node, index }) => ({ id: node.id, name: node.name, code: region.code, index }))
+    if (mergeRegion(nodes.length, bucket.length)) {
       const offlineCount = bucket.reduce((count, { node }) => count + (node.online ? 0 : 1), 0)
       const head = bucket[0]
       placed.push({
-        key: head.region.key,
+        key: region.key,
         id: head.node.id,
         nodeIds: bucket.map(({ node }) => node.id),
-        name: `${head.region.label} ×${bucket.length}`,
-        code: head.region.code,
+        memberLabels,
+        name: `${region.label} ×${bucket.length}`,
+        code: region.code,
         // 部分离线也保留异常状态，不能被多数在线盖过去。
         online: offlineCount === 0,
         offlineCount,
         index: head.index,
-        region: head.region,
+        region,
         count: bucket.length,
-        ll: head.region.base,
+        ll: [region.base[0], region.base[1]],
       })
       continue
     }
-    bucket.forEach(({ node, index, region }, rank) => {
+    bucket.forEach(({ node, index }) => {
       placed.push({
         key: String(node.id),
         id: node.id,
         nodeIds: [node.id],
+        memberLabels,
         name: node.name,
         code: region.code,
         online: node.online,
@@ -761,36 +770,12 @@ export function globeNodes(nodes: Node[]): GlobeNode[] {
         index,
         region,
         count: 1,
-        ll: scatter(region.base, rank, bucket.length, hashText(`${node.id}:${node.name}`), scope),
+        ll: [region.base[0], region.base[1]],
       })
     })
   }
   // 顺序回到节点原本的顺序：连线的抽样按 index 来，跟上游一致。
   return placed.sort((a, b) => a.index - b.index)
-}
-
-/** FNV-1a 32 位：同一台机器每次刷新散到同一个位置，不会每帧乱跳。 */
-function hashText(text: string): number {
-  let x = 2166136261
-  for (const ch of text) {
-    x ^= ch.charCodeAt(0)
-    x = Math.imul(x, 16777619)
-  }
-  return x >>> 0
-}
-
-/**
- * 同一地区的多台机器要岔开，否则一枚针盖住另一枚、标签也叠在一起。
- * 算法照搬上游：按角度均匀撒在一个小圈上（城市 ~0.3°、国家 ~2~3°），
- * 角度再加一点由机器名哈希出来的偏移，免得每次刷新（节点顺序变了）跳位。
- * 只有**不合并**的时候用（见 `mergeRegion`）。
- */
-function scatter(base: [number, number], rank: number, count: number, seed: number, scope: "city" | "country"): [number, number] {
-  if (count <= 1) return [base[0], base[1]]
-  const angle = (rank / count) * Math.PI * 2 + ((seed % 31) / 31) * 0.45
-  const ring = scope === "city" ? 0.28 + (rank % 2) * 0.16 : 2.2 + (rank % 3) * 0.9
-  const latScale = Math.max(0.4, Math.cos((base[1] * Math.PI) / 180))
-  return [wrapLon(base[0] + (Math.cos(angle) * ring) / latScale), Math.max(-78, Math.min(78, base[1] + Math.sin(angle) * ring))]
 }
 
 /** 地区列表的一行。`offline` 是这一地区里离线的台数（行上那枚小点与悬停文案用它）。 */
@@ -821,7 +806,12 @@ export function regionView(nodes: Node[], current: string | null) {
 
 /* ------------------------------------------------------------------ 标签排布 */
 
-export type Placed = GlobeNode & {
+export type PlacedLabel = {
+  key: string
+  id: number
+  name: string
+  code: string
+  index: number
   px: number
   py: number
   lx: number
@@ -835,8 +825,22 @@ export type Placed = GlobeNode & {
   width: number
 }
 
+export type Placed = GlobeNode & {
+  px: number
+  py: number
+  labels: PlacedLabel[]
+  /** 兼容单标签调用方；这些布局字段始终取 labels 的第一行。 */
+  lx: number
+  ly: number
+  end: boolean
+  label: string
+  left: string
+  right: string
+  width: number
+}
+
 /**
- * 标签排布：把每一枚针连到左右两摞里的一行字上。
+ * 标签排布：每枚针的每个成员各连到左右两摞里的一行字上，信标与命中区域仍只出一份。
  *
  * 步骤（除③外都是上游的原样）：
  *   ① 投影，投影不到的（在背面）直接不要；
@@ -845,39 +849,41 @@ export type Placed = GlobeNode & {
  *   ④ 每摞按 y 排序、等距铺开（间距 13，超过 14 行时压到 11），整摞居中于它们的平均高度，
  *      再夹在画布上下边界之间（默认 12~204）—— 避开底部说明。
  *
- * `sides` 是跨帧记忆（节点键 → 左/右），由调用方持有（React 里放 ref）。
+ * `sides` 是跨帧记忆（信标键 + 成员 ID → 左/右），由调用方持有（React 里放 ref）。
  *
  * `maxWidth` 是"一行标签最宽能有多宽"（用户单位，见组件的画布留白那段）：宽屏上它很大
  * （两侧的空白也算进去），窄屏上就只剩两摞标签到画布边缘的那点地方 —— 超出的字用 `…` 截掉，
  * 绝不留给 SVG 视口去裁。`measure` 是那个**真量字宽**的函数（见 `inkWidthWith`）。
  */
 export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode[], sides: Map<string, "L" | "R">, maxWidth = Infinity, cx: number = cam.view.cx, measure?: LabelMeasure): Placed[] {
-  const items: Placed[] = []
+  const visible: { point: GlobeNode; px: number; py: number; labels: PlacedLabel[] }[] = []
   for (const point of points) {
     const p = cam.at(point.ll[0], point.ll[1])
     if (!p) continue
-    const left = trimLabel(`${point.name} · ${point.code}`, maxWidth, measure)
-    const right = trimLabel(`${point.code} · ${point.name}`, maxWidth, measure)
-    items.push({
-      ...point, px: p.x, py: p.y, lx: 0, ly: 0, end: false, label: right,
-      // 两个方向都排得下才算这一行长；宽度也按截断之后的算，左右两摞才配得平。
-      width: Math.max(inkWidthWith(measure, left), inkWidthWith(measure, right)),
-      left, right,
-    } as Placed)
+    const labels = point.memberLabels.map((member) => {
+      const left = trimLabel(`${member.name} · ${member.code}`, maxWidth, measure)
+      const right = trimLabel(`${member.code} · ${member.name}`, maxWidth, measure)
+      return {
+        ...member, key: `${point.key}:${member.id}`, px: p.x, py: p.y, lx: 0, ly: 0, end: false, label: right,
+        width: Math.max(inkWidthWith(measure, left), inkWidthWith(measure, right)), left, right,
+      }
+    })
+    if (labels.length) visible.push({ point, px: p.x, py: p.y, labels })
   }
-  const left: Placed[] = []
-  const right: Placed[] = []
+  const items = visible.flatMap((item) => item.labels)
+  const left: PlacedLabel[] = []
+  const right: PlacedLabel[] = []
   for (const item of items) {
     let side = item.px >= cx ? "R" : "L"
     const remembered = sides.get(item.key)
     if (remembered && Math.abs(item.px - cx) < 18) side = remembered
     ;(side === "L" ? left : right).push(item)
   }
-  const rebalance = (from: Placed[], to: Placed[]) => {
+  const rebalance = (from: PlacedLabel[], to: PlacedLabel[]) => {
     if (from.length - to.length <= 2) return
-    const move = from.slice().sort((a, b) => Math.abs(a.px - cx) - Math.abs(b.px - cx) || a.width - b.width || a.index - b.index)
+    const move = from.slice().sort((a, b) => Math.abs(a.px - cx) - Math.abs(b.px - cx) || a.index - b.index)
     while (from.length - to.length > 2 && move.length) {
-      const item = move.shift() as Placed
+      const item = move.shift() as PlacedLabel
       const at = from.indexOf(item)
       if (at < 0) continue
       from.splice(at, 1)
@@ -886,14 +892,15 @@ export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode
   }
   rebalance(right, left)
   rebalance(left, right)
-  const stack = (list: Placed[], x: number, end: boolean) => {
+  const stack = (list: PlacedLabel[], x: number, end: boolean) => {
     if (!list.length) return
     list.sort((a, b) => a.py - b.py || a.index - b.index)
-    const gap = list.length > 14 ? 11 : 13
-    const mean = list.reduce((sum, item) => sum + item.py, 0) / list.length
-    let y0 = mean - ((list.length - 1) * gap) / 2
     const top = 12
     const bottom = cam.view.h - 36
+    // zoomView 按全部成员计高度，通常保留 11/13 行距；错误传入过小画布时仍不越界。
+    const gap = Math.min(list.length > 14 ? 11 : 13, Math.max(0, bottom - top) / Math.max(1, list.length - 1))
+    const mean = list.reduce((sum, item) => sum + item.py, 0) / list.length
+    let y0 = mean - ((list.length - 1) * gap) / 2
     if (y0 < top) y0 = top
     const last = y0 + (list.length - 1) * gap
     if (last > bottom) y0 -= last - bottom
@@ -910,7 +917,10 @@ export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode
   const offset = cam.view.r + 15
   stack(left, cx - offset, true)
   stack(right, cx + offset, false)
-  return items
+  return visible.map(({ point, px, py, labels }) => {
+    const { lx, ly, end, label, left, right, width } = labels[0]
+    return { ...point, px, py, labels, lx, ly, end, label, left, right, width }
+  })
 }
 
 /**

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { flatCamera, flatNodes, MAP_BOUNDS, MAP_VIEW, mapGraticule, mapLabelCamera, mapPaths, mapViewport, prepareMapRings } from "./map.ts"
+import { flatCamera, flatNodes, MAP_BOUNDS, MAP_VIEW, mapGraticule, mapHitAreas, mapLabelCamera, mapPaths, mapViewport, prepareMapRings } from "./map.ts"
 import type { GlobeNode } from "./globe.ts"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES, type Ring } from "./world.ts"
 
@@ -180,16 +180,85 @@ for (const center of [0, 170]) for (const zoom of [50, 100, 150]) {
 assert.ok(compared > 7000, "覆盖数千个真实地理点，不只验证路径非空")
 
 // 节点及输入保持不变；visible区分裁切外点与非法点，保留id/地区/顺序供命中和标签使用。
-const node = (id: number, ll: [number, number]) => ({ id, nodeIds: [id], key: `node-${id}`, name: `示例 ${id}`, code: "US", online: true, offlineCount: 0, index: id, count: 1, region: { key: "US", code: "US", city: "", label: "US", base: ll }, ll }) as GlobeNode
+const node = (id: number, ll: [number, number]) => ({ id, nodeIds: [id], memberLabels: [{ id, name: `示例 ${id}`, code: "US", index: id }], key: `node-${id}`, name: `示例 ${id}`, code: "US", online: true, offlineCount: 0, index: id, count: 1, region: { key: "US", code: "US", city: "", label: "US", base: ll }, ll }) as GlobeNode
 const points = [node(1, [0, 0]), node(2, [170, 0]), node(3, [NaN, 0])]
 const placed = flatNodes(points, flatCamera(0, 0, 150))
 assert.deepEqual(placed.map((p) => [p.id, p.visible]), [[1, true], [2, false]])
 assert.deepEqual([placed[0].px, placed[0].py], [230, 115])
 assert.equal(placed[0].region, points[0].region)
 assert.deepEqual(placed.map((p) => p.nodeIds), [[1], [2]], "2D 投影保留未合并信标的精确成员")
-const mixedNode = { ...node(4, [0, 0]), nodeIds: [4, 8, 9, 12, 6], online: false, count: 5, offlineCount: 2 }
+const memberIds = [4, 8, 9, 12, 6]
+const mixedNode = { ...node(4, [0, 0]), nodeIds: memberIds, memberLabels: memberIds.map((id, index) => ({ id, name: `示例 ${id}`, code: "US", index })), online: false, count: 5, offlineCount: 2 }
 assert.deepEqual(flatNodes([mixedNode], camera).map((p) => [p.count, p.offlineCount, p.online]), [[5, 2, false]], "2D 投影保留聚合真实状态")
 assert.deepEqual(flatNodes([mixedNode], camera).map((p) => p.nodeIds), [[4, 8, 9, 12, 6]], "2D 投影保留全部聚合成员及其顺序")
+assert.deepEqual(flatNodes([mixedNode], camera).map((p) => p.memberLabels), [mixedNode.memberLabels], "2D 投影完整保留真实成员标签，名称和顺序不改")
+
+// 不移动不同地区的真实落点：重叠的圆形 hit 按最近中心的中垂线分区。
+// polygon 本身是 circle 的裁切边界；方框的圆外角落不属于实际命中区域。
+const polygonOf = (value: string): Point[] => value ? value.split(" ").map((pair) => pair.split(",").map(Number) as Point) : []
+const hitPoints = Object.freeze([Object.freeze({ px: 10, py: 10 }), Object.freeze({ px: 16, py: 10 })])
+const hitBefore = JSON.stringify(hitPoints)
+const twoAreas = mapHitAreas(hitPoints, 8).map(polygonOf)
+assert.equal(twoAreas.length, 2)
+assert.ok(twoAreas[0].every(([x]) => x <= 13), "左圆裁在独立推导的 x=13 中垂线左侧")
+assert.ok(twoAreas[1].every(([x]) => x >= 13), "右圆裁在独立推导的 x=13 中垂线右侧")
+assert.ok(twoAreas.every((polygon) => polygon.some(([x]) => x === 13)), "两圆都保留中垂线边界")
+assert.equal(inside([twoAreas[0]], 12, 10), true)
+assert.equal(inside([twoAreas[1]], 12, 10), false)
+assert.equal(inside([twoAreas[0]], 14, 10), false)
+assert.equal(inside([twoAreas[1]], 14, 10), true)
+assert.equal(JSON.stringify(hitPoints), hitBefore, "冻结的命中坐标保持不变")
+
+const triangle = [{ px: 10, py: 10 }, { px: 16, py: 10 }, { px: 12, py: 15 }]
+const triangleBefore = structuredClone(triangle)
+const triangleAreas = mapHitAreas(triangle, 8).map(polygonOf)
+const hitCounts = [0, 0, 0]
+let checkedHits = 0
+for (let x = 2.137; x < 24; x += 0.41) for (let y = 2.283; y < 23; y += 0.47) {
+  const distances = triangle.map((point) => Math.hypot(x - point.px, y - point.py))
+  const minimum = Math.min(...distances)
+  if (minimum >= 8 - 1e-9) continue
+  const nearest = distances.map((distance, index) => ({ distance, index })).filter(({ distance }) => Math.abs(distance - minimum) < 1e-9)
+  if (nearest.length !== 1) continue // 中垂线边界本身属于浏览器绘制顺序处理的 tie。
+  const hits = triangleAreas.map((polygon, index) => ({ polygon, index }))
+    .filter(({ polygon, index }) => distances[index] < 8 && inside([polygon], x, y)).map(({ index }) => index)
+  assert.deepEqual(hits, [nearest[0].index], `重叠圆内网格点只命中最近中心 ${x},${y}`)
+  hitCounts[hits[0]]++
+  checkedHits++
+}
+assert.ok(checkedHits > 1000 && hitCounts.every((count) => count > 100), "三点网格覆盖每个圆的独立可点击区域")
+assert.deepEqual(triangle, triangleBefore, "命中分割不改落点和输入顺序")
+
+const separate = [{ px: 0, py: 0 }, { px: 30, py: 40 }]
+const separateAreas = mapHitAreas(separate, 4).map(polygonOf)
+assert.deepEqual(separateAreas, [[[-4, -4], [4, -4], [4, 4], [-4, 4]], [[26, 36], [34, 36], [34, 44], [26, 44]]], "圆不重叠时保留原矩形裁切，不改变原 hit")
+
+// 完全重复的中心没有唯一最近点；以输入顺序等角分扇区，让每个未合并地区仍可选择。
+for (const count of [2, 3]) {
+  const duplicates = Array.from({ length: count }, () => ({ px: 10, py: 10 }))
+  const duplicateAreas = mapHitAreas(duplicates, 8).map(polygonOf)
+  close(duplicateAreas.reduce((sum, polygon) => sum + area(polygon), 0), 16 * 16, "重复中心扇区完整分配原裁切方框")
+  duplicateAreas.forEach((polygon, index) => {
+    assert.ok(polygon.length >= 3 && area(polygon) > 0, "每个重复中心保留非退化可点击扇区")
+    const angle = (index + 0.5) * Math.PI * 2 / count
+    const x = 10 + Math.cos(angle) * 4, y = 10 + Math.sin(angle) * 4
+    assert.deepEqual(duplicateAreas.map((shape, i) => inside([shape], x, y) ? i : -1).filter((i) => i >= 0), [index], "各扇区内部只命中对应输入成员")
+  })
+  for (let x = 2.137; x < 18; x += 0.61) for (let y = 2.283; y < 18; y += 0.73) {
+    if (Math.hypot(x - 10, y - 10) >= 8) continue
+    const hits = duplicateAreas.filter((polygon) => inside([polygon], x, y))
+    assert.equal(hits.length, 1, "重复中心各圆内非边界网格点恰好落入一个可点击扇区")
+  }
+  assert.deepEqual(mapHitAreas(duplicates, 8), mapHitAreas(duplicates, 8), "重复中心分割在相同输入下可重复")
+}
+for (const radius of [NaN, Infinity, -Infinity, 0, -1]) assert.deepEqual(mapHitAreas(hitPoints, radius), ["", ""], "非法半径安全返回空区域")
+const unsafe = [{ px: NaN, py: 0 }, { px: 0, py: Infinity }, { px: Number.MAX_VALUE, py: 0 }, { px: 0, py: 0 }]
+const safeAreas = mapHitAreas(unsafe, 8)
+assert.deepEqual(safeAreas.slice(0, 3), ["", "", ""], "非法或浮点方框退化的节点安全忽略")
+assert.deepEqual(polygonOf(safeAreas[3]), [[-8, -8], [8, -8], [8, 8], [-8, 8]], "无效邻居不影响有效节点")
+assert.ok(mapHitAreas([{ px: Number.MAX_VALUE, py: 0 }, { px: 0, py: 0 }], Number.MAX_VALUE).every((value) => !/NaN|Infinity/.test(value)), "极端数值不输出非有限 SVG 坐标")
+assert.deepEqual(mapHitAreas([], 8), [], "空输入不产生区域")
+
 const original = structuredClone(WORLD_OUTLINES)
 prepareMapRings(WORLD_OUTLINES)
 mapPaths(flatCamera(100, 30, 150), world)

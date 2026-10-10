@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react"
-import { Minus, Pause, Play, Plus } from "lucide-react"
+import { ChevronRight, Minus, Pause, Play, Plus, X } from "lucide-react"
+import { Dialog, Tooltip } from "radix-ui"
 
 import {
   camera, clampLat, globeCaption, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
@@ -103,6 +104,8 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   )
   const flatPrep = useMemo(() => prepareMapRings(WORLD_OUTLINES), [])
   const points = useMemo(() => globeNodes(nodes), [nodes])
+  const pointByKey = useMemo(() => new Map(points.map((point) => [point.key, point])), [points])
+  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const rows = useMemo(() => regionRows(nodes), [nodes])
   // 「全部」那一行的悬停说明：合计里有多少台认不出国家（不上地球与地区列表）——
   // 「全部 N」与地区分项合计对不上这件事，就在那里有一句明面上的说法。
@@ -117,6 +120,9 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   // 点过侧栏的地区就钉住：不再自转（否则刚飞过去又转走了）。
   const [pinned, setPinned] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null)
+  const [focusedKey, setFocusedKey] = useState<string | null>(null)
+  const [choiceKey, setChoiceKey] = useState<string | null>(null)
   const [inView, setInView] = useState(true)
   const [zoom, setZoom] = useState<number>(GLOBE_ZOOM.default)
   // 完整世界不做纬度平移；放大后限制平移范围，避免拖到两极之外留下空白。
@@ -126,6 +132,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const zoomId = useId()
   const mapClipId = useId()
   const beaconGlowId = useId()
+  const choiceId = useId()
   // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
   const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
@@ -140,11 +147,28 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const host = useRef<HTMLDivElement>(null)
   const regions = useRef<HTMLDivElement>(null)
   const controls = useRef<HTMLDivElement>(null)
+  const choiceHost = useRef<HTMLDivElement>(null)
+  const returnFocus = useRef<SVGCircleElement | null>(null)
   const drag = useRef<{
     id: number; x: number; y: number; lon: number; lat: number; moved: boolean
     /** pointerdown 那一刻压在谁身上（见 endDrag 的注释：click 的 target 不能再信）。 */
-    pressed: number | null
+    pressed: string | null
+    target: SVGCircleElement | null
   } | null>(null)
+
+  // 名字、状态与成员始终取当前数据，避免选择列表保存旧节点快照。
+  const hoveredPoint = hoveredKey ? pointByKey.get(hoveredKey) : undefined
+  const focusedPoint = focusedKey ? pointByKey.get(focusedKey) : undefined
+  const choicePoint = choiceKey ? pointByKey.get(choiceKey) : undefined
+  const choiceMembers = choicePoint?.nodeIds.flatMap((id) => {
+    const node = nodeById.get(id)
+    return node ? [node] : []
+  }) ?? []
+  const choosing = choiceMembers.length > 1
+  // 成员删除或筛选改变时取消失效交互，之后同一地区重新出现也不会自动重开窗口。
+  if (hoveredKey && !hoveredPoint) setHoveredKey(null)
+  if (focusedKey && !focusedPoint) setFocusedKey(null)
+  if (choiceKey && !choosing) setChoiceKey(null)
 
   useEffect(() => {
     const el = host.current
@@ -178,7 +202,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
 
   const located = pinned && region !== null
   const rotationOn = rotating && !located
-  const spinning = mode === "3d" && rotating && inView && pageVisible && !dragging && !located && !reduced
+  const spinning = mode === "3d" && rotating && inView && pageVisible && !dragging && !located && !reduced && !hoveredPoint && !focusedPoint && !choosing
 
   useEffect(() => {
     if (!spinning) return
@@ -200,14 +224,17 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   }, [spinning, profile.idleMs])
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button) return
+    if (e.button || !e.isPrimary || drag.current) return
     // ★ 命中要在这里认下来，不能等 click：下面 `setPointerCapture` 之后，浏览器把 click 的
     // target 改写成"抓着指针的那个元素"（也就是这个容器），于是 `closest('[data-node]')`
     // 永远返回空 —— 点针开机器会静默失效（实测过一次，页面什么都不报）。
-    const pressed = (e.target as Element).closest?.("[data-node]")
+    const pressed = (e.target as Element).closest?.<SVGCircleElement>("[data-node]") ?? null
+    // 触屏随后生成的兼容 mousedown 会在选择窗口打开后清掉焦点；仅命中信标时抑制它。
+    // pointerup/cancel 仍负责点击与拖拽，地图空白区域仍可正常滚动页面。
+    if (pressed && e.pointerType === "touch") e.preventDefault()
     drag.current = {
       id: e.pointerId, x: e.clientX, y: e.clientY, lon: mode === "3d" ? view.lon : flatView.lon, lat: mode === "3d" ? view.lat : flatLat, moved: false,
-      pressed: pressed ? Number(pressed.getAttribute("data-node")) : null,
+      pressed: pressed?.dataset.pinKey ?? null, target: pressed,
     }
     setDragging(true)
     try {
@@ -225,6 +252,9 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     // 3px 以内不算拖：手指点一下总要抖一两个像素，当成拖就成了"点不动"。
     if (!d.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return
     d.moved = true
+    setHoveredKey(null)
+    setFocusedKey(null)
+    if (document.activeElement instanceof SVGElement) document.activeElement.blur()
     e.preventDefault()
     // 系数与上游同（0.48 度/像素横向、0.36 纵向）；纬度夹在 ±78。
     if (mode === "3d") setView({ lon: wrapLon(d.lon - dx * 0.48), lat: clampLat(d.lat + dy * 0.36) })
@@ -245,11 +275,6 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const endDrag = (e: React.PointerEvent<HTMLDivElement>, open: boolean) => {
     const d = drag.current
     if (!d || e.pointerId !== d.id) return
-    // 没拖（3px 以内）且按在一枚针上：这才是"点开那台机器"。
-    if (open && !d.moved && d.pressed !== null) {
-      onWarm()
-      onOpen(d.pressed)
-    }
     drag.current = null
     setDragging(false)
     try {
@@ -257,6 +282,26 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     } catch {
       // 同上：没抓着就没什么可放的。
     }
+    // 先释放 capture，再打开选择窗口，避免把窗口里的下一次操作当成地图拖拽。
+    if (open && !d.moved && d.pressed !== null) activatePoint(d.pressed, d.target)
+  }
+
+  const activatePoint = (key: string, target: SVGCircleElement | null) => {
+    const point = pointByKey.get(key)
+    if (!point) return
+    const members = point.nodeIds.filter((id) => nodeById.has(id))
+    if (!members.length) return
+    onWarm()
+    setHoveredKey(null)
+    if (members.length === 1) onOpen(members[0])
+    else {
+      returnFocus.current = target
+      setChoiceKey(key)
+    }
+  }
+
+  const hoverPoint = (key: string, open: boolean) => {
+    setHoveredKey((current) => open ? key : current === key ? null : current)
   }
 
   const pick = (key: string | null, aim?: [number, number]) => {
@@ -276,6 +321,8 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   }
 
   const chooseMode = (next: MapMode) => {
+    setHoveredKey(null)
+    setFocusedKey(null)
     setMode(next)
     saveMapPreference(MAP_MODE_KEY, next)
   }
@@ -364,6 +411,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const zoomResetDisabled = zoom === GLOBE_ZOOM.default && (mode === "3d" || (flatView.lon === flatHome.lon && flatLat === flatHome.lat))
 
   return (
+    <Tooltip.Provider delayDuration={0}>
     <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"}>
       <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h } as CSSProperties}>
         <div
@@ -374,10 +422,10 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
           onPointerMove={onPointerMove}
           onPointerUp={(e) => endDrag(e, true)}
           onPointerCancel={(e) => endDrag(e, false)}
+          onLostPointerCapture={(e) => endDrag(e, false)}
         >
-          {/* 地球是下面那张列表的另一种画法，不是唯一的入口：对读屏隐藏，免得 26 枚针
-              变成 26 个无名可点项。地区侧栏那几个是真按钮，留着。 */}
-          <svg data-map-canvas data-sweep-time={sweepTime} data-sweep-longitude={sweepLonAt(sweepTime)} data-camera-longitude={view.lon} data-camera-latitude={view.lat} data-camera-cx={frame.cx} data-camera-cy={frame.cy} data-camera-r={frame.r} viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
+          {/* 装饰层单独隐藏，信标提供有名称的键盘入口与多节点选择。 */}
+          <svg data-map-canvas data-sweep-time={sweepTime} data-sweep-longitude={sweepLonAt(sweepTime)} data-camera-longitude={view.lon} data-camera-latitude={view.lat} data-camera-cx={frame.cx} data-camera-cy={frame.cy} data-camera-r={frame.r} viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" role="group" aria-label="地图节点" focusable="false">
             <defs>
               {/* 圆盘里那层明暗：中心几乎透明、边上压到 `--globe-rim`（上游同一套停点）。 */}
               <radialGradient id="globe-shade" cx="38%" cy="36%" r="68%">
@@ -397,6 +445,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
                 </radialGradient>
               ))}
             </defs>
+            <g aria-hidden="true">
             {mode === "3d" ? <>
               <circle className="globe-ocean" cx={frame.cx} cy={frame.cy} r={frame.r} />
               <circle className="globe-disk" cx={frame.cx} cy={frame.cy} r={frame.r} fill="url(#globe-shade)" />
@@ -416,18 +465,19 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
               />
             ))}
             <line className="globe-base" x1={mode === "3d" ? frame.cx - frame.r - 28 : mapBounds.x} y1={frame.h - 20} x2={mode === "3d" ? frame.cx + frame.r + 28 : mapBounds.x + mapBounds.w} y2={frame.h - 20} />
+            </g>
             <g clipPath={mode === "2d" ? `url(#${mapClipId})` : undefined}>
               {marker && (
-              <g className="globe-selected">
+              <g className="globe-selected" aria-hidden="true">
                 <circle className="globe-selected-ring" cx={marker.x} cy={marker.y} r={7} />
                 <circle className="globe-selected-core" cx={marker.x} cy={marker.y} r={2.4} />
               </g>
               )}
               {placed.map((p) => (
-                <Pin key={p.key} p={p} markerScale={markerScale} glowId={beaconGlowId} />
+                <Pin key={p.key} p={p} members={p.nodeIds.flatMap((id) => { const node = nodeById.get(id); return node ? [node] : [] })} markerScale={markerScale} glowId={beaconGlowId} active={hoveredKey === p.key || focusedKey === p.key} tooltipOpen={hoveredKey === p.key && !dragging && !choosing} choiceId={choiceId} choosing={choiceKey === p.key && choosing} onHover={hoverPoint} onFocus={setFocusedKey} onActivate={activatePoint} onWarm={onWarm} />
               ))}
             </g>
-            <text className="globe-caption" x={frame.cx} y={frame.h - 8} textAnchor="middle">
+            <text className="globe-caption" aria-hidden="true" x={frame.cx} y={frame.h - 8} textAnchor="middle">
               {mode === "3d" ? globeCaption(view.lon, view.lat, profile.key) : `EQUIRECTANGULAR · ${zoom}% · ${profile.key.toUpperCase()}`}
             </text>
           </svg>
@@ -453,6 +503,45 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
           </div>
         </div>
       </div>
+
+      <Dialog.Root open={choosing} onOpenChange={(open) => { if (!open) setChoiceKey(null) }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="globe-node-overlay" data-map-node-overlay />
+          <Dialog.Content ref={choiceHost} id={choiceId} className="globe-node-dialog" data-map-node-dialog aria-modal="true" onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            choiceHost.current?.querySelector<HTMLButtonElement>("[data-map-node-option]")?.focus()
+          }} onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            if (!host.current?.isConnected) return
+            if (returnFocus.current?.isConnected) returnFocus.current.focus({ preventScroll: true })
+            else controls.current?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true })
+          }}>
+            <div className="globe-node-heading">
+              <div>
+                <Dialog.Title>选择节点</Dialog.Title>
+                <Dialog.Description>{choicePoint?.region.label} · {choiceMembers.length} 台节点，选择要查看的详情</Dialog.Description>
+              </div>
+              <Dialog.Close asChild><Button variant="ghost" size="icon-sm" aria-label="关闭节点选择" data-map-node-close><X /></Button></Dialog.Close>
+            </div>
+            <ul className="globe-node-options">
+              {choiceMembers.map((node) => (
+                <li key={node.id}>
+                  <button type="button" data-map-node-option={node.id} data-online={node.online ? "1" : "0"} onPointerEnter={onWarm} onFocus={onWarm} onClick={() => {
+                    if (!nodeById.has(node.id) || !choicePoint?.nodeIds.includes(node.id)) return
+                    setChoiceKey(null)
+                    onWarm()
+                    onOpen(node.id)
+                  }}>
+                    <span className="globe-node-name" data-map-node-name>{node.name}</span>
+                    <span className="globe-node-status">{node.online ? "在线" : "离线"}</span>
+                    <ChevronRight aria-hidden="true" size={16} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <aside className="globe-side">
         <div ref={regions} className="globe-regions">
@@ -492,6 +581,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
         </div>
       </aside>
     </section>
+    </Tooltip.Provider>
   )
 }
 
@@ -500,39 +590,84 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
  * 在线绿芯绿圈，离线红芯红圈带短横，部分离线绿芯红圈；核心常亮且不描黑边。
  * 3D 保留引线与标签，2D 仅画标记。透明命中圆的半径与坐标保持不变。
  */
-function Pin({ p, markerScale, glowId }: { p: Placed | FlatNode; markerScale: number; glowId: string }) {
+function Pin({ p, members, markerScale, glowId, active, tooltipOpen, choiceId, choosing, onHover, onFocus, onActivate, onWarm }: {
+  p: Placed | FlatNode
+  members: Node[]
+  markerScale: number
+  glowId: string
+  active: boolean
+  tooltipOpen: boolean
+  choiceId: string
+  choosing: boolean
+  onHover: (key: string, open: boolean) => void
+  onFocus: (key: string | null) => void
+  onActivate: (key: string, target: SVGCircleElement | null) => void
+  onWarm: () => void
+}) {
   const cx = p.px.toFixed(1)
   const cy = p.py.toFixed(1)
   const label = "label" in p ? p : null
   const state = p.offlineCount === 0 ? "online" : p.offlineCount === p.count ? "offline" : "mixed"
   const title = p.count > 1
-    ? `${p.name}：在线 ${p.count - p.offlineCount} 台，离线 ${p.offlineCount} 台（打开其中第一台）`
+    ? `${p.name}：在线 ${p.count - p.offlineCount} 台，离线 ${p.offlineCount} 台（点击选择节点）`
     : `${p.name} · ${state === "online" ? "在线" : "离线"}（点击打开）`
   return (
+    <Tooltip.Root open={tooltipOpen} onOpenChange={(open) => onHover(p.key, open)}>
     <g>
-      {label && <path className="globe-stem" d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />}
-      <g className="globe-beacon" data-marker-state={state} transform={`translate(${cx} ${cy}) scale(${markerScale})`}>
+      {label && <path className="globe-stem" aria-hidden="true" d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />}
+      <g className="globe-beacon" aria-hidden="true" data-marker-active={active ? "true" : "false"} data-marker-state={state} transform={`translate(${cx} ${cy}) scale(${markerScale})`}>
+        <g className="globe-beacon-shape">
         <circle className="globe-pin-halo" cx={0} cy={0} r={7.52} fill={`url(#${glowId}-${state === "online" ? "online" : "offline"})`} />
         <circle className="globe-pin-ring" cx={0} cy={0} r={5.44} vectorEffect="non-scaling-stroke" />
         <circle className={state === "mixed" ? "globe-pin globe-pin-core" : "globe-pin"} data-marker-state={state} data-marker-x={cx} data-marker-y={cy} cx={0} cy={0} r={3.2} />
         {state === "offline"
           ? <path className="globe-pin-detail" d="M -1.376 0 L 1.376 0" vectorEffect="non-scaling-stroke" />
           : <circle className="globe-pin-highlight" cx={-0.768} cy={-0.864} r={0.384} />}
+        </g>
       </g>
       {/* 多台地区：针边上挂一个小小的台数（标签里也写着「地区 ×N」，两处都在，
           因为标签可能被挤掉、针本身也常常落在标签的另一头）。 */}
       {label && p.count > 1 && (
-        <text className="globe-count" x={p.px + 8.5 * markerScale} y={p.py - 7.5 * markerScale}>
+        <text className="globe-count" aria-hidden="true" x={p.px + 10.5 * markerScale} y={p.py - 9.5 * markerScale}>
           {p.count}
         </text>
       )}
-      {label && <text className="globe-label" x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
+      {label && <text className="globe-label" aria-hidden="true" x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
         {label.label}
       </text>}
-      <circle className="hit" cx={cx} cy={cy} r={9} fill="transparent" data-node={p.id} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count} data-offline-count={p.offlineCount} data-marker-state={state}>
-        <title>{title}</title>
-      </circle>
+      <Tooltip.Trigger asChild>
+        <circle className="hit" cx={cx} cy={cy} r={9} fill="transparent" data-node={p.id} data-pin-key={p.key} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count} data-offline-count={p.offlineCount} data-marker-state={state} role="button" tabIndex={0} focusable="true" aria-label={title} aria-haspopup={p.count > 1 ? "dialog" : undefined} aria-expanded={p.count > 1 ? choosing : undefined} aria-controls={choosing ? choiceId : undefined}
+          onFocus={(event) => {
+            onFocus(p.key)
+            onWarm()
+            // pointercancel 后 Radix 的按下状态可能未复位，键盘焦点仍应显示成员提示。
+            if (event.currentTarget.matches(":focus-visible")) onHover(p.key, true)
+          }} onBlur={() => onFocus(null)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return
+            event.preventDefault()
+            if (!event.repeat) onActivate(p.key, event.currentTarget)
+          }}
+          onClick={(event) => {
+            // 读屏的合成激活没有 pointerdown/up；真实鼠标/触摸仍由 endDrag 分流。
+            if (event.detail === 0) onActivate(p.key, event.currentTarget)
+          }}
+        />
+      </Tooltip.Trigger>
     </g>
+    <Tooltip.Portal>
+      <Tooltip.Content className="globe-node-tooltip" data-map-tooltip={p.key} side="top" sideOffset={12} collisionPadding={12} aria-label={`${title}。${members.map((node) => `${node.name}，${node.online ? "在线" : "离线"}`).join("；")}`} onPointerDown={(event) => event.stopPropagation()}>
+        <div className="globe-node-tooltip-heading">{p.count > 1 ? `${p.region.label} · ${members.length} 台节点` : "节点"}</div>
+        <ul>
+          {members.map((node) => <li key={node.id} data-map-tooltip-member={node.id} data-online={node.online ? "1" : "0"}>
+            <span className="globe-node-name" data-map-node-name>{node.name}</span>
+            <span className="globe-node-status">{node.online ? "在线" : "离线"}</span>
+          </li>)}
+        </ul>
+        <p>{p.count > 1 ? "点击信标选择要查看的节点" : "点击信标查看详情"}</p>
+      </Tooltip.Content>
+    </Tooltip.Portal>
+    </Tooltip.Root>
   )
 }
 

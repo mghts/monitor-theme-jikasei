@@ -676,8 +676,10 @@ export function regionOf(node: Node): Region | null {
 export type GlobeNode = {
   /** 稳定键（地区键）：标签左右侧的记忆与 React 的 key 都靠它。 */
   key: string
-  /** 这个地区里的第一台机器（点针开的就是它）。 */
+  /** 代表节点的稳定命中 ID；聚合信标的具体打开目标由 nodeIds 列表选择。 */
   id: number
+  /** 这枚针实际代表的节点 ID，按输入节点顺序排列；未合并时只含自身。 */
+  nodeIds: number[]
   name: string
   code: string
   /** 这个地区里**每一台**都在线才是 true；标记通过 offlineCount 区分全离线与部分离线。 */
@@ -734,6 +736,7 @@ export function globeNodes(nodes: Node[]): GlobeNode[] {
       placed.push({
         key: head.region.key,
         id: head.node.id,
+        nodeIds: bucket.map(({ node }) => node.id),
         name: `${head.region.label} ×${bucket.length}`,
         code: head.region.code,
         // 部分离线也保留异常状态，不能被多数在线盖过去。
@@ -750,6 +753,7 @@ export function globeNodes(nodes: Node[]): GlobeNode[] {
       placed.push({
         key: String(node.id),
         id: node.id,
+        nodeIds: [node.id],
         name: node.name,
         code: region.code,
         online: node.online,

@@ -1,6 +1,8 @@
 // 本机 dist + 合成节点夹具，使用原生 Chrome/CDP；不访问线上探针，不引入依赖。
 // 用法：node tools/verify_map_controls.mjs [输出目录]；可指定 CHROME_PATH / MAP_DIST。
 // MAP_BASELINE_DIST 可指向保留的旧 dist，实测同夹具的地图尺寸作为前后对照。
+// MAP_CHECK_GROUP=interactions 仅运行节点悬停、选择与实时更新，便于失败后定向复验。
+// 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -14,7 +16,9 @@ mkdirSync(parentOutput, { recursive: true })
 const OUT = mkdtempSync(join(parentOutput, 'monitor-map-controls-'))
 const DIST = resolve(process.env.MAP_DIST || 'dist')
 const BASELINE_DIST = process.env.MAP_BASELINE_DIST ? resolve(process.env.MAP_BASELINE_DIST) : null
-let servingDist = BASELINE_DIST || DIST
+const INTERACTIONS_ONLY = process.env.MAP_CHECK_GROUP === 'interactions'
+const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
+let servingDist = INTERACTIONS_ONLY ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -49,6 +53,17 @@ let nodes = [
   makeNode(13, 'Seattle-跨国反例', 'CN', '亚太'),
 ]
 const locatedIds = nodes.filter((node) => node.country).map((node) => node.id).sort((a, b) => a - b)
+const xssName = 'Tokyo <img src=x onerror="window.__mapXss=1"> & "测试节点"'
+const interactionNodes = () => [
+  ...Array.from({ length: 6 }, (_, i) => makeNode(401 + i, i === 5 ? xssName : `Tokyo 交互${i + 1}`, 'JP', '交互', i < 3)),
+  ...Array.from({ length: 6 }, (_, i) => makeNode(501 + i, `Frankfurt 交互${i + 1}`, 'DE', '交互', false)),
+  ...Array.from({ length: 6 }, (_, i) => makeNode(601 + i, `Singapore 交互${i + 1}`, 'SG', '交互')),
+]
+const NODE_UI = {
+  tooltip: '[data-map-tooltip]', tooltipMember: '[data-map-tooltip-member]',
+  dialog: '[data-map-node-dialog]', option: '[data-map-node-option]', close: '[data-map-node-close]', overlay: '[data-map-node-overlay]',
+  name: '[data-map-node-name]', idAttribute: 'data-map-node-option', tooltipIdAttribute: 'data-map-tooltip-member', onlineAttribute: 'data-online',
+}
 const requests = []
 const results = []
 const evidence = []
@@ -229,7 +244,9 @@ function inspect() {
       id: Number(el.dataset.node), online: el.dataset.online, count: Number(el.dataset.count),
       offlineCount: Number(el.dataset.offlineCount), markerState: el.dataset.markerState,
       region: el.dataset.region, x: el.getAttribute('cx'), y: el.getAttribute('cy'), hitBox: rect(el),
-      title: el.querySelector('title')?.textContent.trim(), hit: el.classList.contains('hit'), ring: !!marker,
+      title: el.querySelector('title')?.textContent.trim() || el.getAttribute('aria-label'), hit: el.classList.contains('hit'), ring: !!marker,
+      role: el.getAttribute('role'), tabIndex: el.getAttribute('tabindex'), accessibleName: el.getAttribute('aria-label'),
+      describedBy: el.getAttribute('aria-describedby'), popup: el.getAttribute('aria-haspopup'), expanded: el.getAttribute('aria-expanded'),
       marker: marker ? { ...part(marker), core: part(core), ring: part(ring), halo: part(halo), detail: part(detail), beacon: !!marker.closest('.globe-beacon') } : null,
     }
   })
@@ -283,6 +300,7 @@ async function zoom(key) {
   await sleep(200)
 }
 async function resetZoom() {
+  await clearPointer()
   const found = await evaluate(() => { const b = document.querySelector('.globe-controls .globe-zoom-reset'); b?.click(); return !!b })
   if (!found) throw new Error('找不到缩放重置按钮')
   await sleep(200)
@@ -298,14 +316,24 @@ async function mouseDrag(dx, dy = 0) {
     const p = point.matrixTransform(svg.getScreenCTM())
     return { x: p.x, y: p.y }
   })
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...position })
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...position, button: 'left', clickCount: 1 })
+  await dragFrom(position, dx, dy)
+}
+async function dragFrom(position, dx, dy = 0, touch = false) {
+  const point = (x, y) => [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }]
+  if (touch) await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(position.x, position.y) })
+  else {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...position })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...position, button: 'left', clickCount: 1 })
+  }
   for (let i = 1; i <= 6; i++) {
-    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: position.x + dx * i / 6, y: position.y + dy * i / 6, button: 'left', buttons: 1 })
+    const x = position.x + dx * i / 6, y = position.y + dy * i / 6
+    if (touch) await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(x, y) })
+    else await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 })
     await sleep(50)
   }
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: position.x + dx, y: position.y + dy, button: 'left', clickCount: 1 })
-  await sleep(200)
+  if (touch) await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  else await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: position.x + dx, y: position.y + dy, button: 'left', clickCount: 1 })
+  await sleep(touch ? 350 : 200)
 }
 async function touchDrag(dx, dy) {
   const position = await evaluate(() => {
@@ -338,6 +366,101 @@ async function screenshot(name) {
   const result = await send('Page.captureScreenshot', { format: 'png' })
   if (result.data) writeFileSync(join(OUT, `${name}.png`), Buffer.from(result.data, 'base64'))
 }
+async function clearPointer() {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2 })
+  // Radix 的可悬停 Tooltip 在 leave 后建立过渡区域；再移到区域外，模拟连续鼠标移动。
+  await sleep(80)
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: await evaluate(() => innerWidth - 2), y: 2 })
+  await evaluate(() => { if (document.activeElement?.closest('svg[data-map-canvas]')) document.activeElement.blur() })
+  await sleep(250)
+}
+async function keyPress(key) {
+  const code = { Enter: 'Enter', ' ': 'Space', Escape: 'Escape', Tab: 'Tab' }[key]
+  const windowsVirtualKeyCode = { Enter: 13, ' ': 32, Escape: 27, Tab: 9 }[key]
+  const text = key === 'Enter' ? '\r' : key === ' ' ? ' ' : undefined
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, text, unmodifiedText: text })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode })
+  await sleep(200)
+}
+async function clickAt(target, touch = false) {
+  if (touch) {
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: target.x, y: target.y, id: 1, radiusX: 2, radiusY: 2, force: 1 }] })
+    await sleep(80)
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  } else {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1 })
+  }
+  await sleep(touch ? 350 : 200)
+}
+async function pinTarget(preferred = 4, exact = false) {
+  const target = await evaluate((preferred, exact) => {
+    const hits = [...document.querySelectorAll('svg[data-map-canvas] .hit[data-node]')]
+    hits.sort((a, b) => Number(b.dataset.node === String(preferred)) - Number(a.dataset.node === String(preferred)))
+    for (const hit of hits) {
+      if (exact && hit.dataset.node !== String(preferred)) continue
+      const r = hit.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2
+      if (document.elementFromPoint(x, y)?.closest('.hit[data-node]') !== hit) continue
+      return { id: Number(hit.dataset.node), count: Number(hit.dataset.count), offlineCount: Number(hit.dataset.offlineCount), title: hit.querySelector('title')?.textContent.trim() || hit.getAttribute('aria-label'), x, y }
+    }
+    return null
+  }, preferred, exact)
+  if (!target) throw new Error(`找不到可实际命中的节点：${preferred}${exact ? '（精确）' : ''}`)
+  return target
+}
+// 聚合夹具每个国家只有一个城市地区；普通夹具均为单针，预期成员独立于 UI 列表。
+const expectedMembers = (target) => target.count === 1 ? nodes.filter((node) => node.id === target.id) : nodes.filter((node) => node.country === nodes.find((candidate) => candidate.id === target.id)?.country)
+function inspectNodeUi(selectors) {
+  const rect = (element) => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom } }
+  const read = (selector, memberSelector, idAttribute) => {
+    const element = document.querySelector(selector)
+    if (!element) return null
+    const box = rect(element), style = getComputedStyle(element)
+    return {
+      ...box, visible: box.w > 0 && box.h > 0 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0,
+      role: element.getAttribute('role') || element.querySelector('[role="tooltip"]')?.getAttribute('role'), text: element.textContent,
+      modal: element.getAttribute('aria-modal'), labelledBy: element.getAttribute('aria-labelledby'),
+      members: [...element.querySelectorAll(memberSelector)].map((member) => {
+        const r = rect(member), hit = document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2)
+        return { id: Number(member.getAttribute(idAttribute)), name: member.querySelector(selectors.name)?.textContent, online: member.getAttribute(selectors.onlineAttribute), text: member.textContent, hittable: hit === member || member.contains(hit), ...r }
+      }),
+      injected: !!element.querySelector('img[src="x"],svg[onload],script'),
+    }
+  }
+  const dialog = document.querySelector(selectors.dialog), overlay = document.querySelector(selectors.overlay)
+  return {
+    tooltip: read(selectors.tooltip, selectors.tooltipMember, selectors.tooltipIdAttribute), dialog: read(selectors.dialog, selectors.option, selectors.idAttribute),
+    dialogFocused: !!dialog?.contains(document.activeElement), backgroundHidden: !!document.querySelector('main')?.closest('[aria-hidden="true"]'), overlayEvents: overlay ? getComputedStyle(overlay).pointerEvents : null,
+    focused: { tag: document.activeElement?.tagName, node: document.activeElement?.getAttribute('data-node'), option: document.activeElement?.getAttribute('data-map-node-option') },
+    path: location.pathname, scrollY, innerWidth, innerHeight, xss: window.__mapXss ?? null,
+  }
+}
+async function nodeUi(label) {
+  const snapshot = await evaluate(inspectNodeUi, NODE_UI)
+  if (label) evidence.push({ label, at: Date.now(), nodeUi: snapshot })
+  return snapshot
+}
+function memberChecks(tag, list, expected) {
+  check(`${tag}：全部成员名称和真实在线状态准确`, list && list.length === expected.length && expected.every((node) => list.some((member) => member.id === node.id && member.name === node.name && member.online === (node.online ? '1' : '0') && member.text.includes(node.online ? '在线' : '离线'))), list?.map((member) => `${member.id}:${member.online}:${member.name}`).join(' | '))
+}
+function uiBoundsChecks(tag, ui, kind) {
+  const box = ui[kind]
+  check(`${tag}：${kind === 'dialog' ? '选择框' : '悬停内容'}实际可见且完整位于屏幕内`, box?.visible && box.x >= -1 && box.right <= ui.innerWidth + 1 && box.y >= -1 && box.bottom <= ui.innerHeight + 1, box ? `${box.x.toFixed(1)},${box.y.toFixed(1)} ${box.w.toFixed(1)}×${box.h.toFixed(1)}` : 'missing UI')
+  check(`${tag}：名称中的HTML作为文本显示`, box && !box.injected && ui.xss === null)
+}
+async function actualTarget(selector) {
+  const target = await evaluate((selector) => {
+    const element = document.querySelector(selector)
+    if (!element) return null
+    element.scrollIntoView({ block: 'nearest' })
+    const r = element.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2
+    const hit = document.elementFromPoint(x, y)
+    return hit === element || element.contains(hit) ? { x, y } : null
+  }, selector)
+  if (!target) throw new Error(`元素不可实际命中：${selector}`)
+  return target
+}
 function dockChecks(tag, snapshot) {
   const { main, toolbar, modeGroup, zoomGroup, host } = snapshot
   const controls = snapshot.controls.filter((r) => r.visible)
@@ -362,7 +485,7 @@ function growthChecks(tag, snapshot, width, selectedMode) {
 }
 function renderingChecks(tag, snapshot) {
   check(`${tag}：没有节点间装饰性路径`, snapshot.links === 0, `globe-link=${snapshot.links}`)
-  check(`${tag}：节点圈、命中区域与悬停title保留`, snapshot.pins.length > 0 && snapshot.pins.every((p) => p.hit && p.ring && p.title && p.count > 0), `pins=${snapshot.pins.length}`)
+  check(`${tag}：节点圈、命中区域与名称状态说明保留`, snapshot.pins.length > 0 && snapshot.pins.every((p) => p.hit && p.ring && p.title && p.count > 0), `pins=${snapshot.pins.length}`)
   markerChecks(tag, snapshot)
   if (snapshot.mode === '2d') {
     check(`${tag}：2D没有节点名称、引线和计数字样`, snapshot.nameLabels === 0 && snapshot.stems === 0 && snapshot.countLabels === 0, `names=${snapshot.nameLabels}, stems=${snapshot.stems}, counts=${snapshot.countLabels}`)
@@ -393,6 +516,7 @@ function markerChecks(tag, snapshot) {
 }
 
 async function beaconMotionChecks(tag, active) {
+  await clearPointer()
   await evaluate(() => { window.__mapBeaconNodes = new Map([...document.querySelectorAll('svg[data-map-canvas] .hit')].map((hit) => [Number(hit.dataset.node), hit.parentElement.querySelector('.globe-pin-halo')])) })
   const samples = [await state(`${tag}:pulse-0`)]
   for (let i = 1; i <= 4; i++) { await sleep(300); samples.push(await state(`${tag}:pulse-${i}`)) }
@@ -449,32 +573,35 @@ async function physicalControl(key) {
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
   }, key)
   if (!target) throw new Error(`找不到实际可点击的控件：${key}`)
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...target, button: 'left', clickCount: 1 })
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, button: 'left', clickCount: 1 })
-  await sleep(200)
+  await clickAt(target)
 }
-async function hoverNode(tag, preferred = 4) {
-  const target = await evaluate((preferred) => {
-    const hits = [...document.querySelectorAll('svg[data-map-canvas] [data-node]')]
-    hits.sort((a, b) => Number(b.dataset.node === String(preferred)) - Number(a.dataset.node === String(preferred)))
-    for (const hit of hits) {
-      const r = hit.getBoundingClientRect()
-      const x = r.x + r.width / 2, y = r.y + r.height / 2
-      if (document.elementFromPoint(x, y)?.closest('[data-node]') !== hit) continue
-      return { id: Number(hit.dataset.node), count: Number(hit.dataset.count), offlineCount: Number(hit.dataset.offlineCount), title: hit.querySelector('title')?.textContent.trim(), x, y }
-    }
-    return null
-  }, preferred)
-  if (!target) throw new Error(`找不到可实际悬停的节点：${tag}`)
+async function hoverNode(tag, preferred = 4, exact = false) {
+  await clearPointer()
+  const before = await state(`${tag}:hover-before`)
+  const target = await pinTarget(preferred, exact)
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y })
-  await sleep(150)
+  await waitFor((selector) => !!document.querySelector(selector)?.getBoundingClientRect().width, NODE_UI.tooltip)
+  await sleep(250)
+  const hovered = await state(`${tag}:hover-active`)
+  const ui = await nodeUi(`${tag}:tooltip`)
   const node = nodes.find((n) => n.id === target.id)
-  check(`${tag}：真实悬停命中节点并保留完整名称title`, node && (target.count > 1 ? target.title?.includes(`×${target.count}`) && new RegExp(`在线\\s*${target.count - target.offlineCount}\\s*台`).test(target.title) && new RegExp(`离线\\s*${target.offlineCount}\\s*台`).test(target.title) : target.title?.includes(node.name)) && await evaluate((id) => document.querySelector(`svg[data-map-canvas] [data-node="${id}"]`)?.matches(':hover'), target.id), `${target.id}:${target.title}`)
+  check(`${tag}：真实悬停命中节点并有完整无障碍名称`, node && (target.count > 1 ? target.title?.includes(`×${target.count}`) && new RegExp(`在线\\s*${target.count - target.offlineCount}\\s*台`).test(target.title) && new RegExp(`离线\\s*${target.offlineCount}\\s*台`).test(target.title) : target.title?.includes(node.name)) && await evaluate((id) => document.querySelector(`svg[data-map-canvas] [data-node="${id}"]`)?.matches(':hover'), target.id), `${target.id}:${target.title}`)
+  const beforePin = before.pins.find((pin) => pin.id === target.id), activePin = hovered.pins.find((pin) => pin.id === target.id)
+  check(`${tag}：只有当前信标实际放大约1.25倍`, beforePin && activePin && Math.abs(activePin.marker.w / beforePin.marker.w - 1.25) <= 0.04 && hovered.pins.filter((pin) => pin.id !== target.id).every((pin) => Math.abs(pin.marker.w - before.pins.find((old) => old.id === pin.id)?.marker.w) <= 0.2), `core ${beforePin?.marker?.w.toFixed(2)}→${activePin?.marker?.w.toFixed(2)}px`)
+  check(`${tag}：悬停内容有tooltip语义且不会导航`, ui.tooltip?.role === 'tooltip' && ui.path === '/' && await evaluate((id) => {
+    const trigger = document.querySelector(`svg[data-map-canvas] .hit[data-node="${id}"]`)
+    return trigger?.getAttribute('aria-describedby')?.split(' ').some((descriptionId) => document.getElementById(descriptionId)?.getAttribute('role') === 'tooltip')
+  }, target.id))
+  memberChecks(`${tag}/tooltip`, ui.tooltip?.members, expectedMembers(target))
+  uiBoundsChecks(tag, ui, 'tooltip')
+  await screenshot(`hover-${tag.replaceAll('/', '-')}`)
+  await clearPointer()
+  const restored = await state(`${tag}:hover-restored`)
+  check(`${tag}：离开恢复信标大小并移除悬停内容`, !(await nodeUi()).tooltip?.visible && restored.pins.every((pin) => Math.abs(pin.marker.w - before.pins.find((old) => old.id === pin.id)?.marker.w) <= 0.2))
   return target
 }
 async function openNodeAndReturn(tag, target, selectedMode) {
-  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1 })
-  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1 })
+  await clickAt(target)
   const node = nodes.find((n) => n.id === target.id)
   await waitFor((id, name) => location.pathname === `/node/${id}` && document.querySelector('h2')?.textContent === name, target.id, node.name)
   check(`${tag}：无侧边名称后真实点针仍打开正确节点`, await evaluate(() => !!document.querySelector('main')))
@@ -483,6 +610,221 @@ async function openNodeAndReturn(tag, target, selectedMode) {
   await waitFor((count) => document.querySelectorAll('[data-slot="card"] h3').length === count, nodes.length)
   check(`${tag}：详情返回保留地图模式与全部节点`, (await state()).mode === selectedMode)
   await evaluate(() => scrollTo(0, 0))
+}
+async function returnHome(selectedMode) {
+  await evaluate(() => [...document.querySelectorAll('header button')].find((button) => button.textContent.trim() === '地图控件验收')?.click())
+  await ready()
+  await waitFor((count) => document.querySelectorAll('[data-slot="card"] h3').length === count, nodes.length)
+  await evaluate(() => scrollTo(0, 0))
+  await clearPointer()
+  check(`${selectedMode}：返回首页保持地图模式`, (await state()).mode === selectedMode)
+}
+async function focusPin(id) {
+  const focused = await evaluate((id) => {
+    const pin = document.querySelector(`svg[data-map-canvas] .hit[data-node="${id}"]`)
+    pin?.focus({ preventScroll: true })
+    return pin && document.activeElement === pin && pin.getAttribute('role') === 'button' && pin.tabIndex === 0 && !pin.closest('svg').hasAttribute('aria-hidden')
+  }, id)
+  check(`节点${id}：地图针有可聚焦按钮语义且SVG未隐藏`, focused)
+  if (!focused) throw new Error(`节点不可通过键盘聚焦：${id}`)
+}
+async function openChoice(tag, id = 401, activation = 'mouse') {
+  await clearPointer()
+  const target = await pinTarget(id, true)
+  if (target.count < 2) throw new Error(`选择夹具必须聚合：${id}`)
+  if (activation === 'Enter' || activation === ' ') {
+    await focusPin(id)
+    await keyPress(activation)
+  } else if (activation === 'AT') {
+    await evaluate((id) => document.querySelector(`svg[data-map-canvas] .hit[data-node="${id}"]`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 })), id)
+    await sleep(200)
+  } else await clickAt(target, activation === 'touch')
+  await waitFor((selector) => !!document.querySelector(selector), NODE_UI.dialog)
+  const ui = await nodeUi(`${tag}:dialog`)
+  check(`${tag}：聚合激活先打开选择框，未自动进入第一台`, ui.path === '/' && ui.dialog?.role === 'dialog' && ui.dialog.labelledBy && !target.title.includes('第一台'))
+  check(`${tag}：模态选择框接管焦点且后台不可交互`, ui.dialogFocused && ui.backgroundHidden && ui.overlayEvents !== 'none', JSON.stringify({ focused: ui.focused, dialogFocused: ui.dialogFocused, backgroundHidden: ui.backgroundHidden, overlayEvents: ui.overlayEvents }))
+  memberChecks(`${tag}/选择框`, ui.dialog?.members, expectedMembers(target))
+  uiBoundsChecks(tag, ui, 'dialog')
+  return target
+}
+async function dismissChoice(tag, mechanism, pinId = 401) {
+  if (mechanism === 'Escape') await keyPress('Escape')
+  else if (mechanism === 'close') await clickAt(await actualTarget(NODE_UI.close))
+  else {
+    const outside = await evaluate((selector) => {
+      const overlay = document.querySelector(selector)
+      for (const [x, y] of [[2, 2], [innerWidth - 2, 2], [2, innerHeight - 2]]) {
+        const hit = document.elementFromPoint(x, y)
+        if (overlay && (hit === overlay || overlay.contains(hit))) return { x, y }
+      }
+      return null
+    }, NODE_UI.overlay)
+    if (!outside) throw new Error('没有可实际点击的选择框外侧遮罩')
+    await clickAt(outside)
+  }
+  await waitFor((selector) => !document.querySelector(selector), NODE_UI.dialog)
+  const ui = await nodeUi(`${tag}:dismissed`)
+  check(`${tag}：${mechanism}关闭选择框且不导航`, !ui.dialog && ui.path === '/')
+  check(`${tag}：关闭后焦点返回原地图针`, await evaluate((id) => document.activeElement === document.querySelector(`svg[data-map-canvas] .hit[data-node="${id}"]`), pinId))
+  await clearPointer()
+}
+const optionSelector = (id) => `${NODE_UI.option.slice(0, -1)}="${id}"]`
+async function chooseMember(tag, id, activation = 'mouse') {
+  const node = nodes.find((candidate) => candidate.id === id)
+  if (!node) throw new Error(`选择的节点不在当前夹具：${id}`)
+  const selector = optionSelector(id)
+  const target = await actualTarget(selector)
+  if (activation === 'Enter' || activation === ' ') {
+    await evaluate((selector) => document.querySelector(selector).focus({ preventScroll: true }), selector)
+    await keyPress(activation)
+  } else await clickAt(target, activation === 'touch')
+  await waitFor((id, name) => location.pathname === `/node/${id}` && document.querySelector('h2')?.textContent === name, id, node.name)
+  check(`${tag}：选择${node.online ? '非首在线' : '离线'}成员打开准确详情`, await evaluate((id) => location.pathname === `/node/${id}` && !!document.querySelector('main'), id), `${id}:${node.name}`)
+}
+async function singleActivationChecks() {
+  nodes = [makeNode(701, 'Tokyo 单节点键盘', 'JP', '交互'), makeNode(702, 'Frankfurt 离线键盘', 'DE', '交互', false), makeNode(703, 'Singapore 单节点', 'SG', '交互')]
+  await viewport(360, 780)
+  for (const selectedMode of ['2d', '3d']) for (const dark of [false, true]) {
+    const tag = `单针/${selectedMode}/360/${dark ? '暗' : '亮'}`
+    await media(dark)
+    await preferences(selectedMode, '0')
+    await hoverNode(tag, 701, true)
+    for (const [activation, id] of [['Enter', 701], [' ', 702], ['touch', 702], ['AT', 701]]) {
+      await clearPointer()
+      if (activation === 'touch') await clickAt(await pinTarget(id, true), true)
+      else if (activation === 'AT') await evaluate((id) => document.querySelector(`svg[data-map-canvas] .hit[data-node="${id}"]`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 })), id)
+      else { await focusPin(id); await keyPress(activation) }
+      const expected = nodes.find((node) => node.id === id)
+      await waitFor((id, name) => location.pathname === `/node/${id}` && document.querySelector('h2')?.textContent === name, id, expected.name)
+      check(`${tag}：${activation === ' ' ? 'Space' : activation}直接打开准确单节点且不显示选择框`, !(await nodeUi()).dialog && await evaluate((id) => location.pathname === `/node/${id}`, id))
+      await returnHome(selectedMode)
+    }
+    await clearPointer()
+    const cancelled = await pinTarget(701, true)
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cancelled.x, y: cancelled.y, id: 1, radiusX: 2, radiusY: 2, force: 1 }] })
+    await sleep(80)
+    await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cancelled.x, y: cancelled.y - 55, id: 1, radiusX: 2, radiusY: 2, force: 1 }] })
+    await send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] })
+    await sleep(250)
+    await evaluate(() => scrollTo(0, 0))
+    const cancelState = await state()
+    check(`${tag}：针上竖滑touchCancel不打开详情或选择框且结束drag`, cancelState.drag === 'false' && (await nodeUi()).path === '/' && !(await nodeUi()).dialog)
+    const prior = await evaluate(() => {
+      const wanted = document.querySelector('svg[data-map-canvas] .hit[data-node="701"]')
+      const tabbable = [...document.querySelectorAll('button,input,a[href],[tabindex]')].filter((element) => element.tabIndex >= 0 && !element.disabled && element.getBoundingClientRect().width > 0 && !element.closest('[aria-hidden="true"]'))
+      const previous = tabbable[tabbable.indexOf(wanted) - 1]
+      previous?.focus({ preventScroll: true })
+      return !!previous && document.activeElement === previous
+    })
+    if (!prior) throw new Error('找不到地图第一枚针的前一个Tab焦点')
+    await keyPress('Tab')
+    await waitFor((selector) => !!document.querySelector(selector), NODE_UI.tooltip)
+    await sleep(250)
+    const afterTab = await state(`${tag}:touch-cancel-tab`), tabUi = await nodeUi(`${tag}:touch-cancel-tooltip`)
+    check(`${tag}：touchCancel后真实Tab回同针仍放大并显示Tooltip`, await evaluate(() => document.activeElement === document.querySelector('svg[data-map-canvas] .hit[data-node="701"]') && document.activeElement.matches(':focus-visible')) && Math.abs(afterTab.pins.find((pin) => pin.id === 701)?.marker?.w - 8) <= 0.2 && tabUi.tooltip?.visible)
+    memberChecks(`${tag}/touchCancel后键盘提示`, tabUi.tooltip?.members, nodes.filter((node) => node.id === 701))
+    await clearPointer()
+  }
+}
+async function nodeInteractionChecks() {
+  const ordinaryNodes = nodes
+  for (const [width, height] of TOUCH_ONLY ? [[320, 720]] : [[1440, 1000], [320, 720]]) {
+    await viewport(width, height)
+    for (const selectedMode of TOUCH_ONLY ? ['2d'] : ['2d', '3d']) for (const dark of TOUCH_ONLY ? [false] : [false, true]) {
+      nodes = interactionNodes()
+      const tag = `聚合交互/${selectedMode}/${width}/${dark ? '暗' : '亮'}`
+      await media(dark)
+      await preferences(selectedMode, '0')
+      await waitFor(() => document.querySelectorAll('svg[data-map-canvas] .hit').length === 3)
+      await resetZoom()
+      await hoverNode(tag, 401, true)
+      for (const mechanism of ['Escape', 'close', 'outside']) {
+        await openChoice(`${tag}/${mechanism}`)
+        if (mechanism === 'Escape') await screenshot(`node-choice-${selectedMode}-${width}-${dark ? 'dark' : 'light'}`)
+        await dismissChoice(tag, mechanism)
+      }
+      await openChoice(`${tag}/detail=0合成点击`, 401, 'AT')
+      await dismissChoice(`${tag}/detail=0合成点击`, 'Escape')
+      for (const id of [402, 404]) {
+        await openChoice(`${tag}/鼠标选择${id}`)
+        await chooseMember(tag, id)
+        await returnHome(selectedMode)
+      }
+      for (const [activation, id] of [['Enter', 402], [' ', 404]]) {
+        const key = activation === ' ' ? 'Space' : activation
+        await openChoice(`${tag}/${key}`, 401, activation)
+        await chooseMember(`${tag}/${key}`, id, activation)
+        await returnHome(selectedMode)
+      }
+      if (width <= 360) {
+        await openChoice(`${tag}/触屏`, 401, 'touch')
+        await chooseMember(`${tag}/触屏`, 404, 'touch')
+        await returnHome(selectedMode)
+      }
+      for (const touch of width <= 360 ? [false, true] : [false]) {
+        await resetZoom()
+        if (selectedMode === '2d') await zoom('End')
+        await clearPointer()
+        const before = await state()
+        await dragFrom(await pinTarget(selectedMode === '2d' ? 501 : 401, true), 32, 3, touch)
+        const after = await state(`${tag}:${touch ? 'touch' : 'mouse'}-pin-drag`), ui = await nodeUi()
+        check(`${tag}：${touch ? '触屏' : '鼠标'}从针起手拖动不误开选择框或详情`, geometry(before) !== geometry(after) && after.drag === 'false' && ui.path === '/' && !ui.dialog)
+        await region('JP')
+        await allRegions()
+      }
+      await screenshot(`node-interactions-${selectedMode}-${width}-${dark ? 'dark' : 'light'}`)
+    }
+  }
+
+  if (TOUCH_ONLY) { nodes = ordinaryNodes; await navigate(); return }
+
+  nodes = interactionNodes()
+  await viewport(360, 780)
+  await media(true)
+  await preferences('2d', '0')
+  await openChoice('实时列表/修改前')
+  const removedName = nodes.find((node) => node.id === 405).name
+  nodes = nodes.filter((node) => node.id !== 405).map((node) => node.id === 402 ? { ...node, name: 'Tokyo 实时改名节点' } : node.id === 404 ? { ...node, online: true } : node)
+  await waitFor((selectors) => {
+    const dialog = document.querySelector(selectors.dialog)
+    const options = dialog?.querySelectorAll(selectors.option)
+    return options?.length === 5 && dialog.querySelector('[data-map-node-option="402"] [data-map-node-name]')?.textContent === 'Tokyo 实时改名节点' && dialog.querySelector('[data-map-node-option="404"]')?.dataset.online === '1' && !dialog.querySelector('[data-map-node-option="405"]')
+  }, NODE_UI)
+  await waitFor((count) => document.querySelectorAll('[data-slot="card"] h3').length === count, nodes.length)
+  const live = await nodeUi('实时列表/修改后'), map = await state('实时列表/针同步')
+  memberChecks('实时列表/改名删除与上线', live.dialog?.members, nodes.filter((node) => node.country === 'JP'))
+  check('实时列表：移除删除成员、保留HTML字面名称、地图计数同步', !live.dialog.text.includes(removedName) && !live.dialog.injected && live.xss === null && map.pins.find((pin) => pin.id === 401)?.count === 5 && map.pins.find((pin) => pin.id === 401)?.offlineCount === 1 && map.cards.includes('Tokyo 实时改名节点') && !map.cards.includes(removedName))
+  await screenshot('node-choice-live-updated')
+  await dismissChoice('实时列表', 'Escape')
+  await hoverNode('实时列表/tooltip同步', 401, true)
+  await openChoice('实时列表/全部移除前')
+  nodes = nodes.filter((node) => node.country !== 'JP')
+  await waitFor((selector) => !document.querySelector(selector), NODE_UI.dialog)
+  await waitFor(() => !document.querySelector('svg[data-map-canvas] .hit[data-region^="JP"]'))
+  check('实时删除整个地区后关闭旧选择框且不导航', (await nodeUi()).path === '/' && !(await nodeUi()).dialog)
+
+  nodes = interactionNodes()
+  await viewport(1440, 1000)
+  await media(false)
+  await preferences('3d', '1')
+  await clearPointer()
+  await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
+  const target = await pinTarget(401, true)
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y })
+  await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'false')
+  await stable('悬停暂时冻结3D岸线和扫掠，旋转偏好保留')
+  check('悬停不改旋转偏好', (await state()).spin === 'true')
+  await clearPointer()
+  await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
+  await openChoice('旋转中聚合选择')
+  await stable('选择框期间3D岸线和扫掠冻结')
+  check('选择框不改旋转偏好', (await state()).spin === 'true')
+  await dismissChoice('旋转中聚合选择', 'Escape')
+  await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
+  await stable('退出节点交互后3D旋转恢复', true)
+  await singleActivationChecks()
+  nodes = ordinaryNodes
+  await navigate()
 }
 function installRafGate() {
   let next = 0
@@ -587,6 +929,7 @@ async function aggregateMarkerChecks() {
     await mode(selectedMode)
     for (const dark of [false, true]) {
       await media(dark)
+      await clearPointer()
       const snapshot = await state(`markers-aggregate-${selectedMode}-${dark ? 'dark' : 'light'}`)
       const mixed = snapshot.pins.find((p) => p.id === 101)
       const offline = snapshot.pins.find((p) => p.id === 201)
@@ -662,7 +1005,7 @@ try {
   }
   await send('Runtime.enable')
   await send('Page.enable')
-  if (BASELINE_DIST) {
+  if (BASELINE_DIST && !INTERACTIONS_ONLY) {
     await viewport(1440, 1000)
     await media(false)
     await navigate()
@@ -684,6 +1027,7 @@ try {
   await media(false)
   await navigate()
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
+  if (!INTERACTIONS_ONLY) {
   const initial = await state('first-visit')
   check('首访默认 3D、旋转开启、两个模式按钮语义明确', initial.mode === '3d' && initial.spin === 'true' && initial.spinning === 'true' && await evaluate(() => document.querySelector('[data-map-control="mode-3d"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-map-control="mode-2d"]')?.getAttribute('aria-pressed') === 'false'))
   renderingChecks('首访3D', initial)
@@ -876,11 +1220,13 @@ try {
   await beaconGateChecks()
   await sweepContinuity()
   await aggregateMarkerChecks()
+  }
+  await nodeInteractionChecks()
   check('验收期间无未捕获页面异常', exceptions.length === 0, exceptions.join(' ; '))
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

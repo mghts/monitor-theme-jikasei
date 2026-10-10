@@ -288,6 +288,7 @@
 .globe-atlas svg line,
 .globe-atlas svg circle { pointer-events: none; }
 .globe-atlas svg .hit { pointer-events: auto; cursor: pointer; }
+.globe-atlas svg .hit:focus-visible { outline: none; stroke: var(--foreground); stroke-width: 1.2; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
 
 .globe-ocean { fill: var(--globe-ocean); }
 .globe-land { fill: var(--globe-land); stroke: none; stroke-linejoin: round; stroke-linecap: round; }
@@ -301,6 +302,8 @@
 /* 同一套柔光信标用于 2D/3D；部分离线用绿芯红圈，离线再加短横，核心始终常亮。 */
 .globe-beacon { --beacon-color: var(--globe-pin-offline); }
 .globe-beacon[data-marker-state="online"] { --beacon-color: var(--globe-pin-online); }
+.globe-beacon-shape { transform: scale(1); transition: transform 160ms ease-out; }
+.globe-beacon[data-marker-active="true"] .globe-beacon-shape { transform: scale(1.25); }
 .globe-pin { fill: var(--globe-pin-online); stroke: none; }
 .globe-pin[data-marker-state="offline"] { fill: var(--globe-pin-offline); }
 .globe-pin-ring { fill: var(--beacon-color); fill-opacity: 0.12; stroke: var(--beacon-color); stroke-width: 0.64; stroke-opacity: 0.5; }
@@ -310,8 +313,57 @@
 .globe-panel[data-marker-pulse="true"] .globe-beacon[data-marker-state="online"] .globe-pin-halo { animation: globe-beacon-breathe 3.6s ease-in-out infinite; }
 @keyframes globe-beacon-breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.75; } }
 @media (prefers-reduced-motion: reduce) {
+  .globe-beacon-shape { transition: none; }
   .globe-panel[data-marker-pulse="true"] .globe-beacon[data-marker-state="online"] .globe-pin-halo { animation: none; opacity: 0.6; }
 }
+.globe-node-tooltip {
+  z-index: 60;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 24px));
+  max-height: min(360px, 50dvh, var(--radix-tooltip-content-available-height, 50dvh));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-size: 12px;
+}
+.globe-node-tooltip-heading { font-weight: 600; margin-bottom: 6px; }
+.globe-node-tooltip ul, .globe-node-options { list-style: none; margin: 0; padding: 0; }
+.globe-node-tooltip li { display: flex; align-items: start; gap: 16px; padding-block: 4px; }
+.globe-node-tooltip p { margin: 8px 0 0; color: var(--muted-foreground); }
+.globe-node-name { min-width: 0; flex: 1; overflow-wrap: anywhere; text-align: left; }
+.globe-node-status { flex: none; white-space: nowrap; font-size: 12px; color: var(--globe-pin-offline); }
+[data-online="1"] > .globe-node-status { color: var(--globe-pin-online); }
+.globe-node-overlay { position: fixed; inset: 0; z-index: 79; background: rgb(0 0 0 / 42%); }
+.globe-node-dialog {
+  position: fixed;
+  z-index: 80;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 24%);
+}
+.globe-node-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.globe-node-heading h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.globe-node-heading p { margin: 6px 0 0; font-size: 12px; color: var(--muted-foreground); }
+.globe-node-options { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.globe-node-options li + li { border-top: 1px solid var(--border); }
+.globe-node-options button { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 44px; padding: 12px 8px; border-radius: var(--radius-md); font-size: 14px; cursor: pointer; }
+.globe-node-options button:hover, .globe-node-options button:focus-visible { background: var(--accent); }
+.globe-node-options button:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .globe-selected-ring { fill: none; stroke: var(--foreground); stroke-width: 1.2; stroke-dasharray: 2 2; }
 .globe-selected-core { fill: var(--foreground); stroke: var(--card); stroke-width: 1.4; }
 /* 标签底下垫一道卡片底色的描边（paint-order: stroke）：引线从文字后面穿过去时

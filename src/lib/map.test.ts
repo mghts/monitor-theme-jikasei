@@ -180,14 +180,16 @@ for (const center of [0, 170]) for (const zoom of [50, 100, 150]) {
 assert.ok(compared > 7000, "覆盖数千个真实地理点，不只验证路径非空")
 
 // 节点及输入保持不变；visible区分裁切外点与非法点，保留id/地区/顺序供命中和标签使用。
-const node = (id: number, ll: [number, number]) => ({ id, key: `node-${id}`, name: `示例 ${id}`, code: "US", online: true, offlineCount: 0, index: id, count: 1, region: { key: "US", code: "US", city: "", label: "US", base: ll }, ll }) as GlobeNode
+const node = (id: number, ll: [number, number]) => ({ id, nodeIds: [id], key: `node-${id}`, name: `示例 ${id}`, code: "US", online: true, offlineCount: 0, index: id, count: 1, region: { key: "US", code: "US", city: "", label: "US", base: ll }, ll }) as GlobeNode
 const points = [node(1, [0, 0]), node(2, [170, 0]), node(3, [NaN, 0])]
 const placed = flatNodes(points, flatCamera(0, 0, 150))
 assert.deepEqual(placed.map((p) => [p.id, p.visible]), [[1, true], [2, false]])
 assert.deepEqual([placed[0].px, placed[0].py], [230, 115])
 assert.equal(placed[0].region, points[0].region)
-const mixedNode = { ...node(4, [0, 0]), online: false, count: 5, offlineCount: 2 }
+assert.deepEqual(placed.map((p) => p.nodeIds), [[1], [2]], "2D 投影保留未合并信标的精确成员")
+const mixedNode = { ...node(4, [0, 0]), nodeIds: [4, 8, 9, 12, 6], online: false, count: 5, offlineCount: 2 }
 assert.deepEqual(flatNodes([mixedNode], camera).map((p) => [p.count, p.offlineCount, p.online]), [[5, 2, false]], "2D 投影保留聚合真实状态")
+assert.deepEqual(flatNodes([mixedNode], camera).map((p) => p.nodeIds), [[4, 8, 9, 12, 6]], "2D 投影保留全部聚合成员及其顺序")
 const original = structuredClone(WORLD_OUTLINES)
 prepareMapRings(WORLD_OUTLINES)
 mapPaths(flatCamera(100, 30, 150), world)

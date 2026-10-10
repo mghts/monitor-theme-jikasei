@@ -270,6 +270,7 @@ eq(mergeRegion(10, 5), true, "同地区到 5 台 → 合并")
 eq(mergeRegion(30, 2), true, "整队到 30 台 → 合并（哪怕这个地区只有 2 台）")
 eq(placed.length, 9, "不合并：9 台有落点的机器各一枚针")
 eq(placed.map((p) => p.key), ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "顺序与节点列表一致（连线抽样要靠 index）")
+eq(placed.map((p) => p.nodeIds), [[1], [2], [3], [4], [5], [6], [7], [8], [9]], "未合并信标只包含自身，不混入同地区节点")
 eq(placed.every((p) => p.count === 1), true, "不合并时针上没有台数")
 eq(placed.every((p) => p.offlineCount === 0), true, "单台全在线时真实离线计数为 0")
 // JP 那 4 台必须岔开：坐标两两不同，且都在落点附近（不是随便乱扔）。
@@ -283,6 +284,9 @@ const five = globeNodes([...fleet, node(11, "第五台 JP", "JP")])
 const jpMerged = five.filter((p) => p.region.key === "JP · Japan")
 eq(jpMerged.length, 1, "同地区到 5 台 → 只出一枚针")
 eq(jpMerged.map((p) => p.count), [5], "那枚针上写着 5 台")
+eq(jpMerged[0].nodeIds, [5, 6, 7, 8, 11], "聚合信标包含桶内所有真实节点，按输入顺序排列")
+eq([jpMerged[0].id, jpMerged[0].key, jpMerged[0].index], [5, "JP · Japan", 4], "新增成员列表不改变首节点、地区键和索引")
+eq(globeNodes([...fleet, node(11, "第五台 JP", "JP")]).map((p) => p.nodeIds), five.map((p) => p.nodeIds), "同一份输入的成员顺序可重复")
 eq(jpMerged[0].offlineCount, 0, "全在线聚合的真实离线计数为 0")
 eq(jpMerged.map((p) => p.name), ["Japan ×5"], "多台的针标签是「地区 × 台数」")
 eq(jpMerged[0].ll, regionRows(fleet).find((r) => r.region.key === "JP · Japan")?.aim, "合并的针落在地区中心")
@@ -292,6 +296,7 @@ const jpOffline = globeNodes([...fleet, node(11, "第五台 JP", "JP")].map((n) 
 eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.online, false, "合并的那枚针：地区里有一台离线就按离线画")
 eq(jpOffline.find((p) => p.region.key === "CN")?.online, true, "别的地区不受影响")
 eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.offlineCount, 1, "部分离线聚合记录实际离线 1 台，不把所有台数判为离线")
+eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.nodeIds, [5, 6, 7, 8, 11], "在线状态更新不丢失聚合成员")
 const singlesOffline = globeNodes(fleet.map((n) => n.id === 7 ? { ...n, online: false } : n))
 eq(singlesOffline.find((p) => p.id === 7)?.offlineCount, 1, "不合并时离线单台的真实计数为 1")
 eq(singlesOffline.filter((p) => p.id !== 7).every((p) => p.offlineCount === 0), true, "离线单台不影响邻近节点")
@@ -306,7 +311,31 @@ const largeGroup = globeNodes([
   ...Array.from({ length: 28 }, (_, i) => node(100 + i, "无落点", "")),
 ]).find((p) => p.region.key === "JP · Japan")!
 eq([largeGroup.count, largeGroup.offlineCount, largeGroup.online], [2, 1, false], "总台数触发合并时也按实际两台统计状态")
+eq(largeGroup.nodeIds, [50, 51], "总台数触发合并时也只保留桶内两台，不包含无落点节点")
 eq(JSON.stringify(mixedSource), mixedBefore, "统计状态不修改输入节点")
+
+// 两个国家的节点交错输入，ID 故意不排序：成员只属于当前桶，顺序跟随 API 列表。
+const memberSource = [
+  node(90, "日本一号", "JP"), node(70, "中国一号", "CN"),
+  node(5, "日本二号", "JP"), node(6, "中国二号", "CN"),
+  node(44, "日本三号", "JP"), node(45, "中国三号", "CN"),
+  node(3, "日本四号", "JP"), node(4, "中国四号", "CN"),
+  node(9, "日本五号", "JP"), node(10, "中国五号", "CN"),
+  node(999, "无落点", ""),
+]
+const memberBefore = JSON.stringify(memberSource)
+const memberPoints = globeNodes(memberSource)
+eq(memberPoints.map((p) => [p.region.key, p.nodeIds]), [["JP · Japan", [90, 5, 44, 3, 9]], ["CN", [70, 6, 45, 4, 10]]], "跨国家聚合成员准确且按原始输入顺序排列")
+eq(globeNodes([...memberSource].reverse()).find((p) => p.region.code === "JP")?.nodeIds, [9, 3, 44, 5, 90], "改变输入顺序时成员列表同步，不使用数字 ID 排序")
+const reducedMembers = globeNodes(memberSource.filter((n) => n.id !== 9))
+eq(reducedMembers.filter((p) => p.region.code === "JP").map((p) => p.nodeIds), [[90], [5], [44], [3]], "删除一个输入成员后低于合并门槛，每枚针恢复为仅含自身")
+eq(reducedMembers.find((p) => p.region.code === "CN")?.nodeIds, [70, 6, 45, 4, 10], "另一个国家的成员不受更新影响")
+const movedMembers = globeNodes(memberSource.map((n) => n.id === 9 ? { ...n, country: "CN" } : n))
+eq(movedMembers.find((p) => p.region.code === "CN")?.nodeIds, [70, 6, 45, 4, 9, 10], "国家更新后成员移动到正确桶，保留输入顺序")
+eq(movedMembers.filter((p) => p.region.code === "JP").flatMap((p) => p.nodeIds), [90, 5, 44, 3], "国家更新后的旧桶不残留已移动节点")
+eq(globeNodes(regionView(memberSource, "JP · Japan").shown).map((p) => p.nodeIds), [[90, 5, 44, 3, 9]], "地区筛选后生成的信标只包含筛选成员")
+eq(layoutLabels(camera(139.7, 35.7), memberPoints, new Map()).map((p) => [p.key, p.nodeIds]), memberPoints.map((p) => [p.key, p.nodeIds]), "球面标签布局完整保留聚合成员")
+eq(JSON.stringify(memberSource), memberBefore, "成员构建、筛选和标签布局不修改输入节点")
 
 const rows = regionRows(fleet)
 // ★ 一个 HK 只有一行：名字里写着 HK 的（`华纳云 HK`）与没写的（`野草云`）都落 `HK · Hong Kong`
@@ -334,6 +363,7 @@ eq(regionView([], "JP").current, null, "没有节点时不存在悬空选中")
 const sides = new Map<string, "L" | "R">()
 const laid = layoutLabels(cam, placed, sides)
 eq(laid.length, 9, "9 枚针都排上了标签")
+eq(laid.map((p) => [p.id, p.nodeIds]), placed.map((p) => [p.id, p.nodeIds]), "球面标签布局保留每枚未合并信标的精确成员")
 ok(laid.every((p) => Math.abs(p.lx - VIEW.cx) > VIEW.r), "两摞标签都在圆盘之外（不压在地球上）")
 ok(laid.every((p) => p.ly >= 12 && p.ly <= 204), "标签不出画布上下边")
 ok(laid.every((p) => p.end === (p.lx < VIEW.cx)), "左侧标签右对齐、右侧标签左对齐")

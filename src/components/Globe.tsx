@@ -360,7 +360,8 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     ))))
     const scale = Math.min(box.w / frame.w, box.h / frame.h)
     // 一侧还剩多少余量（用户单位）：宽屏是"容器比画布宽"留下的空白，窄屏约等于 0。
-    const room = (box.w / scale - frame.w) / 2
+    // 手机按最终 viewBox 宽度决定高度，左右余量只由 pad 提供，避免高度与 pad 相互反馈。
+    const room = narrow ? 0 : (box.w / scale - frame.w) / 2
     // 撑开最多 36：再长宁可截字（见 labelMax），也不能让地球被挤小一圈 ——
     // 460 的画布撑到 532 已经让圆盘小 13%，再多就不是"复刻"那个地球了。
     // 标签距边缘的余量会跟随圆盘半径变化；默认是上游的 123。
@@ -371,7 +372,11 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
       room,
       viewBox: pad ? `${-pad.toFixed(1)} 0 ${(frame.w + pad * 2).toFixed(1)} ${frame.h}` : `0 0 ${frame.w} ${frame.h}`,
     }
-  }, [mode, box, points, measured, frame])
+  }, [mode, box, points, measured, frame, narrow])
+  const mobileHeight = box
+    ? mode === "2d" ? Math.min(250, (box.w - 24) / 2 + 40)
+      : Math.min(250 * frame.h / VIEW.h, box.w * frame.h / (frame.w + canvas.pad * 2))
+    : 180
   // 100% 保留获批信标大小，再按缩放倍率同步核心、光晕和命中区域。
   const pixelScale = box && box.w > 0 && box.h > 0
     ? Math.max((frame.w + canvas.pad * 2) / box.w, frame.h / box.h)
@@ -417,7 +422,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   return (
     <Tooltip.Provider delayDuration={0}>
     <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"}>
-      <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h } as CSSProperties}>
+      <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h, "--globe-mobile-height": `${mobileHeight}px` } as CSSProperties}>
         <div
           ref={host}
           className="globe-atlas"
@@ -632,12 +637,6 @@ function Pin({ p, hitArea, members, markerScale, glowId, active, tooltipOpen, ch
           : <circle className="globe-pin-highlight" cx={-0.768} cy={-0.864} r={0.384} />}
         </g>
       </g>
-      {/* 多节点地点只画一枚信标，旁边显示台数；每个成员的名称分别列在两侧。 */}
-      {labels.length > 0 && p.count > 1 && (
-        <text className="globe-count" aria-hidden="true" x={p.px + 10.5 * markerScale} y={p.py - 9.5 * markerScale}>
-          {p.count}
-        </text>
-      )}
       {labels.map((label) => <text key={label.key} className="globe-label" aria-hidden="true" data-label-node={label.id} data-pin-key={p.key} x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
         {label.label}
       </text>)}

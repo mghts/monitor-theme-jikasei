@@ -263,6 +263,8 @@ export function SummaryCards({ nodes, finance = false, searching = false }: { no
   const series = speedSeriesOf(nodes)
   // 折算说明：只列真的用到过的币种——各站的账混着 USD / EUR / CNY 记，合起来必须说明口径。
   const note = fxNote(budget.used, budget.skipped)
+  const monthlyCoverage = budget.monthlyCount < nodes.length ? `${budget.monthlyCount}/${nodes.length}` : `${budget.monthlyCount}`
+  const remainingCoverage = budget.remainingCount < nodes.length ? `${budget.remainingCount}/${nodes.length}` : `${budget.remainingCount}`
 
   return (
     /* 版式照参考站：`sm` 起两列、`lg` 起四列。**手机是一列而不是参考站的两列**——参考站每张
@@ -276,11 +278,11 @@ export function SummaryCards({ nodes, finance = false, searching = false }: { no
           <Pair>
             <Block title="月度预算" hint={`各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。${note}`}>
               <Big>{budget.monthly === null ? "—" : `≈${cny(budget.monthly)}`}</Big>
-              <Foot>{budget.monthlyCount ? `${budget.monthlyCount} 台计费` : "未记录价格"}</Foot>
+              <Foot>{budget.monthlyCount ? `${monthlyCoverage} 台计费` : budget.skipped.length ? "缺少汇率" : "未记录价格"}</Foot>
             </Block>
-            <Block title="剩余价值" hint={`已经付掉、还没用掉的那一段：价格 × 剩余天数 ÷ 周期天数；无到期日与一次性买断的不计入。${note}`}>
+            <Block title="剩余价值" hint={`已经付掉、还没用掉的那一段：价格 × 剩余天数 ÷ 周期天数；没填价格、无到期日与一次性买断的不计入。${note}`}>
               <Big>{budget.remaining === null ? "—" : `≈${cny(budget.remaining)}`}</Big>
-              <Foot>{budget.remainingCount ? `${budget.remainingCount} 台未到期` : "无预付到期"}</Foot>
+              <Foot>{budget.remainingCount ? `${remainingCoverage} 台未到期` : budget.skipped.length ? "缺少汇率" : "无预付到期"}</Foot>
             </Block>
           </Pair>
 

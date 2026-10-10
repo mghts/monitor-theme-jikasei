@@ -8,7 +8,7 @@
 //      都在 summarize 里，改一处很容易让另一处跟着变；
 //   ③ 预算版（1.10.0）把前两张各排两块读数：第一张「月度预算 + 剩余价值」、第二张「节点 + 最忙节点」，
 //      且照参考图节点在左、最忙节点在右，两块分居卡片两端、下沿对齐——这是纯几何，只能量；
-//   ④ 金额口径（各币种按固定汇率折成人民币、一次性买断/没填价格/没有到期日的不计入）与降级
+//   ④ 金额口径（各币种按固定汇率折成人民币、一次性买断/没填价格不计入，剩余价值要求到期日）与降级
 //      （一个可计的都没有时写「—」而不是 ¥0.00）；
 //   ⑤ 走势线要等采样攒到两个点才画，冷启动那儿是空的——这条得等出来，不能看着空就当坏了；
 //   ⑥ 全站掉线时的降级（「—」「无在线节点」而不是 0%）。
@@ -113,6 +113,14 @@ const EXOTIC = {
     base(2, '人民币机', { online: true, price: 20, currency: 'CNY', billing_cycle: 'monthly', expires_in: 10 }),
   ],
 }
+const RARE_CURRENCY_FLEET = {
+  nodes: [
+    ...Array.from({ length: 26 }, (_, i) => base(i + 1, `已知币种节点 ${i + 1}`, { price: 20, currency: 'CNY', billing_cycle: 'monthly', expires_in: 15 })),
+    base(27, '匈牙利币节点', { price: 600, currency: 'HUF', billing_cycle: 'monthly', expires_in: 18 }),
+    base(28, '挪威克朗节点', { price: 72, currency: 'NOK', billing_cycle: 'yearly', expires_in: 192 }),
+    base(29, '免费节点', { price: 0, currency: 'USD', billing_cycle: 'monthly' }),
+  ],
+}
 
 /** 一次性买断：两块都不计入（那是「买断」，没有每月、也没有剩余天数）。 */
 const ONCE_ONLY = {
@@ -132,7 +140,7 @@ const MAX_MB = { nodes: [base(1, 'Node A', { online: true, metrics: metrics({ cp
    打成省略号（实拍 ≈¥2,803.… ）。 */
 const BIG_MONEY = { nodes: [base(1, 'Node A', { online: true, price: 3000, currency: 'CNY', billing_cycle: 'yearly', expires_in: 341, metrics: metrics({ cpu: 12.5, net_rx: KB, net_tx: KB }) })] }
 
-const VARIANTS = { mixed: MIXED, down: ALL_DOWN, tied: TIED, free: NO_PRICE, exotic: EXOTIC, once: ONCE_ONLY, long: LONG_KB, maxkb: MAX_KB, maxmb: MAX_MB, bigmoney: BIG_MONEY,
+const VARIANTS = { mixed: MIXED, down: ALL_DOWN, tied: TIED, free: NO_PRICE, exotic: EXOTIC, rare: RARE_CURRENCY_FLEET, unknownonly: { nodes: [EXOTIC.nodes[0]] }, once: ONCE_ONLY, long: LONG_KB, maxkb: MAX_KB, maxmb: MAX_MB, bigmoney: BIG_MONEY,
   // 分组跟随（第 12 组）：站点里**只有某一个分组那几台**——当对照用。
   // 概览卡片在「全部」档切到某个分组时的数字，必须与「站点里只有这几台」时逐字相同。
   gusa: { nodes: [MIXED.nodes[0]] }, geu: { nodes: [MIXED.nodes[1], MIXED.nodes[2]] }, gnone: { nodes: [MIXED.nodes[3]] } }
@@ -176,10 +184,12 @@ await new Promise((r) => server.listen(PORT, '127.0.0.1', r))
 /* ------------------------------------------------------------------ 浏览器 */
 
 const CHROME = [
+  process.env.CHROME,
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   '/usr/bin/google-chrome', '/usr/bin/chromium',
-].find((p) => existsSync(p)) || 'chrome'
+].find((p) => p && existsSync(p)) || 'chrome'
 
 const chrome = spawn(CHROME, [
   '--headless=new', `--remote-debugging-port=${CDP_PORT}`, '--remote-allow-origins=*',
@@ -247,6 +257,7 @@ const PROBE = `JSON.stringify((() => {
         // 一块读数由几段组成：参考站那种「小标签 / 大数 / 一行小字」= 3 段。
         parts: b.children.length,
         foot: fr ? Math.round(fr.bottom) : null,
+        footClip: foot ? foot.scrollWidth - foot.clientWidth : 0,
       }
     })
     return {
@@ -468,7 +479,7 @@ let classicNet = null
   check('预算版：月度预算 ≈¥939.51（年付摊到月、季付摊到月、掉线那台也算）+ 4 台计费',
     block(dom, '月度预算').text === '月度预算 | ≈¥939.51 | 4 台计费', block(dom, '月度预算').text)
   check('预算版：剩余价值 ≈¥963.26（按剩余天数折）+ 3 台未到期（没有到期日的那台不计）',
-    block(dom, '剩余价值').text === '剩余价值 | ≈¥963.26 | 3 台未到期', block(dom, '剩余价值').text)
+    block(dom, '剩余价值').text === '剩余价值 | ≈¥963.26 | 3/4 台未到期', block(dom, '剩余价值').text)
   check('预算版：节点与最忙节点两块与原版逐字一致',
     tile(dom, '节点').blocks.map((b) => b.text).join(' | ') === '节点 | 3 / 4 | 1 台离线 | 最忙节点 | 51.0% | Node B',
     tile(dom, '节点').blocks.map((b) => b.text).join(' | '))
@@ -516,10 +527,31 @@ let classicNet = null
 
   const exotic = await render({ listTop: 'budget' }, 'exotic', 'exotic')
   check('没有汇率的币种：只算人民币那台（月 ≈¥20.00 / 剩 ≈¥6.67）',
-    block(exotic, '月度预算').text === '月度预算 | ≈¥20.00 | 1 台计费' && block(exotic, '剩余价值').text === '剩余价值 | ≈¥6.67 | 1 台未到期',
+    block(exotic, '月度预算').text === '月度预算 | ≈¥20.00 | 1/2 台计费' && block(exotic, '剩余价值').text === '剩余价值 | ≈¥6.67 | 1/2 台未到期',
     `${block(exotic, '月度预算').text} ／ ${block(exotic, '剩余价值').text}`)
   check('没有汇率的币种：提示里点名（XYZ 没有汇率，未计入）',
     block(exotic, '月度预算').hint.includes('XYZ 没有汇率，未计入'), block(exotic, '月度预算').hint)
+
+  const unknownOnly = await render({ listTop: 'budget' }, 'unknown-only', 'unknownonly')
+  check('全部币种未知：不把已有价格误报为未记录价格',
+    block(unknownOnly, '月度预算').text === '月度预算 | — | 缺少汇率' && block(unknownOnly, '剩余价值').text === '剩余价值 | — | 缺少汇率',
+    `${block(unknownOnly, '月度预算').text} ／ ${block(unknownOnly, '剩余价值').text}`)
+
+  const rare = await render({ listTop: 'budget' }, 'rare-currency-29', 'rare')
+  check('29节点：NOK/HUF正确折算，零价节点仍不计费，显示28/29而非监控总数',
+    block(rare, '月度预算').text === '月度预算 | ≈¥536.52 | 28/29 台计费' && block(rare, '剩余价值').text === '剩余价值 | ≈¥293.90 | 28/29 台未到期',
+    `${block(rare, '月度预算').text} ／ ${block(rare, '剩余价值').text}`)
+  check('新增汇率提示准确标明ECB参考报价的日期与币种，零价USD不出现在折算清单',
+    block(rare, '月度预算').hint.includes('2026-10-09') && block(rare, '月度预算').hint.includes('HUF') && block(rare, '月度预算').hint.includes('NOK') && !block(rare, '月度预算').hint.includes('USD'),
+    block(rare, '月度预算').hint)
+  for (const width of [320, 390, 1024, 1440]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: width < 700 })
+    const view = await render({ listTop: 'budget' }, `rare-coverage-${width}`, 'rare')
+    check(`${width}px：预算覆盖比例和两个金额完整显示`,
+      ['月度预算', '剩余价值'].every((title) => block(view, title).text.includes('28/29') && block(view, title).footClip <= 0 && block(view, title).clip <= 0),
+      ['月度预算', '剩余价值'].map((title) => `${title}: ${block(view, title).text}, footClip=${block(view, title).footClip}, amountClip=${block(view, title).clip}`).join(' ／ '))
+  }
+  await send('Emulation.setDeviceMetricsOverride', WIDE)
 }
 
 /* 5) 全掉线：最忙节点与网速的降级（两副面孔都要） */

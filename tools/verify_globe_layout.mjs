@@ -3,9 +3,9 @@
 //      （收口没沿地平线走时，实测抓过 168.9 单位一步的弦，几乎就是直径）
 //   ② 定位点、连线、线路弧都落在圆盘里（≤ 半径）
 //   ③ 地区标签互不重叠、也不被 SVG 视口裁切
-// 七种视口均测默认与 50% / 150% 缩放；字号与命中行为由 verify_globe.mjs 另行验收。
+// 八种视口均测默认与 50% / 150% 缩放；字号与命中行为由 verify_globe.mjs 另行验收。
 //
-// 用法：node tools/verify_globe_layout.mjs
+// 用法：node tools/verify_globe_layout.mjs；LAYOUT_CHECK_GROUP=mobile 仅测320/360/390/430px。
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -194,6 +194,10 @@ const PROBE = `(() => {
   }
   const caption = svg.querySelector('.globe-caption')?.getBoundingClientRect()
   const captionOverlap = caption ? labels.filter((b) => b.screen.b > caption.top + 0.5).map((b) => b.full) : ['找不到底部经纬度文案']
+  const captionClipped = !caption || caption.left < svgBox.left - 0.5 || caption.right > svgBox.right + 0.5 || caption.top < svgBox.top - 0.5 || caption.bottom > svgBox.bottom + 0.5
+  const toolbar = document.querySelector('.globe-toolbar')?.getBoundingClientRect()
+  const dockOverlap = toolbar ? labels.filter((b) => b.screen.b > toolbar.top + 0.5).map((b) => b.full) : ['找不到底角控件']
+  if (toolbar && caption && caption.bottom > toolbar.top + 0.5) dockOverlap.push('底部经纬度文案')
   // 标签本来就摆在圆盘两侧那两摞里（viewBox 460 宽、盘只占中间 184），所以「越出地平线」是设计。
   // 真正要钉住的是：**没有被 viewBox 裁掉的字**。
   const vb = (svg.getAttribute('viewBox') || '0 0 460 240').split(/ +/).map(Number)
@@ -213,13 +217,14 @@ const PROBE = `(() => {
     const origin = stems.length === 1 ? num(stems[0].getAttribute('d')).slice(0, 2) : []
     if (names.length !== 1 || stems.length !== 1 || origin.length !== 2 || Math.abs(origin[0] - item.x) > 0.15 || Math.abs(origin[1] - item.y) > 0.15) memberIssues.push('成员 ' + item.id + ' 标签/引线或起点不符')
   }
-  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, memberIssues, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, captionOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
+  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, countLabels: svg.querySelectorAll('.globe-count').length, memberIssues, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, captionOverlap, captionClipped, dockOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
 })()`
 
 let pass = 0, fail = 0
 const check = (name, ok, extra = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ' — ' + extra : ''}`); if (ok) pass++; else fail++ }
 
-const SIZES = process.env.ONLY ? [[Number(process.env.ONLY), 780, 'only']] : [[1440, 900, '桌面 1440'], [1024, 768, '小桌面 1024'], [768, 1024, '平板 768'], [560, 900, '窄窗 560'], [430, 900, '大手机 430'], [390, 844, '手机 390'], [360, 780, '小手机 360']]
+const PHONE_SIZES = [[430, 900, '大手机 430'], [390, 844, '手机 390'], [360, 780, '小手机 360'], [320, 720, '窄手机 320']]
+const SIZES = process.env.ONLY ? [[Number(process.env.ONLY), 780, 'only']] : process.env.LAYOUT_CHECK_GROUP === 'mobile' ? PHONE_SIZES : [[1440, 900, '桌面 1440'], [1024, 768, '小桌面 1024'], [768, 1024, '平板 768'], [560, 900, '窄窗 560'], ...PHONE_SIZES]
 for (const [w, h, tag] of SIZES) {
   console.log(`\n=== ${tag} ${w}×${h} ===`)
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 500 })
@@ -265,9 +270,11 @@ for (const [w, h, tag] of SIZES) {
     check(`${tag}·${label} 贴地平线的收口没有横跨圆盘的长弦`, d.maxChord <= 16 * scale + 0.1, `最长 ${d.maxChord.toFixed(1)} / 上限 ${(16 * scale).toFixed(1)} @ ${d.maxChordAt}`)
     check(`${tag}·${label} 定位点/连线都在圆盘内`, d.outside.length === 0, d.outside.slice(0, 4).join(' | '))
     check(`${tag}·${label} 同地点每成员保留独立标签与同起点引线`, d.memberIssues.length === 0, d.memberIssues.slice(0, 4).join(' | '))
+    check(`${tag}·${label} 信标旁没有台数文本`, d.countLabels === 0, 'globe-count=' + d.countLabels)
     check(`${tag}·${label} 地区标签互不重叠`, d.overlaps.length === 0, d.overlaps.slice(0, 3).join(' | '))
     check(`${tag}·${label} 地区标签都落在 SVG 盒里（没有半个字被视口裁掉）`, d.clipped.length === 0, `盒宽 ${d.hostW}｜${d.clipped.slice(0, 3).join(' | ')}`)
     check(`${tag}·${label} 底部经纬度文案在所有标签下方`, d.captionOverlap.length === 0, d.captionOverlap.slice(0, 3).join(' | '))
+    check(`${tag}·${label} 底部经纬度文案完整，标签与说明不覆盖底角控件`, !d.captionClipped && d.dockOverlap.length === 0, d.dockOverlap.slice(0, 3).join(' | '))
     if (d.truncated.length) console.log(`      截断 ${d.truncated.length} 条：${d.truncated.slice(0, 3).join(' | ')}`)
     // 宽屏地图变大后，长名称可能需要省略；有实际余量却省略仍然属于回归。
     if (tag.startsWith('桌面 1440') && zoom === 100) check(`${tag}·${label} 全文有实际余量时不截字`, d.unnecessaryTruncation.length === 0, d.unnecessaryTruncation.slice(0, 3).join(' | '))

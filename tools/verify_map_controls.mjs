@@ -3,6 +3,7 @@
 // MAP_BASELINE_DIST 可指向保留的旧 dist，实测同夹具的地图尺寸作为前后对照。
 // MAP_CHECK_GROUP=interactions 仅运行节点悬停、选择与实时更新，便于失败后定向复验。
 // MAP_CHECK_GROUP=locations 仅运行小队同地点合并、逐成员引线、缩放与准确详情。
+// MAP_CHECK_GROUP=mobile-layout 对比保留旧版的手机上下留白，并检查标签、控件与节点交互。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -20,10 +21,11 @@ const DIST = resolve(process.env.MAP_DIST || 'dist')
 const BASELINE_DIST = process.env.MAP_BASELINE_DIST ? resolve(process.env.MAP_BASELINE_DIST) : null
 const INTERACTIONS_ONLY = process.env.MAP_CHECK_GROUP === 'interactions'
 const LOCATIONS_ONLY = process.env.MAP_CHECK_GROUP === 'locations'
+const MOBILE_LAYOUT_ONLY = process.env.MAP_CHECK_GROUP === 'mobile-layout'
 const NEIGHBORS_ONLY = LOCATIONS_ONLY && process.env.MAP_LOCATION_NEIGHBORS_ONLY === '1'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
-let servingDist = TARGETED ? DIST : BASELINE_DIST || DIST
+let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -222,6 +224,9 @@ function inspect() {
   const ink = [...labels, ...pinBoxes, ...(caption ? [{ text: 'caption', ...rect(caption) }] : [])]
   const controlObscures = controls.filter((control) => control.visible).flatMap((control) => ink.filter((item) => intersects(control, item)).map((item) => `${control.name}:${item.text}`))
   const projection = svg.querySelector('.globe-disk,.globe-map-frame')
+  const bodyInk = [...(projection ? [rect(projection)] : []), ...labels]
+  const bodyTop = bodyInk.length ? Math.min(...bodyInk.map((item) => item.y)) : null
+  const bodyBottom = bodyInk.length ? Math.max(...bodyInk.map((item) => item.bottom)) : null
   const colorContext = document.createElement('canvas').getContext('2d')
   const color = (value) => {
     if (!colorContext || !value || value === 'none' || value.startsWith('url(')) return null
@@ -303,7 +308,8 @@ function inspect() {
     colors: { land: getComputedStyle(svg.querySelector('.globe-land')).fill, coast: getComputedStyle(svg.querySelector('.globe-coast')).stroke },
     clipped, overlaps, captionOverlap: caption ? labels.filter((r) => r.bottom > rect(caption).y + 1).map((r) => r.text) : ['missing caption'],
     labels: labels.length, controls, controlObscures, projection: projection ? rect(projection) : null,
-    viewportWidth: innerWidth, svg: svgBox, host: rect(panel.querySelector('.globe-atlas')),
+    bodyTop, bodyBottom, captionBox: caption ? rect(caption) : null,
+    viewportWidth: innerWidth, svg: svgBox, viewBox: svg.getAttribute('viewBox'), resizeObserverErrors: window.__mapResizeErrors || [], host: rect(panel.querySelector('.globe-atlas')),
     main: rect(panel.querySelector('.globe-main')), toolbar: rect(panel.querySelector('.globe-toolbar')),
     modeGroup: rect(panel.querySelector('.globe-map-controls')), zoomGroup: rect(panel.querySelector('.globe-controls')),
   }
@@ -509,16 +515,34 @@ function dockChecks(tag, snapshot) {
 }
 function growthChecks(tag, snapshot, width, selectedMode) {
   const previous = baseline.get(`${selectedMode}-${width}`)
-  const oldHeight = previous?.host.h ?? (width <= 720 ? 250 : 320)
+  const oldHeight = previous?.host.h ?? 320
   diagnostics.push({ label: tag, mode: selectedMode, host: snapshot.host, projection: snapshot.projection, baselineHost: previous?.host, baselineProjection: previous?.projection, widthRatio: previous?.projection && snapshot.projection ? snapshot.projection.w / previous.projection.w : null })
-  check(`${tag}：画布空间不缩小`, snapshot.host.h >= oldHeight - 0.5, `${oldHeight.toFixed(1)}→${snapshot.host.h.toFixed(1)}px`)
+  if (width > 720) check(`${tag}：画布空间不缩小`, snapshot.host.h >= oldHeight - 0.5, `${oldHeight.toFixed(1)}→${snapshot.host.h.toFixed(1)}px`)
   if (!previous) return
   const before = previous.projection
   const after = snapshot.projection
   check(`${tag}：实际地图尺寸不缩小`, before && after && after.w >= before.w - 0.5 && after.h >= before.h - 0.5, before && after ? `${before.w.toFixed(1)}×${before.h.toFixed(1)}→${after.w.toFixed(1)}×${after.h.toFixed(1)}px` : 'missing rendered projection')
 }
+function mobileWhitespaceChecks(tag, previous, snapshot) {
+  const gaps = (item) => ({
+    top: item.bodyTop - item.host.y,
+    beforeCaption: item.captionBox.y - item.bodyBottom,
+    afterCaption: item.toolbar.y - item.captionBox.bottom,
+  })
+  const measurable = [previous, snapshot].every((item) => item.projection && item.captionBox && Number.isFinite(item.bodyTop) && Number.isFinite(item.bodyBottom))
+  check(`${tag}：上下留白比较确实量到地图、标签与底注`, measurable)
+  if (!measurable) return
+  const before = gaps(previous), after = gaps(snapshot)
+  diagnostics.push({ label: tag, baselineHost: previous.host, host: snapshot.host, baselineGaps: before, gaps: after, baselineProjection: previous.projection, projection: snapshot.projection })
+  check(`${tag}：压缩画布留白而不挤小地图`, snapshot.host.h <= previous.host.h - 10 && snapshot.projection.w >= previous.projection.w - 1 && snapshot.projection.h >= previous.projection.h - 1, `${previous.host.h.toFixed(1)}→${snapshot.host.h.toFixed(1)}px；地图 ${previous.projection.w.toFixed(1)}×${previous.projection.h.toFixed(1)}→${snapshot.projection.w.toFixed(1)}×${snapshot.projection.h.toFixed(1)}px`)
+  check(`${tag}：地图上方空白减少且图形未被裁`, after.top >= -1 && after.top <= before.top - 4, `${before.top.toFixed(1)}→${after.top.toFixed(1)}px`)
+  const bottomBefore = before.beforeCaption + before.afterCaption
+  const bottomAfter = after.beforeCaption + after.afterCaption
+  check(`${tag}：地图到说明及底角控件的空白减少`, after.beforeCaption >= -1 && after.afterCaption >= -1 && bottomAfter <= bottomBefore - 4, `${bottomBefore.toFixed(1)}→${bottomAfter.toFixed(1)}px`)
+}
 function renderingChecks(tag, snapshot) {
   check(`${tag}：没有节点间装饰性路径`, snapshot.links === 0, `globe-link=${snapshot.links}`)
+  check(`${tag}：信标旁不再显示台数文本`, snapshot.countLabels === 0, `globe-count=${snapshot.countLabels}`)
   check(`${tag}：节点圈、命中区域与名称状态说明保留`, snapshot.pins.length > 0 && snapshot.pins.every((p) => p.hit && p.ring && p.title && p.count > 0), `pins=${snapshot.pins.length}`)
   markerChecks(tag, snapshot)
   sharedOriginChecks(tag, snapshot)
@@ -979,6 +1003,64 @@ async function smallLocationChecks() {
   nodes = ordinaryNodes
   await navigate()
 }
+async function mobileLayoutChecks() {
+  if (!BASELINE_DIST) throw new Error('mobile-layout 需要 MAP_BASELINE_DIST，避免未比较旧版留白就宣称改善')
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: 'window.__mapResizeErrors = []; window.addEventListener("error", event => { if (/ResizeObserver loop/i.test(event.message)) window.__mapResizeErrors.push(event.message) })' })
+  nodes = smallLocationNodes()
+  const sizes = [[320, 720], [360, 780], [390, 844], [430, 900]]
+  for (const [width, height] of sizes) {
+    await viewport(width, height)
+    await media(false)
+    for (const selectedMode of ['2d', '3d']) {
+      await preferences(selectedMode, '0')
+      for (const [key, percent] of [[null, 100], ['Home', 50], ['End', 150]]) {
+        if (key) await zoom(key)
+        const snapshot = await state(`baseline-mobile-${selectedMode}-${width}-${percent}`)
+        if (!snapshot.projection || snapshot.zoom !== percent || snapshot.mode !== selectedMode || snapshot.viewportWidth !== width || snapshot.dark) throw new Error(`旧版手机基准无效：${selectedMode}/${width}/${percent}`)
+        baseline.set(`${selectedMode}-${width}-${percent}`, snapshot)
+        if (percent === 100) await screenshot(`baseline-mobile-${selectedMode}-${width}`)
+      }
+    }
+  }
+  servingDist = DIST
+  for (const [width, height] of sizes) {
+    await viewport(width, height)
+    for (const selectedMode of ['2d', '3d']) for (const dark of [false, true]) {
+      await media(dark)
+      await preferences(selectedMode, '0')
+      const tag = `手机紧凑/${selectedMode}/${width}/${dark ? '暗' : '亮'}`
+      for (const [key, percent] of [[null, 100], ['Home', 50], ['End', 150]]) {
+        if (key) await zoom(key)
+        const snapshot = await state(`${tag}:${percent}`)
+        check(`${tag}/${percent}%：模式、主题与视口准确，缩放未导航或拖动`, snapshot.mode === selectedMode && snapshot.dark === dark && snapshot.viewportWidth === width && snapshot.zoom === percent && snapshot.drag === 'false' && snapshot.spinning === 'false' && (await nodeUi()).path === '/')
+        mobileWhitespaceChecks(`${tag}/${percent}%`, baseline.get(`${selectedMode}-${width}-${percent}`), snapshot)
+        layoutChecks(`${tag}/${percent}%`, snapshot)
+        await sleep(450)
+        const settled = await state(`${tag}:${percent}:settled`)
+        check(`${tag}/${percent}%：尺寸观察器收敛，画布与标签不持续来回变化`, Math.abs(settled.host.h - snapshot.host.h) <= 0.5 && Math.abs(settled.host.w - snapshot.host.w) <= 0.5 && settled.viewBox === snapshot.viewBox && geometry(settled) === geometry(snapshot) && JSON.stringify(settled.memberLabels) === JSON.stringify(snapshot.memberLabels) && JSON.stringify(settled.memberStems) === JSON.stringify(snapshot.memberStems) && settled.resizeObserverErrors.length === 0, `height=${snapshot.host.h.toFixed(2)}→${settled.host.h.toFixed(2)}, viewBox=${snapshot.viewBox}, errors=${JSON.stringify(settled.resizeObserverErrors)}`)
+        if (percent === 100 || width === 320) await screenshot(`compact-mobile-${selectedMode}-${width}-${dark ? 'dark' : 'light'}-${percent}`)
+      }
+      await resetZoom()
+      await hoverNode(`${tag}/悬停`, 801, true)
+      await openChoice(`${tag}/触屏选择`, 801, 'touch')
+      await screenshot(`compact-mobile-choice-${selectedMode}-${width}-${dark ? 'dark' : 'light'}`)
+      await chooseMember(`${tag}/触屏选择`, 802, 'touch')
+      await returnHome(selectedMode)
+      if (width === 390 && !dark) {
+        await zoom('End')
+        const before = await state()
+        await touchDrag(45, 0)
+        const dragged = await state(`${tag}:horizontal-touch`)
+        check(`${tag}：减少盒高后横向触摸仍拖动地图且不误开详情`, geometry(before) !== geometry(dragged) && dragged.drag === 'false' && (await nodeUi()).path === '/')
+        layoutChecks(`${tag}/触摸平移后`, dragged)
+        await evaluate(() => scrollTo(0, 0))
+        await touchDrag(0, -85)
+        check(`${tag}：竖向触摸仍滚动页面并取消地图拖动`, await evaluate(() => scrollY > 10) && (await state()).drag === 'false' && (await state()).touchAction.includes('pan-y') && (await nodeUi()).path === '/')
+        await evaluate(() => scrollTo(0, 0))
+      }
+    }
+  }
+}
 function installRafGate() {
   let next = 0
   const callbacks = new Map()
@@ -1180,6 +1262,7 @@ try {
   await media(false)
   await navigate()
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
+  if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
   check('首访默认 3D、旋转开启、两个模式按钮语义明确', initial.mode === '3d' && initial.spin === 'true' && initial.spinning === 'true' && await evaluate(() => document.querySelector('[data-map-control="mode-3d"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-map-control="mode-2d"]')?.getAttribute('aria-pressed') === 'false'))
@@ -1374,13 +1457,15 @@ try {
   await sweepContinuity()
   await aggregateMarkerChecks()
   }
-  if (!LOCATIONS_ONLY) await nodeInteractionChecks()
-  if (!TOUCH_ONLY) await smallLocationChecks()
+  if (!MOBILE_LAYOUT_ONLY) {
+    if (!LOCATIONS_ONLY) await nodeInteractionChecks()
+    if (!TOUCH_ONLY) await smallLocationChecks()
+  }
   check('验收期间无未捕获页面异常', exceptions.length === 0, exceptions.join(' ; '))
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

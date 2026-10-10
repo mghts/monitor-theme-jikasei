@@ -202,7 +202,7 @@ const READ = `(() => {
     stems: panel ? panel.querySelectorAll('.globe-stem').length : 0,
     base: panel ? panel.querySelectorAll('.globe-base').length : 0,
     selected: panel ? panel.querySelectorAll('.globe-selected').length : 0,
-    labels: labels.length, pins: pins.length, hits: hits.length,
+    labels: labels.length, countLabels: svg ? svg.querySelectorAll('.globe-count').length : 0, pins: pins.length, hits: hits.length,
     hitData: hits.map((h) => ({ node: h.getAttribute('data-node'), key: h.getAttribute('data-pin-key'), count: Number(h.getAttribute('data-count')), x: Number(h.getAttribute('cx')), y: Number(h.getAttribute('cy')), index: Number(h.getAttribute('data-index')), region: h.getAttribute('data-region'), online: h.getAttribute('data-online') === '1' })),
     memberLabels: labels.map((t) => ({ id: Number(t.getAttribute('data-label-node')), key: t.getAttribute('data-pin-key') })),
     memberStems: panel ? [...panel.querySelectorAll('.globe-stem')].map((p) => ({ id: Number(p.getAttribute('data-label-node')), key: p.getAttribute('data-pin-key'), origin: nums(p.getAttribute('d')).slice(0, 2) })) : [],
@@ -290,7 +290,7 @@ const sameSelection = (before, after) => before.url === after.url && before.card
   && JSON.stringify(before.regs.filter((r) => r.on).map((r) => r.text)) === JSON.stringify(after.regs.filter((r) => r.on).map((r) => r.text))
 const memberStructure = (state) => {
   const total = state.hitData.reduce((sum, hit) => sum + hit.count, 0)
-  return total > 0 && state.pins === state.hits && state.labels === total && state.stems === total
+  return total > 0 && state.countLabels === 0 && state.pins === state.hits && state.labels === total && state.stems === total
     && new Set(state.hitData.map((hit) => hit.key)).size === state.hits
     && new Set(state.memberLabels.map((label) => label.id)).size === total
     && state.hitData.every((hit) => {
@@ -594,7 +594,12 @@ check('★ 窄屏与桌面同档，保留名称引线且没有节点间装饰线
   `${mobile.caption} / 岸线点 ${mobile.landPts} / ${mobile.wires} 条网线 / ${mobile.sweeps} 扫掠 / ${mobile.stems} 名称引线 / ${mobile.links} 装饰线`)
 check('★ 窄屏把竖向手势让给页面滚动（touch-action: pan-y）', mobile.atlas?.touch === 'pan-y', String(mobile.atlas?.touch))
 check('窄屏面板是上下两段（单列）', String(mobile.cols).split(' ').length === 1, mobile.cols)
-check('窄屏基准画布高度增加至 250px', mobile.atlas?.h === 250, `${mobile.atlas?.h}`)
+check('窄屏画布按实际比例收紧上下留白，保留完整SVG', (() => {
+  const vb = String(mobile.viewBox).split(' ').map(Number)
+  const expected = Math.min(250 * vb[3] / 240, mobile.atlas.w * vb[3] / vb[2])
+  return mobile.atlas.h < 250 && Math.abs(mobile.atlas.h - expected) <= 1
+})(), `${mobile.atlas?.w}×${mobile.atlas?.h} / ${mobile.viewBox}`)
+check('窄屏信标旁不再显示台数文本', mobile.countLabels === 0, `globe-count=${mobile.countLabels}`)
 check('窄屏标签仍然不压地球', mobile.labelMinDist > 92, `${Math.round(mobile.labelMinDist)}`)
 check('★ 窄屏上超长的那行标签也没被裁（靠画布留白撑开）', clipped(mobile).length === 0, JSON.stringify(clipped(mobile)))
 check('★ 窄屏画布确实撑开了（桌面不需要、窄屏需要）', mobile.viewBox !== s.viewBox, `${s.viewBox} → ${mobile.viewBox}`)

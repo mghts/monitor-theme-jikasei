@@ -225,9 +225,9 @@
   .globe-atlas { height: calc(var(--globe-fit-height, 320px) * var(--globe-height-ratio, 1)); }
 }
 .globe-atlas[data-drag="true"] { cursor: grabbing; }
-/* 窄屏保留给密集节点的画布高度；底部控件独立占位，不遮标签与经纬度说明。 */
+/* 手机高度贴合投影、成员标签与底注，去掉固定高盒产生的上下空白；控件仍独立占位。 */
 @media (max-width: 720px) {
-  .globe-atlas { height: calc(250px * var(--globe-height-ratio, 1)); }
+  .globe-atlas { height: var(--globe-mobile-height, 180px); }
 }
 .globe-toolbar {
   position: absolute;
@@ -453,16 +453,6 @@
   object-fit: cover;
   box-shadow: 0 0 0 1px var(--border);
 }
-/* 多台地区针边上的台数：与针同色、小一号加粗，衬一圈底色免得压在岸线上看不清。 */
-.globe-count {
-  fill: var(--warn);
-  font-size: 7px;
-  font-weight: 600;
-  paint-order: stroke;
-  stroke: var(--card);
-  stroke-width: 1.6px;
-}
-
 /* 顶栏那枚开关：关掉时压暗，一眼看得出地球是关着的。 */
 .globe-toggle[aria-pressed="false"] { color: var(--muted-foreground); opacity: 0.6; }
 

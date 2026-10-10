@@ -1,7 +1,7 @@
 // 概览卡片「预算版」两个数的口径：折算、封顶、哪些机器不计入。
 // 跑法同另外几个：`npm test`（Node 自己剥类型，不需要 runner）。
 // 没有任何东西 import 它，所以不进 bundle。
-import { budgetOf, cny, cycleDaysOf, cycleMonthsOf, fxNote, FX_CNY } from "./money.ts"
+import { budgetOf, cny, cycleDaysOf, cycleMonthsOf, fxNote, FX_CNY, FX_REFERENCES } from "./money.ts"
 import type { Node } from "./api.ts"
 
 let failed = 0
@@ -58,6 +58,30 @@ const mixed = budgetOf([
 eq(round(mixed.monthly), round(12 * (FX_CNY.USD + FX_CNY.EUR + FX_CNY.CNY)), "三种币种折成人民币后相加")
 eq(mixed.used, ["CNY", "EUR", "USD"], "用到的币种按字母序")
 
+/* 实际漏算的两类账单：600 HUF 月付剩18天、72 NOK 年付剩192天。 */
+const huf = node({ id: 2, price: 600, currency: "HUF", billing_cycle: "monthly", expires_in: 18 })
+const nok = node({ id: 20, price: 72, currency: "NOK", billing_cycle: "yearly", expires_in: 192 })
+const hufBudget = budgetOf([huf])
+const nokBudget = budgetOf([nok])
+eq([round(hufBudget.monthly), round(hufBudget.remaining), hufBudget.monthlyCount, hufBudget.remainingCount, hufBudget.skipped], [12.32, 7.39, 1, 1, []], "HUF 月付按官方同日 EUR 交叉价计入两个金额")
+eq([round(nokBudget.monthly), round(nokBudget.remaining), nokBudget.monthlyCount, nokBudget.remainingCount, nokBudget.skipped], [4.2, 26.51, 1, 1, []], "NOK 年付月摊与剩余价值按不同周期分别计算")
+// 26台原本可折算 + 两台漏币种 + 一台未填价 = 29台，正确计账数为28而不是强行29。
+const billingFleet = [
+  ...Array.from({ length: 26 }, (_, i) => node({ id: 100 + i, price: 10, expires_in: 15 })),
+  huf, nok, node({ id: 26, price: 0, currency: "USD", expires_in: null, expires_at: null }),
+]
+const billingBefore = JSON.stringify(billingFleet)
+const billing = budgetOf(billingFleet)
+eq([billingFleet.length, billing.monthlyCount, billing.remainingCount, billing.used, billing.skipped], [29, 28, 28, ["CNY", "HUF", "NOK"], []], "29台中正确统计28台，未填价节点仍正常排除")
+eq([round(billing.monthly), round(billing.remaining)], [276.52, 163.9], "补币种后两个金额分别准确增加，不把年付当成月付")
+eq(JSON.stringify(billingFleet), billingBefore, "折算不修改节点字段或顺序")
+const normalized = budgetOf([{ ...huf, currency: " hUf \t" }, { ...nok, currency: "\nNoK " }])
+eq([round(normalized.monthly), round(normalized.remaining), normalized.monthlyCount, normalized.used, normalized.skipped], [16.52, 33.9, 2, ["HUF", "NOK"], []], "币种空白和大小写不再导致有效账单漏算")
+eq(budgetOf([huf, nok].map((n) => ({ ...n, online: false }))).monthlyCount, 2, "离线状态不影响已付账单统计")
+eq([FX_REFERENCES.HUF.date, FX_REFERENCES.NOK.date], ["2026-10-09", "2026-10-09"], "补充币种准确记录独立官方取价日期")
+eq([FX_REFERENCES.HUF.source, FX_REFERENCES.NOK.source].every((source) => source.startsWith("https://data-api.ecb.europa.eu/") && source.includes("startPeriod=2026-10-09&endPeriod=2026-10-09")), true, "补价来源可追溯到固定日期的 ECB 原始报价")
+eq([FX_CNY.CNY, FX_CNY.USD, FX_CNY.EUR, FX_CNY.GBP, FX_CNY.JPY, FX_CNY.HKD, FX_CNY.TWD, FX_CNY.SGD, FX_CNY.AUD, FX_CNY.CAD, FX_CNY.RUB], [1, 6.7179, 7.6172, 8.883, 0.0427, 0.8562, 0.211, 5.2585, 4.6909, 4.7351, 0.0795], "修复仅补两个漏币种，原11种汇率保持不变")
+
 /* 没写周期（老数据 / 手填）按月付算：这台不该整台从合计里消失。 */
 const noCycle = budgetOf([node({ price: 10, currency: "USD", billing_cycle: "", expires_in: 15 })])
 eq([round(noCycle.monthly), round(noCycle.remaining), noCycle.monthlyCount], [round(10 * FX_CNY.USD), round(10 * FX_CNY.USD * 15 / 30), 1],
@@ -77,6 +101,34 @@ const unknown = budgetOf([
   node({ id: 2, price: 10, currency: "CNY", billing_cycle: "monthly", expires_in: 10 }),
 ])
 eq([round(unknown.monthly), unknown.used, unknown.skipped, unknown.monthlyCount], [10, ["CNY"], ["XYZ"], 1], "没有汇率的币种被跳过并点名")
+const noCurrency = budgetOf([node({ price: 10, currency: " \t ", expires_in: 10 })])
+eq([noCurrency.monthly, noCurrency.remaining, noCurrency.skipped], [null, null, ["（空）"]], "空白币种没有汇率，金额显示未知而不是0")
+
+/* 汇率源异常时拒绝零、负、非有限与继承值；其他有效账单仍正常计入。 */
+const testRateBefore = Object.getOwnPropertyDescriptor(FX_CNY, "TST")
+try {
+  for (const rate of [0, -1, NaN, Infinity, -Infinity]) {
+    FX_CNY.TST = rate
+    const unavailable = budgetOf([node({ price: 100, currency: "TST", expires_in: 15 })])
+    eq([unavailable.monthly, unavailable.remaining, unavailable.monthlyCount, unavailable.remainingCount, unavailable.used, unavailable.skipped], [null, null, 0, 0, [], ["TST"]], "失效汇率不能默认为零或污染合计")
+    const partial = budgetOf([node({ price: 100, currency: "TST", expires_in: 15 }), node({ price: 10, currency: "CNY", expires_in: 15 })])
+    eq([partial.monthly, partial.remaining, partial.monthlyCount, partial.remainingCount, partial.skipped], [10, 5, 1, 1, ["TST"]], "异常汇率只排除自身，不影响其他有效账单")
+    eq(fxNote(["TST"]), "按固定汇率折算成人民币；TST 没有汇率，未计入", "失效汇率提示不写NaN/Infinity/零价")
+  }
+} finally {
+  if (testRateBefore) Object.defineProperty(FX_CNY, "TST", testRateBefore)
+  else delete FX_CNY.TST
+}
+const originalPrototype = Object.getPrototypeOf(FX_CNY)
+try {
+  Object.setPrototypeOf(FX_CNY, { AAA: 1 })
+  const inherited = budgetOf([node({ price: 10, currency: "AAA", expires_in: 15 })])
+  eq([inherited.monthly, inherited.remaining, inherited.skipped], [null, null, ["AAA"]], "币种必须在汇率表自身，不能读取继承值")
+} finally {
+  Object.setPrototypeOf(FX_CNY, originalPrototype)
+}
+const invalidPrices = budgetOf([NaN, Infinity, -Infinity, -1].map((price) => node({ price, expires_in: 15 })))
+eq([invalidPrices.monthly, invalidPrices.remaining, invalidPrices.monthlyCount, invalidPrices.remainingCount], [null, null, 0, 0], "异常价格不进入金额或计账数")
 
 /* 无到期日的机器：月度预算照算，剩余价值没有「剩多少」可说，不计入。 */
 const eternal = budgetOf([
@@ -111,6 +163,9 @@ eq(cny(0), "¥0.00", "零也写两位小数")
 eq(fxNote(["CNY"]), "按固定汇率折算成人民币", "只用人民币时不列汇率")
 eq(fxNote(["CNY", "USD"]), `按固定汇率折算（1 USD = ¥${FX_CNY.USD}，2026-09-30）`, "列用到的汇率与取价日期")
 eq(fxNote(["CNY"], ["XYZ"]), "按固定汇率折算成人民币；XYZ 没有汇率，未计入", "没有汇率的币种要点名")
+eq(fxNote(["CNY", "HUF", "NOK"]), "按固定汇率折算（1 HUF = ¥0.02054125，1 NOK = ¥0.69984602，2026-10-09）", "补充币种保留八位小数并准确显示新取价日期")
+eq(fxNote(["HUF", "NOK", "USD"]), "按固定汇率折算（1 HUF = ¥0.02054125，1 NOK = ¥0.69984602，2026-10-09；1 USD = ¥6.7179，2026-09-30）", "混合不同取价日时分别说明，不能统一假报日期")
+eq(fxNote(["XYZ"]), "按固定汇率折算成人民币；XYZ 没有汇率，未计入", "提示单独收到未知币种时也不崩溃")
 
 if (failed) {
   console.error(`\n${failed} 处不符`)

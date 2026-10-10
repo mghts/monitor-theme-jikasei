@@ -170,6 +170,26 @@ const PROBE = `(() => {
   const clipped = labels.filter(({ screen: b }) => b.l < svgBox.left - 0.5 || b.r > svgBox.right + 0.5 || b.t < svgBox.top - 0.5 || b.b > svgBox.bottom + 0.5)
     .map((b) => b.text + ' px ' + b.screen.l.toFixed(0) + ',' + b.screen.t.toFixed(0) + '→' + b.screen.r.toFixed(0) + ',' + b.screen.b.toFixed(0) + '（盒 ' + hostBox.width.toFixed(0) + '×' + hostBox.height.toFixed(0) + '）')
   const truncated = labels.filter((b) => b.full.includes('…')).map((b) => b.full)
+  // 放大后的宽屏也可能需要省略长名称；直接量全文与当前真实边界，不能只以视口宽度判断。
+  const unnecessaryTruncation = []
+  for (const text of svg.querySelectorAll('text.globe-label')) {
+    if (!(text.textContent || '').includes('…')) continue
+    const hit = text.parentElement.querySelector('.hit')
+    const node = ${JSON.stringify(NODES.nodes.map(({id, name, country}) => ({id, name, country})))}.find((item) => item.id === Number(hit?.getAttribute('data-node')))
+    if (!node || Number(hit?.getAttribute('data-count')) !== 1) continue
+    const end = text.getAttribute('text-anchor') === 'end'
+    const full = end ? node.name + ' · ' + node.country : node.country + ' · ' + node.name
+    const matrix = text.getScreenCTM()
+    const anchor = new DOMPoint(Number(text.getAttribute('x')), Number(text.getAttribute('y'))).matrixTransform(matrix)
+    const available = end ? anchor.x - svgBox.left : svgBox.right - anchor.x
+    const probe = text.cloneNode(true)
+    probe.textContent = full
+    svg.appendChild(probe)
+    const fullWidth = probe.getBoundingClientRect().width
+    probe.remove()
+    const margin = 9 * Math.abs(matrix.a) // 六单位边距及三单位描边余量。
+    if (fullWidth + margin < available - 1) unnecessaryTruncation.push(full + ' ' + fullWidth.toFixed(1) + 'px / 可用 ' + available.toFixed(1) + 'px')
+  }
   const caption = svg.querySelector('.globe-caption')?.getBoundingClientRect()
   const captionOverlap = caption ? labels.filter((b) => b.screen.b > caption.top + 0.5).map((b) => b.full) : ['找不到底部经纬度文案']
   // 标签本来就摆在圆盘两侧那两摞里（viewBox 460 宽、盘只占中间 184），所以「越出地平线」是设计。
@@ -178,7 +198,7 @@ const PROBE = `(() => {
   const outOfBox = labels.filter((b) => b.x < vb[0] - 1 || b.y < vb[1] - 1 || b.x + b.w > vb[0] + vb[2] + 1 || b.y + b.h > vb[1] + vb[3] + 1)
     .map((b) => b.text + ' @' + b.x.toFixed(0) + ',' + b.y.toFixed(0) + ' ' + b.w.toFixed(0) + '×' + b.h.toFixed(0))
   const slider = document.querySelector('.globe-controls input[type="range"]')
-  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, overlaps, spill, outOfBox, clipped, truncated, captionOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
+  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, captionOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
 })()`
 
 let pass = 0, fail = 0
@@ -233,8 +253,8 @@ for (const [w, h, tag] of SIZES) {
     check(`${tag}·${label} 地区标签都落在 SVG 盒里（没有半个字被视口裁掉）`, d.clipped.length === 0, `盒宽 ${d.hostW}｜${d.clipped.slice(0, 3).join(' | ')}`)
     check(`${tag}·${label} 底部经纬度文案在所有标签下方`, d.captionOverlap.length === 0, d.captionOverlap.slice(0, 3).join(' | '))
     if (d.truncated.length) console.log(`      截断 ${d.truncated.length} 条：${d.truncated.slice(0, 3).join(' | ')}`)
-    // 宽屏两侧的空白本来就够长名字溢出（上游靠它）——有余量还截字，说明判据算窄了。
-    if (tag.startsWith('桌面 1440') && zoom === 100) check(`${tag}·${label} 宽屏默认倍率有余量时不截字`, d.truncated.length === 0, d.truncated.slice(0, 3).join(' | '))
+    // 宽屏地图变大后，长名称可能需要省略；有实际余量却省略仍然属于回归。
+    if (tag.startsWith('桌面 1440') && zoom === 100) check(`${tag}·${label} 全文有实际余量时不截字`, d.unnecessaryTruncation.length === 0, d.unnecessaryTruncation.slice(0, 3).join(' | '))
   }
   // 后续几何验收从 100% 开始，不能留下上一趟的 150% 状态。
   await js(`document.querySelector('.globe-controls button[aria-label="重置地球缩放"]')?.click()`)

@@ -121,7 +121,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   // 完整世界不做纬度平移；放大后限制平移范围，避免拖到两极之外留下空白。
   const flatLatLimit = Math.max(0, 90 - 90 / (zoom / 100))
   const flatLat = Math.max(-flatLatLimit, Math.min(flatLatLimit, flatView.lat))
-  const [fitHeight, setFitHeight] = useState(280)
+  const [fitHeight, setFitHeight] = useState(320)
   const zoomId = useId()
   const mapClipId = useId()
   const frame = useMemo(() => mode === "2d" ? { ...zoomView(100, points.length), r: 130 } : zoomView(zoom, points.length), [mode, zoom, points.length])
@@ -151,7 +151,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
       if (list && toolbar && list.parentElement) {
         const style = getComputedStyle(list.parentElement)
         const sideHeight = list.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-        setFitHeight(Math.max(280, Math.min(360, sideHeight - toolbar.getBoundingClientRect().height)))
+        setFitHeight(Math.max(320, Math.min(400, sideHeight - toolbar.getBoundingClientRect().height)))
       }
     })
     ro.observe(el)
@@ -418,10 +418,10 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
         </div>
         <div ref={controls} className="globe-toolbar">
           <div className="globe-map-controls" role="group" aria-label="地图显示方式">
-            <Button variant="ghost" size="sm" className="globe-mode-button" data-map-control="mode-3d" aria-pressed={mode === "3d"} onClick={() => chooseMode("3d")}>3D 地球</Button>
-            <Button variant="ghost" size="sm" className="globe-mode-button" data-map-control="mode-2d" aria-pressed={mode === "2d"} onClick={() => chooseMode("2d")}>2D 地图</Button>
-            <Button variant="ghost" size="sm" className="globe-spin-button" data-map-control="spin" disabled={mode === "2d" || reduced} aria-pressed={mode === "3d" && rotationOn} title={mode === "2d" ? "2D 地图保持静止" : reduced ? "系统已开启减弱动态效果" : rotationOn ? "暂停地球自动旋转" : "开始地球自动旋转"} onClick={toggleRotation}>
-              {mode === "2d" || rotationOn ? <Pause /> : <Play />}{mode === "2d" ? "静态地图" : rotationOn ? "暂停旋转" : "开始旋转"}
+            <Button variant="ghost" size="sm" className="globe-mode-button" data-map-control="mode-3d" aria-label="3D 地球" title="3D 地球" aria-pressed={mode === "3d"} onClick={() => chooseMode("3d")}>3D<span className="globe-mode-label">地球</span></Button>
+            <Button variant="ghost" size="sm" className="globe-mode-button" data-map-control="mode-2d" aria-label="2D 地图" title="2D 地图" aria-pressed={mode === "2d"} onClick={() => chooseMode("2d")}>2D<span className="globe-mode-label">地图</span></Button>
+            <Button variant="ghost" size="sm" className="globe-spin-button" data-map-control="spin" disabled={mode === "2d" || reduced} aria-label={mode === "2d" ? "静态地图" : rotationOn ? "暂停旋转" : "开始旋转"} aria-pressed={mode === "3d" && rotationOn} title={mode === "2d" ? "2D 地图保持静止" : reduced ? "系统已开启减弱动态效果" : rotationOn ? "暂停地球自动旋转" : "开始地球自动旋转"} onClick={toggleRotation}>
+              {mode === "2d" || rotationOn ? <Pause /> : <Play />}<span className="globe-spin-label">{mode === "2d" ? "静态地图" : rotationOn ? "暂停旋转" : "开始旋转"}</span>
             </Button>
           </div>
           <div className="globe-controls" role="group" aria-label="地图缩放">

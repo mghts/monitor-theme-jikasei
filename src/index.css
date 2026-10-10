@@ -181,7 +181,7 @@
    换成本站的设计 token。规则**故意不放进 `@layer`**：SVG 内部那些类（.globe-land 等）
    上游是直接写的，不套层才能稳稳盖住 Tailwind 的工具类。
 
-   两列的比例 1.35fr / 0.65fr 照上游；桌面左栏整体居中，基准高度随地区内容增高至 360px。
+   两列的比例 1.35fr / 0.65fr 照上游；地图在扣除底部控件的区域居中，基准高度增高至 400px。
    窄到 900px 以下改成上下两段。放大或标签密集时增加画布高度，避免圆盘与文字被裁掉。 */
 .globe-panel {
   display: grid;
@@ -197,15 +197,17 @@
 }
 
 .globe-main {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: center;
   min-width: 0;
+  padding-bottom: 52px;
 }
 .globe-atlas {
   position: relative;
   flex: none;
-  height: calc(280px * var(--globe-height-ratio, 1));
+  height: calc(320px * var(--globe-height-ratio, 1));
   overflow: hidden;
   cursor: grab;
   /* 只让出竖向：手机上在地球上竖着划是滚页面（见组件注释），横着划才是转地球。 */
@@ -214,31 +216,38 @@
   -webkit-user-select: none;
 }
 @media (min-width: 900px) {
-  .globe-atlas { height: calc(var(--globe-fit-height, 280px) * var(--globe-height-ratio, 1)); }
+  .globe-atlas { height: calc(var(--globe-fit-height, 320px) * var(--globe-height-ratio, 1)); }
 }
 .globe-atlas[data-drag="true"] { cursor: grabbing; }
-/* 手机上把圆盘压低一档：460×240 的画布在 390 宽的屏上，280 高会上下各空出 38px，
-   地球只占中间那条；压在 210 就基本贴合（见 tools/verify_globe.mjs 的窄屏那几条）。 */
+/* 窄屏保留给密集节点的画布高度；底部控件独立占位，不遮标签与经纬度说明。 */
 @media (max-width: 720px) {
-  .globe-atlas { height: calc(210px * var(--globe-height-ratio, 1)); }
+  .globe-atlas { height: calc(250px * var(--globe-height-ratio, 1)); }
 }
-.globe-toolbar { padding: 4px 12px 14px; }
+.globe-toolbar {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 52px;
+  padding: 10px 12px;
+}
 .globe-map-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
   align-items: center;
-  justify-content: center;
   gap: 4px;
-  margin-bottom: 4px;
 }
 .globe-mode-button, .globe-spin-button { font-size: 12px; padding-inline: 8px; white-space: nowrap; }
 .globe-mode-button[aria-pressed="true"] { background: var(--accent); color: var(--accent-foreground); }
 .globe-controls {
   display: flex;
+  flex: 0 1 292px;
+  min-width: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 8px;
-  padding: 4px 0 0;
   color: var(--muted-foreground);
 }
 .globe-controls input {
@@ -252,10 +261,18 @@
 .globe-controls input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
 .globe-controls output { min-width: 40px; font-size: 12px; text-align: right; }
 .globe-zoom-reset { padding-inline: 8px; font-size: 12px; }
-@media (max-width: 899px) {
-  .globe-zoom-button { width: 40px; height: 40px; }
+@media (max-width: 1199px) {
+  .globe-main { padding-bottom: 60px; }
+  .globe-toolbar { height: 60px; gap: 8px; }
+  .globe-mode-label, .globe-spin-label { display: none; }
+  .globe-mode-button, .globe-spin-button, .globe-zoom-button, .globe-zoom-reset { width: 32px; min-width: 32px; height: 40px; flex: none; padding-inline: 4px; }
+  .globe-controls { gap: 4px; }
+  .globe-controls output { min-width: 30px; font-size: 11px; }
   .globe-zoom-reset, .globe-controls input { min-height: 40px; }
-  .globe-mode-button, .globe-spin-button { min-height: 40px; }
+}
+/* 极窄屏保留滑条、比例与重置；加减按钮让出横向空间，避免挤到左侧视图按钮。 */
+@media (max-width: 359px) {
+  .globe-zoom-button { display: none; }
 }
 .globe-atlas svg { display: block; width: 100%; height: 100%; color: var(--foreground); }
 /* 地球上的东西一律不吃指针事件，只有那几枚透明的命中圆吃 —— 于是"点地球"与
@@ -337,7 +354,7 @@
 /* ★ 地区行撑到 32（≈7mm）**只留给窄屏**：面板在那里是上下两段、手指操作，20px（4mm）
    点不准（WCAG 2.2 的硬线是 24）。桌面用鼠标 —— 站长 2026-10-07 看过桌面之后说
    「电脑端的地区显示改回原来那样」，于是这里按 900px 那道坎分开：桌面维持原来的行高
-   （面板也正好是 280 高的格子），窄屏才撑高。行与行之间留着 .globe-side 的 8px gap，
+   窄屏才撑高。行与行之间留着 .globe-side 的 8px gap，
    命中区不会叠到邻居身上（撑高后命中 40，正好等于行高 32 + 行距 8）。 */
 @media (max-width: 899px) {
   .globe-reg { min-height: 32px; }

@@ -325,7 +325,7 @@ check('每一行地区都配了旗子（全部那行没有）', s.flags === true
 check('没选地区时选中的只有「全部」那一行', s.regs[0].on === true && s.regs.slice(1).every((r) => !r.on), JSON.stringify(s.regs.map((r) => r.on)))
 check('侧栏标题就是「地区」（还没定位）', s.sideTitle === '地区', s.sideTitle)
 check('★ 针用主题里那个琥珀色（--warn）的空心环、标签垫了底色描边', s.pinStroke === s.warn && s.labelPaint === 'stroke', `${s.pinStroke} vs ${s.warn} / ${s.labelPaint}`)
-check('圆盘高度 280（上游同值）', s.atlas?.h === 280, `${s.atlas?.h}`)
+check('桌面基准画布高度增加至 320px', s.atlas?.h === 320, `${s.atlas?.h}`)
 check('桌面是两列（地球 1.35 : 侧栏 0.65）', String(s.cols).split(' ').length === 2, s.cols)
 check('顶栏那枚开关在、默认是按下的（默认开）', s.toggle?.pressed === 'true' && s.toggle?.w === 36 && s.toggle?.h === 36, JSON.stringify(s.toggle))
 // 顺序钉住是为了让「谁被挪走了」一眼可见。搜索那格不在这张表里 —— 它是个 <input>（收起时是
@@ -577,7 +577,7 @@ check('★ 窄屏不再降档：与桌面同档（detailed 岸线 + 30° 网 + 1
   `${mobile.caption} / 岸线点 ${mobile.landPts}（LOW 档约 120）/ ${mobile.wires} 条网线 / ${mobile.sweeps} 扫掠 / ${mobile.links} 连线`)
 check('★ 窄屏把竖向手势让给页面滚动（touch-action: pan-y）', mobile.atlas?.touch === 'pan-y', String(mobile.atlas?.touch))
 check('窄屏面板是上下两段（单列）', String(mobile.cols).split(' ').length === 1, mobile.cols)
-check('窄屏圆盘压到 210（省掉上下各 38px 的空档）', mobile.atlas?.h === 210, `${mobile.atlas?.h}`)
+check('窄屏基准画布高度增加至 250px', mobile.atlas?.h === 250, `${mobile.atlas?.h}`)
 check('窄屏标签仍然不压地球', mobile.labelMinDist > 92, `${Math.round(mobile.labelMinDist)}`)
 check('★ 窄屏上超长的那行标签也没被裁（靠画布留白撑开）', clipped(mobile).length === 0, JSON.stringify(clipped(mobile)))
 check('★ 窄屏画布确实撑开了（桌面不需要、窄屏需要）', mobile.viewBox !== s.viewBox, `${s.viewBox} → ${mobile.viewBox}`)
@@ -602,8 +602,8 @@ const tall = await read()
 check('（前置）地区内容比左栏实际内容高，居中断言不是空测',
   tall.regs.length > 35 && tall.regionsHeight > tall.controlsBox[3] - tall.atlas.box[1] + 20,
   `${tall.regs.length} 行 / 地区 ${Math.round(tall.regionsHeight)}px / 左栏 ${Math.round(tall.controlsBox[3] - tall.atlas.box[1])}px`)
-check('大量地区的基准画布高度限制在 280~360px，实际高度按标签画布比例适配',
-  tall.fitHeight >= 280 && tall.fitHeight <= 360 && tall.camera.r === 92
+check('大量地区的基准画布高度限制在 320~400px，实际高度按标签画布比例适配',
+  tall.fitHeight >= 320 && tall.fitHeight <= 400 && tall.camera.r === 92
     && Math.abs(tall.atlas.h - tall.fitHeight * tall.camera.h / 240) <= 1,
   `基准 ${tall.fitHeight}px / 画布 ${tall.camera.h} / 实际 ${tall.atlas.h}px`)
 check('★ 大量地区的密集标签没有被 SVG 水平或竖直裁切',
@@ -611,12 +611,12 @@ check('★ 大量地区的密集标签没有被 SVG 水平或竖直裁切',
 check('★ 大量地区的底部经纬度文案在所有密集标签下方',
   tall.captionBox !== null && tall.labelBox.every((box) => box[3] <= tall.captionBox[1] + 0.5),
   `标签最下沿 ${Math.max(...tall.labelBox.map((box) => box[3])).toFixed(1)} / 文案上沿 ${tall.captionBox?.[1].toFixed(1)}`)
-// globe-main 是被 grid 拉伸的整列；必须量 atlas + controls 的实际内容，量 main 自己会假绿。
-const contentMiddle = (tall.atlas.box[1] + tall.controlsBox[3]) / 2
-const panelMiddle = (tall.panelBox[1] + tall.panelBox[3]) / 2
-check('★ 左栏实际内容在高卡片里垂直居中（上下余量相同）',
-  Math.abs(contentMiddle - panelMiddle) <= 2,
-  `内容中点 ${contentMiddle.toFixed(1)} / 面板中点 ${panelMiddle.toFixed(1)}`)
+// 底部工具栏固定在两角；量实际 atlas 是否在扣除工具栏的可用区域居中，不能只量 main。
+const contentMiddle = (tall.atlas.box[1] + tall.atlas.box[3]) / 2
+const availableMiddle = (tall.mainBox[1] + tall.controlsBox[1]) / 2
+check('★ 地图在高卡片的可用区域垂直居中（上下余量相同）',
+  Math.abs(contentMiddle - availableMiddle) <= 2 && tall.atlas.box[3] <= tall.controlsBox[1] + 0.5,
+  `地图中点 ${contentMiddle.toFixed(1)} / 可用区域中点 ${availableMiddle.toFixed(1)}`)
 check('居中所需的左右列与内层地区 grid 都存在', tall.mainBox !== null && String(tall.cols).split(' ').length === 2 && tall.regionsHeight > 0, String(tall.cols))
 await shotPanel('06-many-regions-centered.png')
 

@@ -1,5 +1,6 @@
 // 本机 dist + 合成节点夹具，使用原生 Chrome/CDP；不访问线上探针，不引入依赖。
 // 用法：node tools/verify_map_controls.mjs [输出目录]；可指定 CHROME_PATH / MAP_DIST。
+// MAP_BASELINE_DIST 可指向保留的 1.30.0 dist，实测同夹具的旧图形尺寸作为前后对照。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -12,6 +13,8 @@ const parentOutput = process.argv[2] ? resolve(process.argv[2]) : tmpdir()
 mkdirSync(parentOutput, { recursive: true })
 const OUT = mkdtempSync(join(parentOutput, 'monitor-map-controls-'))
 const DIST = resolve(process.env.MAP_DIST || 'dist')
+const BASELINE_DIST = process.env.MAP_BASELINE_DIST ? resolve(process.env.MAP_BASELINE_DIST) : null
+let servingDist = BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -20,6 +23,7 @@ const CHROME = process.env.CHROME_PATH || [
 ].find(existsSync)
 if (!CHROME) throw new Error('未找到 Chrome；可设置 CHROME_PATH')
 if (!existsSync(join(DIST, 'index.html'))) throw new Error('缺少 dist/index.html；请先构建项目')
+if (BASELINE_DIST && !existsSync(join(BASELINE_DIST, 'index.html'))) throw new Error('MAP_BASELINE_DIST 缺少 index.html')
 if (typeof WebSocket === 'undefined') throw new Error('本工具需要提供原生 WebSocket 的 Node.js 版本')
 
 const MODE_KEY = 'jikasei:map_mode'
@@ -48,6 +52,8 @@ const locatedIds = nodes.filter((node) => node.country).map((node) => node.id).s
 const requests = []
 const results = []
 const evidence = []
+const baseline = new Map()
+const diagnostics = []
 const exceptions = []
 let base = 'http://127.0.0.1'
 let chrome, chromeError, ws
@@ -60,7 +66,7 @@ const check = (name, ok, detail = '') => {
 const server = createServer((req, res) => {
   const url = new URL(req.url, base)
   if (url.pathname.startsWith('/api/')) {
-    requests.push({ path: url.pathname + url.search, at: Date.now() })
+    requests.push({ path: url.pathname + url.search, at: Date.now(), dist: servingDist })
     const body = url.pathname === '/api/me' ? { authed: false, github: false, public_page: true, site_name: '地图控件验收', history_days: 30 }
       : url.pathname === '/api/nodes' ? { nodes }
         : url.pathname.endsWith('/config') ? { globeOn: true, cardStyle: 'detailed', listTop: 'groups', themeMode: 'system' }
@@ -69,8 +75,8 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     return res.end(JSON.stringify(body))
   }
-  const path = resolve(DIST, '.' + url.pathname)
-  const file = (path === DIST || path.startsWith(DIST + sep)) && existsSync(path) && statSync(path).isFile() ? path : join(DIST, 'index.html')
+  const path = resolve(servingDist, '.' + url.pathname)
+  const file = (path === servingDist || path.startsWith(servingDist + sep)) && existsSync(path) && statSync(path).isFile() ? path : join(servingDist, 'index.html')
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' })
   res.end(readFileSync(file))
 })
@@ -165,7 +171,16 @@ function inspect() {
   }
   const caption = svg.querySelector('.globe-caption')
   const spin = panel.querySelector('[data-map-control="spin"]')
-  const controls = [...panel.querySelectorAll('.globe-toolbar button,.globe-controls input')].map((el) => ({ name: el.dataset.mapControl || el.getAttribute('aria-label'), disabled: el.disabled, ...rect(el) }))
+  const controls = [...panel.querySelectorAll('.globe-toolbar button,.globe-controls input')].map((el) => {
+    const box = rect(el)
+    const hit = document.elementFromPoint(box.x + box.w / 2, box.y + box.h / 2)
+    return { name: el.dataset.mapControl || el.getAttribute('aria-label'), disabled: el.disabled, visible: box.w > 0 && box.h > 0, hittable: hit === el || el.contains(hit), ...box }
+  })
+  const intersects = (a, b) => Math.min(a.right, b.right) - Math.max(a.x, b.x) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > 1
+  const pinBoxes = [...svg.querySelectorAll('[data-node]')].map((el) => ({ text: `node:${el.dataset.node}`, ...rect(el) }))
+  const ink = [...labels, ...pinBoxes, ...(caption ? [{ text: 'caption', ...rect(caption) }] : [])]
+  const controlObscures = controls.filter((control) => control.visible).flatMap((control) => ink.filter((item) => intersects(control, item)).map((item) => `${control.name}:${item.text}`))
+  const projection = svg.querySelector('.globe-disk,.globe-map-frame')
   return {
     mode: panel.dataset.mapMode, spin: panel.dataset.mapSpin, spinning: panel.dataset.mapSpinning,
     spinPressed: spin?.getAttribute('aria-pressed'), spinDisabled: !spin || spin.disabled,
@@ -178,7 +193,10 @@ function inspect() {
     dark: document.documentElement.classList.contains('dark'), overflow: document.documentElement.scrollWidth > innerWidth + 1,
     colors: { land: getComputedStyle(svg.querySelector('.globe-land')).fill, coast: getComputedStyle(svg.querySelector('.globe-coast')).stroke },
     clipped, overlaps, captionOverlap: caption ? labels.filter((r) => r.bottom > rect(caption).y + 1).map((r) => r.text) : ['missing caption'],
-    labels: labels.length, controls, svg: svgBox, host: rect(panel.querySelector('.globe-atlas')),
+    labels: labels.length, controls, controlObscures, projection: projection ? rect(projection) : null,
+    viewportWidth: innerWidth, svg: svgBox, host: rect(panel.querySelector('.globe-atlas')),
+    main: rect(panel.querySelector('.globe-main')), toolbar: rect(panel.querySelector('.globe-toolbar')),
+    modeGroup: rect(panel.querySelector('.globe-map-controls')), zoomGroup: rect(panel.querySelector('.globe-controls')),
   }
 }
 async function state(label) {
@@ -259,12 +277,47 @@ async function screenshot(name) {
   const result = await send('Page.captureScreenshot', { format: 'png' })
   if (result.data) writeFileSync(join(OUT, `${name}.png`), Buffer.from(result.data, 'base64'))
 }
+function dockChecks(tag, snapshot) {
+  const { main, toolbar, modeGroup, zoomGroup, host } = snapshot
+  const controls = snapshot.controls.filter((r) => r.visible)
+  const within = (box, parent) => box.x >= parent.x - 1 && box.right <= parent.right + 1 && box.y >= parent.y - 1 && box.bottom <= parent.bottom + 1
+  const overlap = (a, b) => Math.min(a.right, b.right) - Math.max(a.x, b.x) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > 1
+  check(`${tag}：显示组左下、缩放组右下，底行不占画布`, modeGroup.x - main.x >= -1 && modeGroup.x - main.x <= 20 && main.right - zoomGroup.right >= -1 && main.right - zoomGroup.right <= 20 && main.bottom - toolbar.bottom <= 1 && host.bottom <= toolbar.y + 1 && within(modeGroup, toolbar) && within(zoomGroup, toolbar), `atlasBottom=${host.bottom.toFixed(1)}, dockTop=${toolbar.y.toFixed(1)}, groupGap=${(zoomGroup.x - modeGroup.right).toFixed(1)}`)
+  check(`${tag}：两组同底行且互不重叠`, Math.abs(modeGroup.bottom - zoomGroup.bottom) <= 1 && !overlap(modeGroup, zoomGroup), `bottomDifference=${(modeGroup.bottom - zoomGroup.bottom).toFixed(1)}`)
+  const hidden = snapshot.controls.filter((r) => !r.visible).map((r) => r.name).sort()
+  const expectedHidden = snapshot.viewportWidth < 360 ? ['放大地球', '缩小地球'].sort() : []
+  check(`${tag}：可见控件完整且启用项实际命中，无互相遮挡`, JSON.stringify(hidden) === JSON.stringify(expectedHidden) && controls.length === 7 - expectedHidden.length && controls.every((r) => (r.disabled || r.hittable) && r.w >= (snapshot.viewportWidth < 1200 ? 31 : 24) && r.h >= (snapshot.viewportWidth < 1200 ? 39 : 20) && within(r, toolbar)) && controls.every((a, i) => controls.slice(i + 1).every((b) => !overlap(a, b))), controls.filter((r) => (!r.disabled && !r.hittable) || !within(r, toolbar)).map((r) => r.name).join(' | '))
+  check(`${tag}：控件不遮节点、名称与地图底注`, snapshot.controlObscures.length === 0, snapshot.controlObscures.slice(0, 4).join(' | '))
+}
+function growthChecks(tag, snapshot, width, selectedMode) {
+  const previous = baseline.get(`${selectedMode}-${width}`)
+  const oldHeight = previous?.host.h ?? (width <= 720 ? 210 : 280)
+  check(`${tag}：实际画布高度增加`, snapshot.host.h > oldHeight + 20, `${oldHeight.toFixed(1)}→${snapshot.host.h.toFixed(1)}px`)
+  if (!previous) return
+  const before = previous.projection
+  const after = snapshot.projection
+  const increased = width === 1440
+  check(`${tag}：${increased ? '桌面实际地图更大' : '窄屏实际地图不缩小'}`, before && after && (increased ? after.w > before.w + 1 && after.h > before.h + 1 : after.w >= before.w - 0.5 && after.h >= before.h - 0.5), before && after ? `${before.w.toFixed(1)}×${before.h.toFixed(1)}→${after.w.toFixed(1)}×${after.h.toFixed(1)}px` : 'missing rendered projection')
+}
+async function physicalControl(key) {
+  const target = await evaluate((key) => {
+    const button = key.startsWith('mode-') || key === 'spin' ? document.querySelector(`[data-map-control="${key}"]`) : document.querySelector(`.globe-controls button[aria-label="${key}"]`)
+    if (!button || button.disabled) return null
+    const r = button.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  }, key)
+  if (!target) throw new Error(`找不到实际可点击的控件：${key}`)
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...target, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, button: 'left', clickCount: 1 })
+  await sleep(200)
+}
 function layoutChecks(tag, snapshot) {
   check(`${tag}：实际绘出陆地、定位点与标签`, snapshot.paths?.some((p) => p.kind === 'globe-land' && p.d.length > 100) && snapshot.pins.length > 0 && snapshot.labels > 0)
   check(`${tag}：路径与命中坐标有限`, snapshot.paths.every((p) => !/NaN|Infinity/.test(p.d)) && snapshot.pins.every((p) => Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))))
   check(`${tag}：控件与页面不横向溢出`, !snapshot.overflow && snapshot.controls.every((r) => r.x >= -1 && r.right <= snapshot.svg.x + snapshot.svg.w + 40 && r.h >= 20))
   check(`${tag}：标签未被画布裁切且未压底注`, snapshot.clipped.length === 0 && snapshot.captionOverlap.length === 0, [...snapshot.clipped, ...snapshot.captionOverlap].slice(0, 4).join(' | '))
   check(`${tag}：标签互不重叠`, snapshot.overlaps.length === 0, JSON.stringify(snapshot.overlaps.slice(0, 3)))
+  dockChecks(tag, snapshot)
 }
 
 try {
@@ -296,6 +349,24 @@ try {
   }
   await send('Runtime.enable')
   await send('Page.enable')
+  if (BASELINE_DIST) {
+    await viewport(1440, 1000)
+    await media(false)
+    await navigate()
+    await motion(false)
+    for (const [width, height] of [[1440, 1000], [768, 1024], [390, 844], [360, 780], [320, 720]]) {
+      await viewport(width, height)
+      for (const selectedMode of ['3d', '2d']) {
+        await mode(selectedMode)
+        await resetZoom()
+        const snapshot = await state(`baseline-${selectedMode}-${width}`)
+        if (!snapshot.projection || snapshot.zoom !== 100) throw new Error(`旧版尺寸基准无效：${selectedMode}/${width}`)
+        baseline.set(`${selectedMode}-${width}`, snapshot)
+      }
+    }
+    servingDist = DIST
+    await preferences(null, null)
+  }
   await viewport(1440, 1000)
   await media(false)
   await navigate()
@@ -389,6 +460,7 @@ try {
         await media(dark)
         const snapshot = await state(`${selectedMode}-${width}-${dark ? 'dark' : 'light'}`)
         layoutChecks(`${selectedMode}/${width}/${dark ? '暗' : '亮'}`, snapshot)
+        if (!dark) growthChecks(`${selectedMode}/${width}`, snapshot, width, selectedMode)
         check(`${selectedMode}/${width}：跟随明暗且停转状态不变`, snapshot.dark === dark && snapshot.spinning === 'false')
         if (dark) check(`${selectedMode}/${width}：陆地与海岸线实际跟随主题配色`, snapshot.colors.land !== lightColors.land && snapshot.colors.coast !== lightColors.coast)
         else lightColors = snapshot.colors
@@ -396,10 +468,25 @@ try {
       }
       for (const [key, expected] of [['Home', 50], ['End', 150]]) {
         await zoom(key)
-        const snapshot = await state()
+        const snapshot = await state(`${selectedMode}-${width}-${expected}-zoom`)
         check(`${selectedMode}/${width}：${expected}%缩放有效且不溢出`, snapshot.zoom === expected && !snapshot.overflow && snapshot.drag === 'false' && snapshot.paths.every((p) => !/NaN|Infinity/.test(p.d)))
+        dockChecks(`${selectedMode}/${width}/${expected}%`, snapshot)
+        if (width <= 390) await screenshot(`${selectedMode}-${width}-zoom-${expected}`)
       }
       await resetZoom()
+      await physicalControl('缩小地球')
+      check(`${selectedMode}/${width}：底角缩小按钮真实点击有效且不拖地图`, (await state()).zoom === 90 && (await state()).drag === 'false')
+      await physicalControl('放大地球')
+      check(`${selectedMode}/${width}：底角放大按钮真实点击有效`, (await state()).zoom === 100)
+      await physicalControl(selectedMode === '3d' ? 'mode-2d' : 'mode-3d')
+      await physicalControl(`mode-${selectedMode}`)
+      check(`${selectedMode}/${width}：左下角模式真实点击往返有效`, (await state()).mode === selectedMode && await evaluate(() => location.pathname === '/'))
+      if (selectedMode === '3d') {
+        await physicalControl('spin')
+        check(`3d/${width}：左下角旋转真实点击可开启`, (await state()).spinning === 'true')
+        await physicalControl('spin')
+        check(`3d/${width}：左下角旋转真实点击可暂停`, (await state()).spinning === 'false')
+      }
       if (width === 390) {
         const beforeHorizontal = await state()
         await touchDrag(55, 0)
@@ -411,6 +498,28 @@ try {
         await evaluate(() => scrollTo(0, 0))
       }
     }
+  }
+
+  // 320px 的极窄布局隐藏 ± 快捷按钮，滑条/读数/重置及模式组仍须真实可用。
+  await viewport(320, 720)
+  await media(false)
+  for (const selectedMode of ['3d', '2d']) {
+    await mode(selectedMode)
+    if (selectedMode === '3d') await motion(false)
+    await resetZoom()
+    await evaluate(() => scrollTo(0, 0))
+    const snapshot = await state(`${selectedMode}-320-light-diagnostic`)
+    const outside = snapshot.controls.filter((r) => r.visible && (r.x < snapshot.main.x - 1 || r.right > snapshot.main.right + 1 || (!r.disabled && !r.hittable))).map((r) => r.name)
+    const item = { label: `${selectedMode}/320`, outside, groupGap: snapshot.zoomGroup.x - snapshot.modeGroup.right, controlObscures: snapshot.controlObscures, overflow: snapshot.overflow, projection: snapshot.projection, baselineProjection: baseline.get(`${selectedMode}-320`)?.projection }
+    diagnostics.push(item)
+    dockChecks(`${selectedMode}/320/极窄`, snapshot)
+    check(`${selectedMode}/320：页面不溢出且滑条键盘仍可缩放`, !snapshot.overflow && snapshot.controls.some((r) => r.name === '地球缩放比例' && r.visible && r.hittable))
+    await zoom('Home')
+    check(`${selectedMode}/320：极窄滑条达到50%且不拖地图`, (await state()).zoom === 50 && (await state()).drag === 'false')
+    await physicalControl('重置地球缩放')
+    check(`${selectedMode}/320：极窄重置真实点击回100%`, (await state()).zoom === 100)
+    console.log(`NOTE  320px额外布局诊断 — ${JSON.stringify(item)}`)
+    await screenshot(`${selectedMode}-320-light-diagnostic`)
   }
 
   await viewport(1440, 1000)
@@ -449,7 +558,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

@@ -1,6 +1,6 @@
 // 本机 dist + 合成节点夹具，使用原生 Chrome/CDP；不访问线上探针，不引入依赖。
 // 用法：node tools/verify_map_controls.mjs [输出目录]；可指定 CHROME_PATH / MAP_DIST。
-// MAP_BASELINE_DIST 可指向保留的 1.30.0 dist，实测同夹具的旧图形尺寸作为前后对照。
+// MAP_BASELINE_DIST 可指向保留的 1.30.1 dist，实测同夹具的旧图形尺寸作为前后对照。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -186,7 +186,9 @@ function inspect() {
     spinPressed: spin?.getAttribute('aria-pressed'), spinDisabled: !spin || spin.disabled,
     zoom: Number(panel.querySelector('input[type="range"]')?.value), drag: panel.querySelector('.globe-atlas')?.dataset.drag,
     touchAction: getComputedStyle(panel.querySelector('.globe-atlas')).touchAction,
-    paths, caption: caption?.textContent, pins: [...svg.querySelectorAll('[data-node]')].map((el) => ({ id: Number(el.dataset.node), online: el.dataset.online, count: Number(el.dataset.count), region: el.dataset.region, x: el.getAttribute('cx'), y: el.getAttribute('cy') })),
+    paths, caption: caption?.textContent, pins: [...svg.querySelectorAll('[data-node]')].map((el) => ({ id: Number(el.dataset.node), online: el.dataset.online, count: Number(el.dataset.count), region: el.dataset.region, x: el.getAttribute('cx'), y: el.getAttribute('cy'), title: el.querySelector('title')?.textContent.trim(), hit: el.classList.contains('hit'), ring: [...(el.parentElement?.querySelectorAll('.globe-pin') || [])].some((ring) => Math.abs(Number(ring.getAttribute('cx')) - Number(el.getAttribute('cx'))) < 0.1 && Math.abs(Number(ring.getAttribute('cy')) - Number(el.getAttribute('cy'))) < 0.1) })),
+    nameLabels: svg.querySelectorAll('.globe-label').length, countLabels: svg.querySelectorAll('.globe-count').length,
+    stems: svg.querySelectorAll('.globe-stem').length, links: svg.querySelectorAll('.globe-link').length,
     mapFrame: !!svg.querySelector('.globe-map-frame'), globeDisk: !!svg.querySelector('.globe-disk'),
     rows: [...panel.querySelectorAll('.globe-reg')].map((el) => ({ text: el.querySelector('span')?.textContent.trim(), code: el.querySelector('img')?.getAttribute('src')?.match(/\/([^/]+)\.svg$/)?.[1], count: Number(el.querySelector('b')?.textContent), pressed: el.getAttribute('aria-pressed'), title: el.title, offline: !!el.querySelector('.globe-reg-dot') })),
     cards: [...document.querySelectorAll('[data-slot="card"] h3')].map((el) => el.textContent.trim()),
@@ -291,13 +293,27 @@ function dockChecks(tag, snapshot) {
 }
 function growthChecks(tag, snapshot, width, selectedMode) {
   const previous = baseline.get(`${selectedMode}-${width}`)
-  const oldHeight = previous?.host.h ?? (width <= 720 ? 210 : 280)
-  check(`${tag}：实际画布高度增加`, snapshot.host.h > oldHeight + 20, `${oldHeight.toFixed(1)}→${snapshot.host.h.toFixed(1)}px`)
+  const oldHeight = previous?.host.h ?? (width <= 720 ? 250 : 320)
+  diagnostics.push({ label: tag, mode: selectedMode, host: snapshot.host, projection: snapshot.projection, baselineHost: previous?.host, baselineProjection: previous?.projection, widthRatio: previous?.projection && snapshot.projection ? snapshot.projection.w / previous.projection.w : null })
+  check(`${tag}：画布空间不缩小`, snapshot.host.h >= oldHeight - 0.5, `${oldHeight.toFixed(1)}→${snapshot.host.h.toFixed(1)}px`)
   if (!previous) return
   const before = previous.projection
   const after = snapshot.projection
-  const increased = width === 1440
-  check(`${tag}：${increased ? '桌面实际地图更大' : '窄屏实际地图不缩小'}`, before && after && (increased ? after.w > before.w + 1 && after.h > before.h + 1 : after.w >= before.w - 0.5 && after.h >= before.h - 0.5), before && after ? `${before.w.toFixed(1)}×${before.h.toFixed(1)}→${after.w.toFixed(1)}×${after.h.toFixed(1)}px` : 'missing rendered projection')
+  const increased = selectedMode === '2d'
+  check(`${tag}：${increased ? '去掉标签后实际地图更大' : '3D实际地球不缩小'}`, before && after && (increased ? after.w > before.w * 1.2 && after.h > before.h * 1.2 : after.w >= before.w - 0.5 && after.h >= before.h - 0.5), before && after ? `${before.w.toFixed(1)}×${before.h.toFixed(1)}→${after.w.toFixed(1)}×${after.h.toFixed(1)}px` : 'missing rendered projection')
+}
+function renderingChecks(tag, snapshot) {
+  check(`${tag}：没有节点间装饰性路径`, snapshot.links === 0, `globe-link=${snapshot.links}`)
+  check(`${tag}：节点圈、命中区域与悬停title保留`, snapshot.pins.length > 0 && snapshot.pins.every((p) => p.hit && p.ring && p.title && p.count > 0), `pins=${snapshot.pins.length}`)
+  if (snapshot.mode === '2d') {
+    check(`${tag}：2D没有节点名称、引线和计数字样`, snapshot.nameLabels === 0 && snapshot.stems === 0 && snapshot.countLabels === 0, `names=${snapshot.nameLabels}, stems=${snapshot.stems}, counts=${snapshot.countLabels}`)
+    const { host, projection } = snapshot
+    const worldWidth = Math.min(host.w - 24, 2 * (host.h - 40))
+    const worldHeight = worldWidth / 2
+    const expectedX = host.x + (host.w - worldWidth) / 2
+    const expectedY = host.y + 8 + (host.h - 40 - worldHeight) / 2
+    check(`${tag}：矩形地图用满实际可用区且保留底注空间`, projection && Math.abs(projection.w - worldWidth) <= 2 && Math.abs(projection.h - worldHeight) <= 2 && Math.abs(projection.x - expectedX) <= 2 && Math.abs(projection.y - expectedY) <= 2, projection ? `map=${projection.w.toFixed(1)}×${projection.h.toFixed(1)}, usable=${worldWidth.toFixed(1)}×${worldHeight.toFixed(1)}` : 'missing map frame')
+  }
 }
 async function physicalControl(key) {
   const target = await evaluate((key) => {
@@ -311,12 +327,44 @@ async function physicalControl(key) {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, button: 'left', clickCount: 1 })
   await sleep(200)
 }
+async function hoverNode(tag, preferred = 4) {
+  const target = await evaluate((preferred) => {
+    const hits = [...document.querySelectorAll('svg[data-map-canvas] [data-node]')]
+    hits.sort((a, b) => Number(b.dataset.node === String(preferred)) - Number(a.dataset.node === String(preferred)))
+    for (const hit of hits) {
+      const r = hit.getBoundingClientRect()
+      const x = r.x + r.width / 2, y = r.y + r.height / 2
+      if (document.elementFromPoint(x, y)?.closest('[data-node]') !== hit) continue
+      return { id: Number(hit.dataset.node), count: Number(hit.dataset.count), title: hit.querySelector('title')?.textContent.trim(), x, y }
+    }
+    return null
+  }, preferred)
+  if (!target) throw new Error(`找不到可实际悬停的节点：${tag}`)
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y })
+  await sleep(150)
+  const node = nodes.find((n) => n.id === target.id)
+  check(`${tag}：真实悬停命中节点并保留完整名称title`, node && (target.count > 1 ? target.title?.includes(`${target.count} 台`) : target.title?.includes(node.name)) && await evaluate((id) => document.querySelector(`svg[data-map-canvas] [data-node="${id}"]`)?.matches(':hover'), target.id), `${target.id}:${target.title}`)
+  return target
+}
+async function openNodeAndReturn(tag, target, selectedMode) {
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1 })
+  const node = nodes.find((n) => n.id === target.id)
+  await waitFor((id, name) => location.pathname === `/node/${id}` && document.querySelector('h2')?.textContent === name, target.id, node.name)
+  check(`${tag}：无侧边名称后真实点针仍打开正确节点`, await evaluate(() => !!document.querySelector('main')))
+  await evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === '地图控件验收')?.click())
+  await ready()
+  await waitFor((count) => document.querySelectorAll('[data-slot="card"] h3').length === count, nodes.length)
+  check(`${tag}：详情返回保留地图模式与全部节点`, (await state()).mode === selectedMode)
+  await evaluate(() => scrollTo(0, 0))
+}
 function layoutChecks(tag, snapshot) {
-  check(`${tag}：实际绘出陆地、定位点与标签`, snapshot.paths?.some((p) => p.kind === 'globe-land' && p.d.length > 100) && snapshot.pins.length > 0 && snapshot.labels > 0)
+  check(`${tag}：实际绘出陆地与定位点，3D名称仍保留`, snapshot.paths?.some((p) => p.kind === 'globe-land' && p.d.length > 100) && snapshot.pins.length > 0 && (snapshot.mode === '2d' || snapshot.nameLabels > 0))
   check(`${tag}：路径与命中坐标有限`, snapshot.paths.every((p) => !/NaN|Infinity/.test(p.d)) && snapshot.pins.every((p) => Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))))
-  check(`${tag}：控件与页面不横向溢出`, !snapshot.overflow && snapshot.controls.every((r) => r.x >= -1 && r.right <= snapshot.svg.x + snapshot.svg.w + 40 && r.h >= 20))
+  check(`${tag}：控件与页面不横向溢出`, !snapshot.overflow && snapshot.controls.filter((r) => r.visible).every((r) => r.x >= -1 && r.right <= snapshot.svg.x + snapshot.svg.w + 40 && r.h >= 20))
   check(`${tag}：标签未被画布裁切且未压底注`, snapshot.clipped.length === 0 && snapshot.captionOverlap.length === 0, [...snapshot.clipped, ...snapshot.captionOverlap].slice(0, 4).join(' | '))
   check(`${tag}：标签互不重叠`, snapshot.overlaps.length === 0, JSON.stringify(snapshot.overlaps.slice(0, 3)))
+  renderingChecks(tag, snapshot)
   dockChecks(tag, snapshot)
 }
 
@@ -373,6 +421,7 @@ try {
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
   const initial = await state('first-visit')
   check('首访默认 3D、旋转开启、两个模式按钮语义明确', initial.mode === '3d' && initial.spin === 'true' && initial.spinning === 'true' && await evaluate(() => document.querySelector('[data-map-control="mode-3d"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-map-control="mode-2d"]')?.getAttribute('aria-pressed') === 'false'))
+  renderingChecks('首访3D', initial)
   await stable('默认旋转实际改变岸线与扫掠', true)
   const configCalls = requests.filter((r) => r.path.endsWith('/config')).length
   await motion(false)
@@ -399,6 +448,7 @@ try {
   await mode('2d')
   const flat = await state('2d-default')
   check('2D模式是真平面且无扫掠，保留旋转偏好', flat.mapFrame && !flat.globeDisk && flat.spin === 'true' && flat.spinDisabled && flat.spinning === 'false' && !flat.paths.some((p) => p.kind === 'globe-sweep'))
+  renderingChecks('默认2D', flat)
   check('2D默认显示所有可定位节点，不画缺失国家的假针', JSON.stringify([...new Set(flat.pins.map((p) => p.id))].sort((a, b) => a - b)) === JSON.stringify(locatedIds), JSON.stringify(flat.pins.map((p) => p.id)))
   check('2D保留离线节点与地区离线提示', flat.pins.some((p) => p.id === 2 && p.online === '0') && flat.rows.some((r) => r.code === 'JP' && r.count === 2 && r.offline && r.title.includes('1 台离线')))
   check('国家兜底显示全名、Unicode单引号城市正确、跨国城市不串落点', flat.rows.some((r) => r.code === 'FI' && r.text === 'Finland') && flat.rows.some((r) => r.code === 'CN' && r.text === "Xi'an") && flat.rows.some((r) => r.code === 'CN' && r.text === 'China') && flat.pins.some((p) => p.id === 13 && p.region === 'CN'))
@@ -448,7 +498,7 @@ try {
   await evaluate(() => document.querySelector('[role="group"][aria-label="分组"] button')?.click())
   await waitFor((count) => document.querySelectorAll('[data-slot="card"] h3').length === count, nodes.length)
 
-  for (const [width, height] of [[1440, 1000], [768, 1024], [390, 844], [360, 780]]) {
+  for (const [width, height] of [[1440, 1000], [768, 1024], [390, 844], [360, 780], [320, 720]]) {
     await viewport(width, height)
     for (const selectedMode of ['3d', '2d']) {
       await mode(selectedMode)
@@ -470,14 +520,31 @@ try {
         await zoom(key)
         const snapshot = await state(`${selectedMode}-${width}-${expected}-zoom`)
         check(`${selectedMode}/${width}：${expected}%缩放有效且不溢出`, snapshot.zoom === expected && !snapshot.overflow && snapshot.drag === 'false' && snapshot.paths.every((p) => !/NaN|Infinity/.test(p.d)))
+        renderingChecks(`${selectedMode}/${width}/${expected}%`, snapshot)
         dockChecks(`${selectedMode}/${width}/${expected}%`, snapshot)
         if (width <= 390) await screenshot(`${selectedMode}-${width}-zoom-${expected}`)
       }
+      if (selectedMode === '2d') {
+        const beforePan = await state()
+        await mouseDrag(30, 12)
+        const afterPan = await state(`${selectedMode}-${width}-150-pan`)
+        check(`2d/${width}：铺大地图150%仍可真实鼠标平移，松手不导航`, geometry(beforePan) !== geometry(afterPan) && afterPan.drag === 'false' && await evaluate(() => location.pathname === '/'))
+        renderingChecks(`2d/${width}/平移后`, afterPan)
+      }
       await resetZoom()
-      await physicalControl('缩小地球')
-      check(`${selectedMode}/${width}：底角缩小按钮真实点击有效且不拖地图`, (await state()).zoom === 90 && (await state()).drag === 'false')
-      await physicalControl('放大地球')
-      check(`${selectedMode}/${width}：底角放大按钮真实点击有效`, (await state()).zoom === 100)
+      const hovered = await hoverNode(`${selectedMode}/${width}`)
+      if (selectedMode === '2d') await openNodeAndReturn(`2d/${width}`, hovered, selectedMode)
+      if (width >= 360) {
+        await physicalControl('缩小地球')
+        check(`${selectedMode}/${width}：底角缩小按钮真实点击有效且不拖地图`, (await state()).zoom === 90 && (await state()).drag === 'false')
+        await physicalControl('放大地球')
+        check(`${selectedMode}/${width}：底角放大按钮真实点击有效`, (await state()).zoom === 100)
+      } else {
+        await zoom('Home')
+        check(`${selectedMode}/320：极窄滑条达到50%且不拖地图`, (await state()).zoom === 50 && (await state()).drag === 'false')
+        await physicalControl('重置地球缩放')
+        check(`${selectedMode}/320：极窄重置真实点击回100%`, (await state()).zoom === 100)
+      }
       await physicalControl(selectedMode === '3d' ? 'mode-2d' : 'mode-3d')
       await physicalControl(`mode-${selectedMode}`)
       check(`${selectedMode}/${width}：左下角模式真实点击往返有效`, (await state()).mode === selectedMode && await evaluate(() => location.pathname === '/'))
@@ -498,28 +565,6 @@ try {
         await evaluate(() => scrollTo(0, 0))
       }
     }
-  }
-
-  // 320px 的极窄布局隐藏 ± 快捷按钮，滑条/读数/重置及模式组仍须真实可用。
-  await viewport(320, 720)
-  await media(false)
-  for (const selectedMode of ['3d', '2d']) {
-    await mode(selectedMode)
-    if (selectedMode === '3d') await motion(false)
-    await resetZoom()
-    await evaluate(() => scrollTo(0, 0))
-    const snapshot = await state(`${selectedMode}-320-light-diagnostic`)
-    const outside = snapshot.controls.filter((r) => r.visible && (r.x < snapshot.main.x - 1 || r.right > snapshot.main.right + 1 || (!r.disabled && !r.hittable))).map((r) => r.name)
-    const item = { label: `${selectedMode}/320`, outside, groupGap: snapshot.zoomGroup.x - snapshot.modeGroup.right, controlObscures: snapshot.controlObscures, overflow: snapshot.overflow, projection: snapshot.projection, baselineProjection: baseline.get(`${selectedMode}-320`)?.projection }
-    diagnostics.push(item)
-    dockChecks(`${selectedMode}/320/极窄`, snapshot)
-    check(`${selectedMode}/320：页面不溢出且滑条键盘仍可缩放`, !snapshot.overflow && snapshot.controls.some((r) => r.name === '地球缩放比例' && r.visible && r.hittable))
-    await zoom('Home')
-    check(`${selectedMode}/320：极窄滑条达到50%且不拖地图`, (await state()).zoom === 50 && (await state()).drag === 'false')
-    await physicalControl('重置地球缩放')
-    check(`${selectedMode}/320：极窄重置真实点击回100%`, (await state()).zoom === 100)
-    console.log(`NOTE  320px额外布局诊断 — ${JSON.stringify(item)}`)
-    await screenshot(`${selectedMode}-320-light-diagnostic`)
   }
 
   await viewport(1440, 1000)

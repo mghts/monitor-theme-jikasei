@@ -291,7 +291,6 @@
 .globe-wire { fill: none; stroke: var(--foreground); stroke-opacity: 0.1; }
 .globe-sweep { fill: none; stroke: var(--foreground); }
 .globe-base { stroke: var(--foreground); stroke-opacity: 0.4; stroke-width: 1; }
-.globe-link { fill: none; stroke: var(--foreground); stroke-width: 0.55; opacity: 0.32; }
 .globe-stem { fill: none; stroke: var(--foreground); stroke-width: 0.75; }
 /* 针是空心的琥珀色圆环（上游那枚 #e2ad45 就是这一档）：只表示"这里有一台"，
    不表示在线与否 —— 在线/离线在下面的卡片里有话说。 */

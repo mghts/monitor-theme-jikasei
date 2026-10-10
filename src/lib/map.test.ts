@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { flatCamera, flatNodes, MAP_BOUNDS, MAP_VIEW, mapGraticule, mapLabelCamera, mapPaths, prepareMapRings } from "./map.ts"
+import { flatCamera, flatNodes, MAP_BOUNDS, MAP_VIEW, mapGraticule, mapLabelCamera, mapPaths, mapViewport, prepareMapRings } from "./map.ts"
 import type { GlobeNode } from "./globe.ts"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES, type Ring } from "./world.ts"
 
@@ -24,6 +24,23 @@ const area = (ring: Point[]) => Math.abs(ring.reduce((sum, p, i) => {
 
 // 方向与坐标独立给出预期：东西分别是两边，北在上，默认世界完整可见。
 const camera = flatCamera()
+// 宽屏按高度铺开，手机按宽度铺开；底部说明独立保留，地理投影仍然是完整的 2:1 世界。
+assert.deepEqual(mapViewport(830, 320), { w: 830, h: 320, bounds: { x: 135, y: 8, w: 560, h: 280 } })
+assert.deepEqual(mapViewport(358, 250), { w: 358, h: 250, bounds: { x: 12, y: 29.5, w: 334, h: 167 } })
+for (const [width, height] of [[286, 250], [326, 250], [734, 320], [830, 400], [1200, 320], [350, 600]]) {
+  const { w, h, bounds: b } = mapViewport(width, height)
+  close(b.w / b.h, 2, "地图宽高比")
+  assert.ok(b.x >= 12 && b.y >= 8 && w - b.x - b.w >= 12 && h - b.y - b.h >= 32)
+  assert.ok(Math.abs(b.x - 12) < 1e-8 || Math.abs(b.y - 8) < 1e-8, "至少一个方向铺到可用区域边缘")
+  const full = flatCamera(0, 0, 100, b)
+  close(full.at(-180, 90)!.x, b.x)
+  close(full.at(-180, 90)!.y, b.y)
+  close(full.at(180, -90)!.x, b.x + b.w)
+  close(full.at(180, -90)!.y, b.y + b.h)
+}
+for (const invalid of [NaN, Infinity, -Infinity, 0, -1, 48]) {
+  assert.deepEqual(mapViewport(invalid, invalid), mapViewport())
+}
 assert.equal(MAP_VIEW.viewBox, "0 0 460 240")
 assert.deepEqual(camera.at(0, 0), { x: 230, y: 115, visible: true })
 assert.deepEqual(camera.at(-180, 90), { x: 20, y: 10, visible: true })

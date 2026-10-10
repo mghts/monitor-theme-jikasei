@@ -3,16 +3,17 @@ import { Minus, Pause, Play, Plus } from "lucide-react"
 
 import {
   camera, clampLat, globeCaption, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
-  GLOBE_ZOOM, links, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, zoomView, type Placed, type Quality,
+  GLOBE_ZOOM, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
-import { flatCamera, mapGraticule, mapLabelCamera, mapPaths, prepareMapRings } from "@/lib/map"
+import { flatCamera, flatNodes, mapGraticule, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
 import type { Node } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
 /**
  * 列表页顶部的「节点地球」：正射投影的一颗地球，每台机器一枚针、一条引线连到左右两摞
- * 标签上，旁边一条一条列着地区。整套是从上游复刻过来的，几何与排布在 `@/lib/globe` 里（那里的注释写了逐点比对的办法）。
+ * 标签上，旁边一条一条列着地区。2D 只显示可点击的节点标记，地图按可用区域铺开。
+ * 几何与排布在 `@/lib/globe` 与 `@/lib/map` 里。
  *
  * 这一层负责 3D/2D 切换、重画、旋转、缩放、节点点击与地区筛选。
  * 数据（节点 → 针的落点）只在节点列表变了时算一次。
@@ -124,9 +125,13 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const [fitHeight, setFitHeight] = useState(320)
   const zoomId = useId()
   const mapClipId = useId()
-  const frame = useMemo(() => mode === "2d" ? { ...zoomView(100, points.length), r: 130 } : zoomView(zoom, points.length), [mode, zoom, points.length])
-  // 画布的实际像素尺寸：只用来算"两摞标签各自的文字还有多少余量"（见 viewBox 那段）。
+  // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
+  const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
+  const frame = useMemo(() => mode === "2d"
+    ? { w: viewport.w, h: viewport.h, cx: viewport.w / 2, cy: viewport.bounds.y + viewport.bounds.h / 2, r: viewport.bounds.w / 2 }
+    : zoomView(zoom, points.length), [mode, zoom, points.length, viewport])
+  const mapBounds = viewport.bounds
   const reduced = useReducedMotion()
   // 标签左右侧的记忆：跨帧保留，圆心附近 ±18 的机器才不会左右闪。布局函数就地写它。
   const sides = useRef(new Map<string, "L" | "R">())
@@ -222,11 +227,12 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     // 系数与上游同（0.48 度/像素横向、0.36 纵向）；纬度夹在 ±78。
     if (mode === "3d") setView({ lon: wrapLon(d.lon - dx * 0.48), lat: clampLat(d.lat + dy * 0.36) })
     else {
-      const svgScale = e.currentTarget.querySelector("svg")?.getScreenCTM()?.a
-      // SVG 包含给长标签预留的 viewBox 空间，按实际变换计算才能在窄屏上跟手。
-      const scale = svgScale && Number.isFinite(svgScale) ? svgScale : 1
-      const pixelsPerDegree = scale * 260 / 360 * zoom / 100
-      setFlatView({ lon: wrapLon(d.lon - dx / pixelsPerDegree), lat: Math.max(-flatLatLimit, Math.min(flatLatLimit, d.lat + dy / pixelsPerDegree)) })
+      const transform = e.currentTarget.querySelector("svg")?.getScreenCTM()
+      const scaleX = transform?.a && Number.isFinite(transform.a) ? transform.a : 1
+      const scaleY = transform?.d && Number.isFinite(transform.d) ? transform.d : 1
+      const pixelsPerLongitude = scaleX * mapBounds.w / 360 * zoom / 100
+      const pixelsPerLatitude = scaleY * mapBounds.h / 180 * zoom / 100
+      setFlatView({ lon: wrapLon(d.lon - dx / pixelsPerLongitude), lat: Math.max(-flatLatLimit, Math.min(flatLatLimit, d.lat + dy / pixelsPerLatitude)) })
     }
   }
 
@@ -297,7 +303,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   }, [])
   const canvas = useMemo(() => {
     const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${frame.w} ${frame.h}` }
-    if (!box || !points.length) return plain
+    if (mode === "2d" || !box || !points.length) return plain
     const ink = Math.max(0, ...points.map((p) => Math.max(
       inkWidthWith(measured, `${p.name} · ${p.code}`),
       inkWidthWith(measured, `${p.code} · ${p.name}`),
@@ -315,7 +321,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
       room,
       viewBox: pad ? `${-pad.toFixed(1)} 0 ${(frame.w + pad * 2).toFixed(1)} ${frame.h}` : `0 0 ${frame.w} ${frame.h}`,
     }
-  }, [box, points, measured, frame])
+  }, [mode, box, points, measured, frame])
   /**
    * 标签至画布边缘的距离加上留白，就是这一行最多能有多宽 ——
    * ★ 是 `max(room, pad)`，**不是** `room + pad`（这里踩过一次，`clipped` 那条护栏当时
@@ -331,12 +337,10 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
    */
   const labelMax = frame.cx - frame.r - 15 + Math.max(canvas.room, canvas.pad) - 6
 
-  // ★ 每一帧在这里算一遍：岸线（几百个点）、经纬网、标签堆叠、连线。
+  // ★ 每一帧在这里算一遍：岸线（几百个点）、经纬网和节点标记。
   // 这些函数都是纯的（标签左右侧的记忆那个 Map 由调用方持有），没有副作用。
   const cam = camera(view.lon, view.lat, frame)
-  const mapBounds = { x: frame.cx - 130, y: frame.cy - 65, w: 260, h: 130 }
   const flat = flatCamera(flatView.lon, flatLat, zoom, mapBounds)
-  const labelCamera = mode === "3d" ? cam : mapLabelCamera(flat, frame)
   const land = mode === "3d" ? landPaths(cam, prep) : mapPaths(flat, flatPrep)
   const wires = mode === "3d"
     ? graticule(cam, profile, profile.sweepCount ? sweepLonAt(sweepTime) : null)
@@ -345,16 +349,17 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   // 圆心附近 ±18 的机器（正在转到中缝上的那几台）如果每帧重新判左右，标签会在两摞之间
   // 来回跳。读它是幂等的：同一帧算多少次结果都一样，只是把"上一帧选的那一侧"记下来。
   // eslint-disable-next-line react/refs -- 跨帧记忆，见上
-  const placed = layoutLabels(labelCamera, points, sides.current, labelMax, frame.cx, measured)
-  const arcs = links(placed, profile.linkMode, frame)
+  const placed = mode === "3d" ? layoutLabels(cam, points, sides.current, labelMax, frame.cx, measured)
+    : flatNodes(points, flat).filter((point) => point.visible)
   const aim = region ? rows.find((row) => row.region.key === region)?.aim : undefined
-  const marker = aim ? labelCamera.at(aim[0], aim[1]) : null
+  const projectedAim = aim ? (mode === "3d" ? cam.at(aim[0], aim[1]) : flat.at(aim[0], aim[1])) : null
+  const marker = projectedAim && (!("visible" in projectedAim) || projectedAim.visible) ? projectedAim : null
   const flatHome = aim ? { lon: wrapLon(aim[0]), lat: 0 } : { lon: 0, lat: 0 }
   const zoomResetDisabled = zoom === GLOBE_ZOOM.default && (mode === "3d" || (flatView.lon === flatHome.lon && flatLat === flatHome.lat))
 
   return (
     <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"}>
-      <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": frame.h / VIEW.h } as CSSProperties}>
+      <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h } as CSSProperties}>
         <div
           ref={host}
           className="globe-atlas"
@@ -396,21 +401,18 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
                 style={wire.sweep >= 0 ? { strokeOpacity: sweepOpacity(dark, wire.sweep) } : undefined}
               />
             ))}
-            <line className="globe-base" x1={frame.cx - frame.r - 28} y1={frame.h - 20} x2={frame.cx + frame.r + 28} y2={frame.h - 20} />
+            <line className="globe-base" x1={mode === "3d" ? frame.cx - frame.r - 28 : mapBounds.x} y1={frame.h - 20} x2={mode === "3d" ? frame.cx + frame.r + 28 : mapBounds.x + mapBounds.w} y2={frame.h - 20} />
             <g clipPath={mode === "2d" ? `url(#${mapClipId})` : undefined}>
-              {arcs.map((arc, i) => (
-                <path key={i} className="globe-link" d={arc.d} />
+              {placed.map((p) => (
+                <Pin key={p.key} p={p} />
               ))}
-            </g>
-            {placed.map((p) => (
-              <Pin key={p.key} p={p} />
-            ))}
-            {marker && (
+              {marker && (
               <g className="globe-selected">
                 <circle className="globe-selected-ring" cx={marker.x} cy={marker.y} r={7} />
                 <circle className="globe-selected-core" cx={marker.x} cy={marker.y} r={2.4} />
               </g>
-            )}
+              )}
+            </g>
             <text className="globe-caption" x={frame.cx} y={frame.h - 8} textAnchor="middle">
               {mode === "3d" ? globeCaption(view.lon, view.lat, profile.key) : `EQUIRECTANGULAR · ${zoom}% · ${profile.key.toUpperCase()}`}
             </text>
@@ -484,23 +486,24 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
  * 手指点得中）。标签的文字外侧对齐（左侧那一摞往左收 3px，右侧往右推 3px），
  * 所以它永远不会压到引线。
  */
-function Pin({ p }: { p: Placed }) {
+function Pin({ p }: { p: Placed | FlatNode }) {
   const cx = p.px.toFixed(1)
   const cy = p.py.toFixed(1)
+  const label = "label" in p ? p : null
   return (
     <g>
-      <path className="globe-stem" d={`M ${cx} ${cy} L ${p.lx.toFixed(1)} ${p.ly.toFixed(1)}`} />
+      {label && <path className="globe-stem" d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />}
       <circle className="globe-pin" cx={cx} cy={cy} r={2.1} />
       {/* 多台地区：针边上挂一个小小的台数（标签里也写着「地区 ×N」，两处都在，
           因为标签可能被挤掉、针本身也常常落在标签的另一头）。 */}
-      {p.count > 1 && (
+      {label && p.count > 1 && (
         <text className="globe-count" x={p.px + 4.5} y={p.py - 3.5}>
           {p.count}
         </text>
       )}
-      <text className="globe-label" x={p.lx + (p.end ? -3 : 3)} y={p.ly + 3} textAnchor={p.end ? "end" : "start"}>
-        {p.label}
-      </text>
+      {label && <text className="globe-label" x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
+        {label.label}
+      </text>}
       <circle className="hit" cx={cx} cy={cy} r={9} fill="transparent" data-node={p.id} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count}>
         <title>{p.count > 1 ? `${p.region.label}：${p.count} 台（打开其中第一台）` : `打开 ${p.name}`}</title>
       </circle>

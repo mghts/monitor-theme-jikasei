@@ -2,7 +2,7 @@ import type { Camera, GlobeNode, GlobeView } from "./globe.ts"
 import type { Ring } from "./world.ts"
 
 export const MAP_VIEW = { w: 460, h: 240, viewBox: "0 0 460 240" } as const
-/** 2:1 等距矩形；组件可传更小的边框，把左右留给节点标签。 */
+/** 2:1 等距矩形；组件可按实际可用区域传入自适应边框。 */
 export const MAP_BOUNDS = { x: 20, y: 10, w: 420, h: 210 } as const
 export type MapBounds = { x: number; y: number; w: number; h: number }
 export type MapPoint = { x: number; y: number; visible: boolean }
@@ -11,6 +11,15 @@ export type PreparedMap = { rings: Ring[] }
 export type FlatNode = GlobeNode & { px: number; py: number; visible: boolean }
 type GeoBox = { left: number; right: number; bottom: number; top: number }
 const EPS = 1e-9
+
+/** 用 CSS 像素作 SVG 坐标，地图利用可用空间，底部留给投影说明，不随节点名称增高。 */
+export function mapViewport(width: number = MAP_VIEW.w, height: number = MAP_VIEW.h): { w: number; h: number; bounds: MapBounds } {
+  const w = Number.isFinite(width) && width > 48 ? width : MAP_VIEW.w
+  const h = Number.isFinite(height) && height > 48 ? height : MAP_VIEW.h
+  const mapWidth = Math.min(w - 24, 2 * (h - 40))
+  const mapHeight = mapWidth / 2
+  return { w, h, bounds: { x: (w - mapWidth) / 2, y: 8 + (h - 40 - mapHeight) / 2, w: mapWidth, h: mapHeight } }
+}
 
 /** 保留 +180/-180 各自的边框，其他经度折回一周；不对大数做可能溢出的加法。 */
 function longitude(value: number): number {

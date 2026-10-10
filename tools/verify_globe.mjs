@@ -257,19 +257,6 @@ const open = async (opts = {}) => {
 }
 
 /** 与 @/lib/globe 的 links() 同一套抽样公式：跨地区、且 (a·7 + b·3) % 8 === 1。 */
-const expectLinks = (hits) => {
-  const online = hits.filter((h) => h.online)
-  let n = 0
-  for (let a = 0; a < online.length; a++) {
-    for (let b = a + 1; b < online.length; b++) {
-      if (online[a].region === online[b].region) continue
-      if ((online[a].index * 7 + online[b].index * 3) % 8 !== 1) continue
-      n++
-    }
-  }
-  return n
-}
-
 /** ★ 标签有没有被 SVG 的视口裁掉：逐行比"文字的墨迹盒"与"SVG 视口盒"。 */
 const clipped = (st) => st.labelBox.filter(([l, t, r, b]) => l < st.svgBox[0] - 1 || r > st.svgBox[2] + 1 || t < st.svgBox[1] - 1 || b > st.svgBox[3] + 1)
 
@@ -314,7 +301,7 @@ check('每台看得见的机器一枚针、一条引线、一行字', s.pins ===
 check('★ 标签全在圆盘之外（不压在地球上）', s.labelMinDist > 92, `最近的 ${Math.round(s.labelMinDist)} > 92`)
 check('★ 没有一行标签被画布裁掉', clipped(s).length === 0, JSON.stringify(clipped(s)))
 check('标签落在画布内（y 在 12~204）', s.labelY.every((y) => y >= 12 && y <= 204), JSON.stringify(s.labelY))
-check('引线抽样与公式一致', s.links === expectLinks(s.hitData), `${s.links} 条 vs 算出的 ${expectLinks(s.hitData)}`)
+check('地球不绘制节点之间的装饰连线', s.links === 0, `${s.links} 条`)
 check('左右两摞数量均衡（差 ≤ 2）', Math.abs(s.labelSide.filter((x) => x === 'L').length - s.labelSide.filter((x) => x === 'R').length) <= 2, JSON.stringify(s.labelSide))
 check('底部文案：ORTHOGRAPHIC + 经纬度 + 档位', /^ORTHOGRAPHIC · \d+°[EW] \d+°[NS] · MEDIUM$/.test(s.caption || ''), s.caption)
 check('地区列表第一行是「全部」并给出总台数', s.regs[0]?.text === '全部' && s.regs[0]?.count === 7, JSON.stringify(s.regs[0]))
@@ -504,7 +491,7 @@ check('★ 两摞都排得整整齐齐（互不重叠、都在画布内）', (()
   return true
 })(), JSON.stringify(s.labelY))
 check('★ 岸线依旧一条都没翻到正面', s.coastOutside === 0, `${s.coastOutside}`)
-check('地区列表把 26 台分完（引线抽样与公式一致）', s.links === expectLinks(s.hitData), `${s.links} vs ${expectLinks(s.hitData)}`)
+check('密集机群也不绘制节点间装饰连线', s.links === 0, `${s.links} 条`)
 check(`没国家的机器不上地球（${FLEET.length} 台里 ${LOCATED} 台有落点，但"全部"仍是 ${FLEET.length}）`,
   s.regs[0].count === FLEET.length, JSON.stringify(s.regs[0]))
 check('★ 地区按台数从多到少（结构不变式，不写死某一套数据）',
@@ -569,12 +556,12 @@ await sleep(1600)
 const mobile = JSON.parse(await js(READ))
 check('窄屏照常画地球（不是像上游那样整块不画）', mobile.panel === true && mobile.landPts > 50, `${mobile.landPts} 个点`)
 // ★ 2026-10-07 站长看过手机上的 LOW 档后说「地球太简陋了」→ 窄屏不再降档，跟桌面同档：
-//   detailed 岸线（不是 104 点的粗草图）、30° 经纬网、1 条扫掠、引线。
+//   detailed 岸线（不是 104 点的粗草图）、30° 经纬网、1 条扫掠、节点名称引线。
 //   回退开关是 Globe.tsx 里的 NARROW_LOW_TIER（改回 true 即一行回退）；那条路径由这几条断言守着，
 //   真要回退就得连着这里一起改 —— 免得"悄悄降档"没人发现。
-check('★ 窄屏不再降档：与桌面同档（detailed 岸线 + 30° 网 + 1 扫掠 + 引线）',
-  (mobile.caption || '').indexOf('· MEDIUM') > 0 && mobile.sweeps === 1 && mobile.links > 0 && mobile.landPts > 250,
-  `${mobile.caption} / 岸线点 ${mobile.landPts}（LOW 档约 120）/ ${mobile.wires} 条网线 / ${mobile.sweeps} 扫掠 / ${mobile.links} 连线`)
+check('★ 窄屏与桌面同档，保留名称引线且没有节点间装饰线',
+  (mobile.caption || '').indexOf('· MEDIUM') > 0 && mobile.sweeps === 1 && mobile.stems > 0 && mobile.links === 0 && mobile.landPts > 250,
+  `${mobile.caption} / 岸线点 ${mobile.landPts} / ${mobile.wires} 条网线 / ${mobile.sweeps} 扫掠 / ${mobile.stems} 名称引线 / ${mobile.links} 装饰线`)
 check('★ 窄屏把竖向手势让给页面滚动（touch-action: pan-y）', mobile.atlas?.touch === 'pan-y', String(mobile.atlas?.touch))
 check('窄屏面板是上下两段（单列）', String(mobile.cols).split(' ').length === 1, mobile.cols)
 check('窄屏基准画布高度增加至 250px', mobile.atlas?.h === 250, `${mobile.atlas?.h}`)

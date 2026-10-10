@@ -125,6 +125,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const [fitHeight, setFitHeight] = useState(320)
   const zoomId = useId()
   const mapClipId = useId()
+  const beaconGlowId = useId()
   // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
   const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
@@ -323,6 +324,10 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
       viewBox: pad ? `${-pad.toFixed(1)} 0 ${(frame.w + pad * 2).toFixed(1)} ${frame.h}` : `0 0 ${frame.w} ${frame.h}`,
     }
   }, [mode, box, points, measured, frame])
+  // 信标规格按屏幕像素固定，与获批预览一致；窄屏与缩放不会把核心挤成小光点。
+  const markerScale = box && box.w > 0 && box.h > 0
+    ? Math.max((frame.w + canvas.pad * 2) / box.w, frame.h / box.h)
+    : 1
   /**
    * 标签至画布边缘的距离加上留白，就是这一行最多能有多宽 ——
    * ★ 是 `max(room, pad)`，**不是** `room + pad`（这里踩过一次，`clipped` 那条护栏当时
@@ -359,7 +364,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const zoomResetDisabled = zoom === GLOBE_ZOOM.default && (mode === "3d" || (flatView.lon === flatHome.lon && flatLat === flatHome.lat))
 
   return (
-    <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"}>
+    <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"}>
       <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h } as CSSProperties}>
         <div
           ref={host}
@@ -383,6 +388,14 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
               <clipPath id={mapClipId}>
                 <rect x={mapBounds.x} y={mapBounds.y} width={mapBounds.w} height={mapBounds.h} />
               </clipPath>
+              {(["online", "offline"] as const).map((state) => (
+                <radialGradient key={state} id={`${beaconGlowId}-${state}`}>
+                  <stop offset="0%" stopColor={`var(--globe-pin-${state})`} stopOpacity="0.55" />
+                  <stop offset="38%" stopColor={`var(--globe-pin-${state})`} stopOpacity="0.38" />
+                  <stop offset="66%" stopColor={`var(--globe-pin-${state})`} stopOpacity="0.14" />
+                  <stop offset="100%" stopColor={`var(--globe-pin-${state})`} stopOpacity="0" />
+                </radialGradient>
+              ))}
             </defs>
             {mode === "3d" ? <>
               <circle className="globe-ocean" cx={frame.cx} cy={frame.cy} r={frame.r} />
@@ -411,7 +424,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
               </g>
               )}
               {placed.map((p) => (
-                <Pin key={p.key} p={p} />
+                <Pin key={p.key} p={p} markerScale={markerScale} glowId={beaconGlowId} />
               ))}
             </g>
             <text className="globe-caption" x={frame.cx} y={frame.h - 8} textAnchor="middle">
@@ -483,10 +496,11 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
 }
 
 /**
- * 在线为实心圆，离线为空心菱形；部分离线的聚合菱形保留在线核心。
+ * 接近原版的柔光信标：核心 6.4px、外圈 11.52px（含描边）、光晕 15.04px。
+ * 在线绿芯绿圈，离线红芯红圈带短横，部分离线绿芯红圈；核心常亮且不描黑边。
  * 3D 保留引线与标签，2D 仅画标记。透明命中圆的半径与坐标保持不变。
  */
-function Pin({ p }: { p: Placed | FlatNode }) {
+function Pin({ p, markerScale, glowId }: { p: Placed | FlatNode; markerScale: number; glowId: string }) {
   const cx = p.px.toFixed(1)
   const cy = p.py.toFixed(1)
   const label = "label" in p ? p : null
@@ -494,18 +508,21 @@ function Pin({ p }: { p: Placed | FlatNode }) {
   const title = p.count > 1
     ? `${p.name}：在线 ${p.count - p.offlineCount} 台，离线 ${p.offlineCount} 台（打开其中第一台）`
     : `${p.name} · ${state === "online" ? "在线" : "离线"}（点击打开）`
-  const diamond = `M ${cx} ${(p.py - 3.6).toFixed(1)} L ${(p.px + 3.6).toFixed(1)} ${cy} L ${cx} ${(p.py + 3.6).toFixed(1)} L ${(p.px - 3.6).toFixed(1)} ${cy} Z`
   return (
     <g>
       {label && <path className="globe-stem" d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />}
-      {state === "online"
-        ? <circle className="globe-pin" data-marker-state={state} data-marker-x={cx} data-marker-y={cy} cx={cx} cy={cy} r={2.7} vectorEffect="non-scaling-stroke" />
-        : <path className="globe-pin" data-marker-state={state} data-marker-x={cx} data-marker-y={cy} d={diamond} vectorEffect="non-scaling-stroke" />}
-      {state === "mixed" && <circle className="globe-pin-core" cx={cx} cy={cy} r={1.3} />}
+      <g className="globe-beacon" data-marker-state={state} transform={`translate(${cx} ${cy}) scale(${markerScale})`}>
+        <circle className="globe-pin-halo" cx={0} cy={0} r={7.52} fill={`url(#${glowId}-${state === "online" ? "online" : "offline"})`} />
+        <circle className="globe-pin-ring" cx={0} cy={0} r={5.44} vectorEffect="non-scaling-stroke" />
+        <circle className={state === "mixed" ? "globe-pin globe-pin-core" : "globe-pin"} data-marker-state={state} data-marker-x={cx} data-marker-y={cy} cx={0} cy={0} r={3.2} />
+        {state === "offline"
+          ? <path className="globe-pin-detail" d="M -1.376 0 L 1.376 0" vectorEffect="non-scaling-stroke" />
+          : <circle className="globe-pin-highlight" cx={-0.768} cy={-0.864} r={0.384} />}
+      </g>
       {/* 多台地区：针边上挂一个小小的台数（标签里也写着「地区 ×N」，两处都在，
           因为标签可能被挤掉、针本身也常常落在标签的另一头）。 */}
       {label && p.count > 1 && (
-        <text className="globe-count" x={p.px + 4.5} y={p.py - 3.5}>
+        <text className="globe-count" x={p.px + 8.5 * markerScale} y={p.py - 7.5 * markerScale}>
           {p.count}
         </text>
       )}

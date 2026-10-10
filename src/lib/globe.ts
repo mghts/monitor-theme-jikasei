@@ -17,7 +17,7 @@
  * 不变量（改这里之前先读）：**极角超过 120° 的点不画**（`LIMB_K`，上游那行 `cosc <= 0.02`），
  * 落在背面的点直接丢、跨过边缘的线段裁到边缘上，否则地球背面的大陆会翻到正面来。
  */
-import { CITY_HINTS, COUNTRY_CITY_FALLBACK, COUNTRY_LL, type Ring } from "./world.ts"
+import { CITY_HINTS, COUNTRY_CITY_FALLBACK, COUNTRY_LL, COUNTRY_NAMES, type Ring } from "./world.ts"
 import type { Node } from "@/lib/api"
 
 /** 画布与圆盘。上游 SVG 的 `viewBox="0 0 460 240"` 就是这几个数，改它们等于换一套构图。 */
@@ -622,10 +622,15 @@ export function trimLabel(text: string, max: number, measure?: LabelMeasure): st
   return `${out.trimEnd()}…`
 }
 
-/** 节点名/分组里认出的城市线索。 */
-export function cityHint(node: Pick<Node, "name" | "group">): { ll: [number, number]; name: string } | null {
-  const text = [node.name, node.group].filter(Boolean).join(" ")
-  for (const hint of CITY_HINTS) if (hint.match.test(text)) return { ll: hint.ll, name: hint.name }
+/** 节点名优先于分组；城市/地区线索只在 hub 声明的国家内匹配。 */
+export function cityHint(node: Pick<Node, "name" | "group" | "country">): { ll: [number, number]; name: string } | null {
+  const code = (node.country || "").trim().toUpperCase()
+  for (const value of [node.name, node.group]) {
+    if (!value) continue
+    // 兼容 Xi’an、Chișinău 与 Kuala_Lumpur-01；不移除数字，避免机场码命中长词/编号。
+    const text = value.normalize("NFKD").replace(/\p{M}/gu, "").replace(/[’‘ʼ]/g, "'").replace(/[_.–—-]+/g, " ").replace(/\s+/g, " ")
+    for (const hint of CITY_HINTS) if (hint.country === code && hint.match.test(text)) return { ll: hint.ll, name: hint.name }
+  }
   return null
 }
 
@@ -634,9 +639,9 @@ export type Region = {
   key: string
   /** ISO 3166-1 alpha-2；空串 = 认不出国家。 */
   code: string
-  /** 城市英文名（线索没命中时按国家兜底，见 `COUNTRY_CITY_FALLBACK`；两者都没有才是空串）。 */
+  /** 城市/地区英文名（线索没命中时保留历史国家兜底键；两者都没有才是空串）。 */
   city: string
-  /** 地区列表里显示的文字：有城名用城名，否则用国家码。 */
+  /** 地区列表显示城市/地区名；未知城市显示国家/地区全名，不显示裸 ISO 码。 */
   label: string
   /** 这一地区的落点（经度, 纬度）：点它时地球飞过去看这里。 */
   base: [number, number]
@@ -651,8 +656,8 @@ export type Region = {
  *   ② 上游给认不出国家的节点一个 [80,30] 的兜底落点（它在图上是一枚假针），
  *      这里直接 `null` —— 认不出就不上地球，也不占地区列表的一行；下面的列表照旧有它。
  *
- * ★ 城名的来源有**两层**（与上游 `fallbackCity` 同一顺序）：名字/分组里的城市线索优先，
- * 认不出时按 `COUNTRY_CITY_FALLBACK` 兜一个国家级的城名（HK → Hong Kong 那几条）。
+ * ★ 城名的来源有**两层**（与上游 `fallbackCity` 同一顺序）：名字/分组里的同国线索优先，
+ * 认不出时保留 `COUNTRY_CITY_FALLBACK` 的历史地区键，但显示名一律使用国家/地区全名。
  * 兜底这一层移植时漏过一次：HK 于是裂成「HK」与「HK · Hong Kong」两行，同一面旗并排
  * 出现两次（站长截图里那条就是它）；上游因为无条件兜底，一个 HK 永远只有一行。
  */
@@ -663,7 +668,9 @@ export function regionOf(node: Node): Region | null {
   const base = hint?.ll ?? COUNTRY_LL[code]
   if (!base) return null
   const city = hint?.name ?? COUNTRY_CITY_FALLBACK[code] ?? ""
-  return { key: city ? `${code} · ${city}` : code, code, city, label: city || code, base: [base[0], base[1]] }
+  // HK 的已识别/兜底节点共用同一个历史地区键，显示名也保持一致。
+  const label = hint?.name ?? COUNTRY_NAMES[code] ?? "Unknown region"
+  return { key: city ? `${code} · ${city}` : code, code, city, label, base: [base[0], base[1]] }
 }
 
 export type GlobeNode = {
@@ -837,7 +844,7 @@ export type Placed = GlobeNode & {
  * （两侧的空白也算进去），窄屏上就只剩两摞标签到画布边缘的那点地方 —— 超出的字用 `…` 截掉，
  * 绝不留给 SVG 视口去裁。`measure` 是那个**真量字宽**的函数（见 `inkWidthWith`）。
  */
-export function layoutLabels(cam: Camera, points: GlobeNode[], sides: Map<string, "L" | "R">, maxWidth = Infinity, cx: number = cam.view.cx, measure?: LabelMeasure): Placed[] {
+export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode[], sides: Map<string, "L" | "R">, maxWidth = Infinity, cx: number = cam.view.cx, measure?: LabelMeasure): Placed[] {
   const items: Placed[] = []
   for (const point of points) {
     const p = cam.at(point.ll[0], point.ll[1])

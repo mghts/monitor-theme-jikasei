@@ -189,7 +189,7 @@ const READ = `(() => {
     panelBox: panel ? rect(panel) : null,
     mainBox: main ? rect(main) : null,
     fitHeight: main ? parseFloat(getComputedStyle(main).getPropertyValue('--globe-fit-height')) : null,
-    controlsBox: controls ? rect(controls) : null,
+    controlsBox: controls ? rect(panel.querySelector('.globe-toolbar') || controls) : null,
     regionsHeight: panel && panel.querySelector('.globe-regions') ? panel.querySelector('.globe-regions').getBoundingClientRect().height : null,
     zoom: slider ? { min: Number(slider.min), max: Number(slider.max), step: Number(slider.step), value: Number(slider.value), label: slider.getAttribute('aria-label'), text: slider.getAttribute('aria-valuetext'), output: controls.querySelector('output')?.textContent, buttons: [...controls.querySelectorAll('button')].map((b) => ({ label: b.getAttribute('aria-label'), disabled: b.disabled })) } : null,
     shade: svg ? svg.querySelectorAll('#globe-shade stop').length : 0,
@@ -518,8 +518,8 @@ check('地区台数合计 = 有落点的台数（没落点的不进地区列表�
 check('★ 一个 HK 只有一行（带线索与不带线索不再裂成「HK」+「Hong Kong」两行）',
   s.regs.filter((r) => r.text === 'Hong Kong').length === 1 && s.regs.find((r) => r.text === 'Hong Kong')?.count === 5 && !s.regs.some((r) => r.text === 'HK'),
   JSON.stringify(s.regs.map((r) => [r.text, r.count])))
-check('★ 兜底的国家不出裸码行（HK/TW/SG/JP/KR 都有城名；US/DE 这类照旧退国家码）',
-  !s.regs.slice(1).some((r) => ['HK', 'TW', 'SG', 'JP', 'KR'].includes(r.text)) && s.regs.some((r) => r.text === 'US'),
+check('★ 未识别城市的地区显示国家全名，所有地区都不出裸码行',
+  !s.regs.slice(1).some((r) => /^[A-Z]{2}$/.test(r.text)) && s.regs.some((r) => r.text === 'United States'),
   JSON.stringify(s.regs.map((r) => r.text)))
 // ★ 2026-10-08：地区行上的离线可见性（这块面板以前对「离线」一个字都不说 —— 针的颜色
 //   也不分在线离线）。有离线的行挂一枚小点 + 悬停写明台数；全在线的行不许有点。
@@ -528,7 +528,7 @@ check('★ 兜底的国家不出裸码行（HK/TW/SG/JP/KR 都有城名；US/DE 
   check('★ 地区里有离线机器时行上看得到（HK 那行：小点 + 悬停「5 台 · 1 台离线」）',
     hkRow?.dot === true && (hkRow.title || '').indexOf('5 台') >= 0 && (hkRow.title || '').indexOf('1 台离线') >= 0,
     JSON.stringify(hkRow))
-  const usRow = s.regs.find((r) => r.text === 'US')
+  const usRow = s.regs.find((r) => r.text === 'United States')
   check('★ 全在线的地区不带离线点（US 那行）', usRow?.dot === false, JSON.stringify(usRow))
   check('「全部」那行悬停写明合计口径（27 台里有 2 台认不出国家、不上地区列表）',
     (s.regs[0].title || '').indexOf('27 台') >= 0 && (s.regs[0].title || '').indexOf('2 台') >= 0 && (s.regs[0].title || '').indexOf('认不出国家') >= 0,

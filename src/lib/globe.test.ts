@@ -8,7 +8,7 @@ import {
   camera, cityHint, clampLat, curvePath, globeCaption, globeNodes, globeProfile, graticule, inkWidth, landPaths, mergeRegion,
   layoutLabels, links, prepareRings, regionOf, regionRows, regionView, sweepLonAt, sweepOpacity, trimLabel, VIEW, wrapLon, zoomView,
 } from "./globe.ts"
-import { COARSE_WORLD_OUTLINES, COUNTRY_LL, WORLD_OUTLINES } from "./world.ts"
+import { CITY_HINTS, COARSE_WORLD_OUTLINES, COUNTRY_LL, COUNTRY_NAMES, WORLD_OUTLINES } from "./world.ts"
 import type { Node } from "./api.ts"
 
 let failed = 0
@@ -168,11 +168,17 @@ ok(sweepOpacity(true, 2) < sweepOpacity(true, 0), "越靠后的扫掠越淡")
 eq(cityHint(node(1, "阿里 广州", "CN"))?.name, "Guangzhou", "中文城名认得出")
 eq(cityHint(node(2, "Lightlayer SJC", "US"))?.name, "San Jose", "机场码认得出")
 eq(cityHint(node(3, "华纳云 JP", "JP")), null, "认不出城市就返回 null（交给国家落点）")
-eq(cityHint(node(4, "魏武王", "CN", { group: "香港" }))?.name, "Hong Kong", "分组名也参与匹配（站点常用的地方）")
+eq(cityHint(node(4, "魏武王", "HK", { group: "香港" }))?.name, "Hong Kong", "分组名也参与同国匹配")
+eq(cityHint(node(4, "魏武王", "CN", { group: "香港" })), null, "分组名不能把 CN 节点放到 HK 城市")
+eq(cityHint(node(4, "Dronten-01", "NL", { group: "Amsterdam" }))?.name, "Dronten", "节点名中的地区优先于分组名")
+eq(cityHint(node(4, "Hong", "HK", { group: "Kong" })), null, "独立字段不拼出不存在的城名")
+eq(cityHint(node(4, "HK-01", "HK")), null, "HK 国家码不被当作城市线索")
+eq(cityHint(node(4, "SG-01", "SG")), null, "SG 国家码不被当作城市线索")
 
 eq(regionOf(node(1, "阿里 广州", "CN")), { key: "CN · Guangzhou", code: "CN", city: "Guangzhou", label: "Guangzhou", base: [113.2644, 23.1291] }, "国家码 + 城名 = 地区键（城名线索优先于国家落点）")
 eq(regionOf(node(2, "Nobrand Traffic Bug", "jp"))?.key, "JP · Japan", "认不出城市 → 国家级兜底城名（日本 → Japan），国家码大小写归一")
 eq(regionOf(node(2, "Nobrand Traffic Bug", "de"))?.key, "DE", "没有兜底城名的国家，认不出城市就是国家码（也验大小写归一）")
+eq(regionOf(node(2, "Nobrand Traffic Bug", "de"))?.label, "Germany", "未知城保留 DE 筛选键，但显示国家全名")
 eq(regionOf(node(3, "无名", "")), null, "没有国家码的节点不上地球")
 eq(regionOf(node(4, "某地", "XA")), null, "国家码不在表里、又认不出城市 → 不上地球")
 ok(regionOf(node(5, "纳泰-DE9929", "DE")) !== null, "表里有 DE")
@@ -192,6 +198,47 @@ eq(regionOf(node(24, "幽灵机三", "JP"))?.key, "JP · Japan", "JP 认不出�
 eq(regionOf(node(25, "幽灵机四", "KR"))?.key, "KR · Korea", "KR 认不出城市落 Korea")
 eq(regionOf(node(26, "阿里 西雅图", "US"))?.key, "US · Seattle", "兜底不影响城市线索（US 照旧认西雅图）")
 eq(regionOf(node(27, "幽灵机五", "US"))?.key, "US", "没有兜底的国家照旧退国家码（US）")
+eq(regionOf(node(27, "幽灵机五", "US"))?.label, "United States", "美国兜底使用完整国家名")
+eq(regionOf(node(27, "幽灵机五", "GB"))?.label, "United Kingdom", "英国兜底使用完整国家名")
+eq(regionOf(node(25, "幽灵机四", "KR"))?.label, "South Korea", "韩国保留历史 Korea 地区键，显示可读的完整名称")
+eq(Object.keys(COUNTRY_NAMES).sort(), Object.keys(COUNTRY_LL).sort(), "静态英文全名表完整覆盖所有国家落点，不依赖浏览器 Intl 支持")
+ok(CITY_HINTS.every((hint) => COUNTRY_LL[hint.country] !== undefined), "所有城市线索都有有效的所属国家")
+for (const code of Object.keys(COUNTRY_LL)) {
+  const region = regionOf(node(27, "Unnamed-01", code))
+  ok(Boolean(region?.label && region.label !== code && region.label.length > 2), `${code} 兜底显示全名而非裸 ISO 码`)
+}
+
+// 公开 /api/nodes 中原本只显示国家码的 8 个节点；Johor 只确认州，不能虚构为 Johor Bahru。
+const namedRegions: [string, string, string, [number, number]][] = [
+  ["Chisinau-01", "MD", "Chisinau", [28.8333, 47.0167]],
+  ["Dobrich-01", "BG", "Dobrich", [27.8419, 43.5795]],
+  ["Dronten-01", "NL", "Dronten", [5.7535, 52.5291]],
+  ["Johor-01", "MY", "Johor", [103.5, 2]],
+  ["Lagos-01", "NG", "Lagos", [3.3833, 6.45]],
+  ["Sandefjord-01", "NO", "Sandefjord", [10.2167, 59.1167]],
+  ["Valdivia-01", "CL", "Valdivia", [-73.2333, -39.8]],
+  ["Xi’an-01", "CN", "Xi'an", [108.9398, 34.3416]],
+]
+for (const [name, code, city, base] of namedRegions) {
+  eq(regionOf(node(32, name, code)), { key: `${code} · ${city}`, code, city, label: city, base }, `${name} 按真实名称与所属国家识别`)
+  eq(cityHint(node(32, name, "US")), null, `${name} 不跨国匹配为美国城市`)
+}
+for (const [name, code, city] of [
+  ["Chișinău_01", "MD", "Chisinau"], ["Chişinău-01", "MD", "Chisinau"], ["基希讷乌一号", "MD", "Chisinau"],
+  ["RMO-01", "MD", "Chisinau"], ["KIV-01", "MD", "Chisinau"], ["TRF-01", "NO", "Sandefjord"],
+  ["桑讷菲尤尔一号", "NO", "Sandefjord"], ["德龙滕一号", "NL", "Dronten"], ["瓦尔迪维亚一号", "CL", "Valdivia"],
+  ["ZAL-01", "CL", "Valdivia"], ["LOS-01", "NG", "Lagos"], ["拉各斯一号", "NG", "Lagos"], ["柔佛一号", "MY", "Johor"],
+  ["Kuala_Lumpur_01", "MY", "Kuala Lumpur"], ["Kuala-Lumpur-01", "MY", "Kuala Lumpur"], ["Kuala.Lumpur-01", "MY", "Kuala Lumpur"],
+  ["Kuala   Lumpur-01", "MY", "Kuala Lumpur"], ["KUL-01", "MY", "Kuala Lumpur"], ["XIY-01", "CN", "Xi'an"], ["西安一号", "CN", "Xi'an"],
+]) eq(cityHint(node(33, name, code))?.name, city, `${name} 的中文/英文/机场码别名可识别`)
+for (const [name, code] of [["Sandefjordian", "NO"], ["Chisinau01", "MD"], ["KULTURE", "MY"], ["LOS1", "NG"], ["TRF123", "NO"], ["VALDIVIANA", "CL"]]) {
+  eq(cityHint(node(34, name, code)), null, `${name} 不从长词或编号中截出城市/机场码`)
+}
+eq(regionOf(node(34, "Seattle-01", "CN"))?.label, "China", "Seattle 名字不能将 CN 节点误放到美国")
+eq(regionOf(node(34, "Xi’an-01", "HK"))?.key, "HK · Hong Kong", "实际 country 优先于名字里的跨国城市")
+eq(regionOf(node(34, "Borchin-01", "BG"))?.label, "Bulgaria", "未确认的名称不猜城市，显示国家全名")
+eq(regionView([node(34, "未知城", "NO")], "NO").shown.length, 1, "国家全名显示不改变旧 ISO 地区筛选键")
+eq(regionView(namedRegions.map(([name, code], i) => node(40 + i, name, code)), "MY · Johor").shown.map((n) => n.name), ["Johor-01"], "新增州级地区也可按现有地区键筛选")
 
 // ★ 2026-10 数据扩展：国家表 12 → 80+、城市线索 24 → ~100（第三方的大机群以前大半
 //   认不出城市、全堆在国家码下；表外国家的机器干脆整个地区功能里看不见）。

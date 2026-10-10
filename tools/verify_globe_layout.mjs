@@ -203,7 +203,7 @@ for (const [w, h, tag] of SIZES) {
       // ★ 这条必须断言「那一行找得到」：夹具里那台厄瓜多尔机器早先在 COUNTRY_LL 之外、
       //   根本不上地区列表，这里点了个寂寞 —— 那一趟量的其实还是上一个角度，而断言在空集上
       //   照样全绿（2026-10-08 补：国家表扩到常见 IDC 国家后才真正点得中）。
-      const found = await js(`(() => { const b = [...document.querySelectorAll('.globe-reg')].find((x) => (x.textContent || '').includes('${region}')); if (b) b.click(); return !!b })()`)
+      const found = await js(`(() => { const b = document.querySelector('.globe-reg[data-region-code="${region}"]'); if (b) b.click(); return !!b })()`)
       check(`${tag}·${label}：那一行找得到（点了才真的转过去）`, found === true)
       await sleep(1400)
     }

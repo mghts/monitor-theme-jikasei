@@ -680,8 +680,10 @@ export type GlobeNode = {
   id: number
   name: string
   code: string
-  /** 这个地区里**每一台**都在线才是 true（有一台离线，针就按离线画）。 */
+  /** 这个地区里**每一台**都在线才是 true；标记通过 offlineCount 区分全离线与部分离线。 */
   online: boolean
+  /** 这枚针代表的真实离线台数；单台为 0/1，聚合时逐台统计。 */
+  offlineCount: number
   /** 在整张图里的序号：连线的抽样要用它（`(a*7+b*3) % divisor`，同上游）。 */
   index: number
   region: Region
@@ -727,16 +729,16 @@ export function globeNodes(nodes: Node[]): GlobeNode[] {
     const scope: "city" | "country" = bucket[0].region.city ? "city" : "country"
     // 单台地区不并（并了也只是它自己），多台才按门槛决定。
     if (bucket.length > 1 && mergeRegion(nodes.length, bucket.length)) {
-      let online = true
-      for (const { node } of bucket) online = online && node.online
+      const offlineCount = bucket.reduce((count, { node }) => count + (node.online ? 0 : 1), 0)
       const head = bucket[0]
       placed.push({
         key: head.region.key,
         id: head.node.id,
         name: `${head.region.label} ×${bucket.length}`,
         code: head.region.code,
-        // 有一台离线，这枚针就按离线画：地区里出事的那一台不该被「多数在线」盖过去。
-        online,
+        // 部分离线也保留异常状态，不能被多数在线盖过去。
+        online: offlineCount === 0,
+        offlineCount,
         index: head.index,
         region: head.region,
         count: bucket.length,
@@ -751,6 +753,7 @@ export function globeNodes(nodes: Node[]): GlobeNode[] {
         name: node.name,
         code: region.code,
         online: node.online,
+        offlineCount: node.online ? 0 : 1,
         index,
         region,
         count: 1,

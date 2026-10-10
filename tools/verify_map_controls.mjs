@@ -1,6 +1,6 @@
 // 本机 dist + 合成节点夹具，使用原生 Chrome/CDP；不访问线上探针，不引入依赖。
 // 用法：node tools/verify_map_controls.mjs [输出目录]；可指定 CHROME_PATH / MAP_DIST。
-// MAP_BASELINE_DIST 可指向保留的 1.30.1 dist，实测同夹具的旧图形尺寸作为前后对照。
+// MAP_BASELINE_DIST 可指向保留的 1.30.2 dist，实测同夹具的旧图形尺寸作为前后对照。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -41,7 +41,7 @@ const makeNode = (id, name, country, group, online = true) => ({
 // 东京两台含离线；跨半球、近日期变更线、长标签、缺失国家覆盖投影与命中边界。
 let nodes = [
   makeNode(1, 'Tokyo 一号', 'JP', '亚太'), makeNode(2, 'Tokyo 二号', 'JP', '亚太', false),
-  makeNode(3, 'Frankfurt 一号', 'DE', '欧洲'), makeNode(4, 'Seattle 一号', 'US', '美洲'),
+  makeNode(3, 'Frankfurt 一号', 'DE', '欧洲', false), makeNode(4, 'Seattle 一号', 'US', '美洲'),
   makeNode(5, 'Singapore 一号', 'SG', '亚太'), makeNode(6, 'Sydney 一号', 'AU', '亚太'),
   makeNode(7, 'São Paulo 一号', 'BR', '美洲'), makeNode(8, 'Auckland Datacenter Very Long Example Name', 'NZ', '亚太'),
   makeNode(9, 'Toronto 一号', 'CA', '美洲'), makeNode(10, '芬兰节点', 'FI', '欧洲'),
@@ -181,14 +181,36 @@ function inspect() {
   const ink = [...labels, ...pinBoxes, ...(caption ? [{ text: 'caption', ...rect(caption) }] : [])]
   const controlObscures = controls.filter((control) => control.visible).flatMap((control) => ink.filter((item) => intersects(control, item)).map((item) => `${control.name}:${item.text}`))
   const projection = svg.querySelector('.globe-disk,.globe-map-frame')
+  const pins = [...svg.querySelectorAll('[data-node]')].map((el) => {
+    const x = Number(el.getAttribute('cx')), y = Number(el.getAttribute('cy'))
+    const marker = [...(el.parentElement?.querySelectorAll('.globe-pin') || [])].find((candidate) => {
+      const b = candidate.getBBox()
+      return Math.abs(b.x + b.width / 2 - x) < 0.15 && Math.abs(b.y + b.height / 2 - y) < 0.15
+    })
+    const style = marker ? getComputedStyle(marker) : null
+    const core = el.parentElement?.querySelector('.globe-pin-core')
+    return {
+      id: Number(el.dataset.node), online: el.dataset.online, count: Number(el.dataset.count),
+      offlineCount: Number(el.dataset.offlineCount), markerState: el.dataset.markerState,
+      region: el.dataset.region, x: el.getAttribute('cx'), y: el.getAttribute('cy'),
+      title: el.querySelector('title')?.textContent.trim(), hit: el.classList.contains('hit'), ring: !!marker,
+      marker: marker ? { tag: marker.tagName, state: marker.dataset.markerState, fill: style.fill, stroke: style.stroke, strokeWidth: style.strokeWidth, opacity: style.opacity, d: marker.getAttribute('d'), r: marker.getAttribute('r'), core: core ? { tag: core.tagName, fill: getComputedStyle(core).fill, stroke: getComputedStyle(core).stroke } : null } : null,
+    }
+  })
   return {
     mode: panel.dataset.mapMode, spin: panel.dataset.mapSpin, spinning: panel.dataset.mapSpinning,
     spinPressed: spin?.getAttribute('aria-pressed'), spinDisabled: !spin || spin.disabled,
     zoom: Number(panel.querySelector('input[type="range"]')?.value), drag: panel.querySelector('.globe-atlas')?.dataset.drag,
     touchAction: getComputedStyle(panel.querySelector('.globe-atlas')).touchAction,
-    paths, caption: caption?.textContent, pins: [...svg.querySelectorAll('[data-node]')].map((el) => ({ id: Number(el.dataset.node), online: el.dataset.online, count: Number(el.dataset.count), region: el.dataset.region, x: el.getAttribute('cx'), y: el.getAttribute('cy'), title: el.querySelector('title')?.textContent.trim(), hit: el.classList.contains('hit'), ring: [...(el.parentElement?.querySelectorAll('.globe-pin') || [])].some((ring) => Math.abs(Number(ring.getAttribute('cx')) - Number(el.getAttribute('cx'))) < 0.1 && Math.abs(Number(ring.getAttribute('cy')) - Number(el.getAttribute('cy'))) < 0.1) })),
+    paths, caption: caption?.textContent, pins,
+    sweepTime: svg.hasAttribute('data-sweep-time') ? Number(svg.dataset.sweepTime) : null,
+    sweepLongitude: svg.hasAttribute('data-sweep-longitude') ? Number(svg.dataset.sweepLongitude) : null,
+    cameraLongitude: svg.hasAttribute('data-camera-longitude') ? Number(svg.dataset.cameraLongitude) : null,
+    cameraLatitude: svg.hasAttribute('data-camera-latitude') ? Number(svg.dataset.cameraLatitude) : null,
+    cameraView: { w: 460, h: svg.viewBox.baseVal.height, cx: Number(svg.dataset.cameraCx), cy: Number(svg.dataset.cameraCy), r: Number(svg.dataset.cameraR) },
     nameLabels: svg.querySelectorAll('.globe-label').length, countLabels: svg.querySelectorAll('.globe-count').length,
     stems: svg.querySelectorAll('.globe-stem').length, links: svg.querySelectorAll('.globe-link').length,
+    selected: !!svg.querySelector('.globe-selected'), markersAboveSelection: !svg.querySelector('.globe-selected') || [...svg.querySelectorAll('.globe-pin')].every((marker) => !!(svg.querySelector('.globe-selected').compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING)),
     mapFrame: !!svg.querySelector('.globe-map-frame'), globeDisk: !!svg.querySelector('.globe-disk'),
     rows: [...panel.querySelectorAll('.globe-reg')].map((el) => ({ text: el.querySelector('span')?.textContent.trim(), code: el.querySelector('img')?.getAttribute('src')?.match(/\/([^/]+)\.svg$/)?.[1], count: Number(el.querySelector('b')?.textContent), pressed: el.getAttribute('aria-pressed'), title: el.title, offline: !!el.querySelector('.globe-reg-dot') })),
     cards: [...document.querySelectorAll('[data-slot="card"] h3')].map((el) => el.textContent.trim()),
@@ -299,12 +321,12 @@ function growthChecks(tag, snapshot, width, selectedMode) {
   if (!previous) return
   const before = previous.projection
   const after = snapshot.projection
-  const increased = selectedMode === '2d'
-  check(`${tag}：${increased ? '去掉标签后实际地图更大' : '3D实际地球不缩小'}`, before && after && (increased ? after.w > before.w * 1.2 && after.h > before.h * 1.2 : after.w >= before.w - 0.5 && after.h >= before.h - 0.5), before && after ? `${before.w.toFixed(1)}×${before.h.toFixed(1)}→${after.w.toFixed(1)}×${after.h.toFixed(1)}px` : 'missing rendered projection')
+  check(`${tag}：实际地图尺寸不缩小`, before && after && after.w >= before.w - 0.5 && after.h >= before.h - 0.5, before && after ? `${before.w.toFixed(1)}×${before.h.toFixed(1)}→${after.w.toFixed(1)}×${after.h.toFixed(1)}px` : 'missing rendered projection')
 }
 function renderingChecks(tag, snapshot) {
   check(`${tag}：没有节点间装饰性路径`, snapshot.links === 0, `globe-link=${snapshot.links}`)
   check(`${tag}：节点圈、命中区域与悬停title保留`, snapshot.pins.length > 0 && snapshot.pins.every((p) => p.hit && p.ring && p.title && p.count > 0), `pins=${snapshot.pins.length}`)
+  markerChecks(tag, snapshot)
   if (snapshot.mode === '2d') {
     check(`${tag}：2D没有节点名称、引线和计数字样`, snapshot.nameLabels === 0 && snapshot.stems === 0 && snapshot.countLabels === 0, `names=${snapshot.nameLabels}, stems=${snapshot.stems}, counts=${snapshot.countLabels}`)
     const { host, projection } = snapshot
@@ -314,6 +336,15 @@ function renderingChecks(tag, snapshot) {
     const expectedY = host.y + 8 + (host.h - 40 - worldHeight) / 2
     check(`${tag}：矩形地图用满实际可用区且保留底注空间`, projection && Math.abs(projection.w - worldWidth) <= 2 && Math.abs(projection.h - worldHeight) <= 2 && Math.abs(projection.x - expectedX) <= 2 && Math.abs(projection.y - expectedY) <= 2, projection ? `map=${projection.w.toFixed(1)}×${projection.h.toFixed(1)}, usable=${worldWidth.toFixed(1)}×${worldHeight.toFixed(1)}` : 'missing map frame')
   }
+}
+function markerChecks(tag, snapshot) {
+  const expectedState = (p) => p.offlineCount === 0 ? 'online' : p.offlineCount === p.count ? 'offline' : 'mixed'
+  check(`${tag}：真实标记形状与在线计数一致`, snapshot.pins.length > 0 && snapshot.pins.every((p) => Number.isInteger(p.offlineCount) && p.offlineCount >= 0 && p.offlineCount <= p.count && p.markerState === expectedState(p) && p.marker?.state === expectedState(p) && p.online === String(p.offlineCount === 0 ? 1 : 0) && (p.markerState === 'online' ? p.marker.tag === 'circle' && Number(p.marker.r) > 0 : p.marker.tag === 'path' && p.marker.d?.length > 10) && (p.markerState === 'mixed' ? !!p.marker.core : !p.marker.core)), snapshot.pins.map((p) => `${p.id}:${p.markerState}/${p.offlineCount}/${p.count}`).join(' | '))
+  check(`${tag}：title说明真实在线/离线状态与台数`, snapshot.pins.every((p) => p.count > 1 ? new RegExp(`在线\\s*${p.count - p.offlineCount}\\s*台`).test(p.title) && new RegExp(`离线\\s*${p.offlineCount}\\s*台`).test(p.title) : p.title?.includes(p.offlineCount ? '离线' : '在线') && p.offlineCount === Number(!nodes.find((node) => node.id === p.id)?.online)))
+  const online = snapshot.pins.find((p) => p.markerState === 'online')?.marker
+  const offline = snapshot.pins.find((p) => p.markerState === 'offline')?.marker
+  if (online && offline) check(`${tag}：在线与离线实际颜色、形状均不同`, online.tag !== offline.tag && (online.fill !== offline.fill || online.stroke !== offline.stroke), `${online.tag}/${online.fill}/${online.stroke} ↔ ${offline.tag}/${offline.fill}/${offline.stroke}`)
+  if (snapshot.selected) check(`${tag}：选中地区不会盖住节点状态图形`, snapshot.markersAboveSelection)
 }
 async function physicalControl(key) {
   const target = await evaluate((key) => {
@@ -335,7 +366,7 @@ async function hoverNode(tag, preferred = 4) {
       const r = hit.getBoundingClientRect()
       const x = r.x + r.width / 2, y = r.y + r.height / 2
       if (document.elementFromPoint(x, y)?.closest('[data-node]') !== hit) continue
-      return { id: Number(hit.dataset.node), count: Number(hit.dataset.count), title: hit.querySelector('title')?.textContent.trim(), x, y }
+      return { id: Number(hit.dataset.node), count: Number(hit.dataset.count), offlineCount: Number(hit.dataset.offlineCount), title: hit.querySelector('title')?.textContent.trim(), x, y }
     }
     return null
   }, preferred)
@@ -343,7 +374,7 @@ async function hoverNode(tag, preferred = 4) {
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y })
   await sleep(150)
   const node = nodes.find((n) => n.id === target.id)
-  check(`${tag}：真实悬停命中节点并保留完整名称title`, node && (target.count > 1 ? target.title?.includes(`${target.count} 台`) : target.title?.includes(node.name)) && await evaluate((id) => document.querySelector(`svg[data-map-canvas] [data-node="${id}"]`)?.matches(':hover'), target.id), `${target.id}:${target.title}`)
+  check(`${tag}：真实悬停命中节点并保留完整名称title`, node && (target.count > 1 ? target.title?.includes(`×${target.count}`) && new RegExp(`在线\\s*${target.count - target.offlineCount}\\s*台`).test(target.title) && new RegExp(`离线\\s*${target.offlineCount}\\s*台`).test(target.title) : target.title?.includes(node.name)) && await evaluate((id) => document.querySelector(`svg[data-map-canvas] [data-node="${id}"]`)?.matches(':hover'), target.id), `${target.id}:${target.title}`)
   return target
 }
 async function openNodeAndReturn(tag, target, selectedMode) {
@@ -357,6 +388,144 @@ async function openNodeAndReturn(tag, target, selectedMode) {
   await waitFor((count) => document.querySelectorAll('[data-slot="card"] h3').length === count, nodes.length)
   check(`${tag}：详情返回保留地图模式与全部节点`, (await state()).mode === selectedMode)
   await evaluate(() => scrollTo(0, 0))
+}
+function installRafGate() {
+  let next = 0
+  const callbacks = new Map()
+  window.requestAnimationFrame = (callback) => { const id = ++next; callbacks.set(id, callback); return id }
+  window.cancelAnimationFrame = (id) => callbacks.delete(id)
+  window.__mapRafGate = { frame: (ahead = 80) => {
+    const at = performance.now() + ahead
+    const frame = [...callbacks.values()]
+    callbacks.clear()
+    for (const callback of frame) callback(at)
+    return { at, callbacks: frame.length }
+  } }
+}
+async function sweepPathCheck(tag, snapshot) {
+  const { camera, globeProfile, graticule, sweepLonAt } = await import('../src/lib/globe.ts')
+  const expectedLongitude = sweepLonAt(snapshot.sweepTime)
+  check(`${tag}：扫掠逻辑时间与实际角度对应`, Number.isFinite(snapshot.sweepTime) && Number.isFinite(snapshot.sweepLongitude) && Math.abs(expectedLongitude - snapshot.sweepLongitude) < 1e-6, `time=${snapshot.sweepTime}, longitude=${snapshot.sweepLongitude}`)
+  const expected = graticule(camera(snapshot.cameraLongitude, snapshot.cameraLatitude, snapshot.cameraView), globeProfile('medium'), expectedLongitude).filter((wire) => wire.sweep >= 0).map((wire) => wire.d)
+  const actual = snapshot.paths.filter((wire) => wire.kind === 'globe-sweep').map((wire) => wire.d)
+  check(`${tag}：真实SVG扫掠路径匹配同一相机与逻辑角度`, Number.isFinite(snapshot.cameraLongitude) && Number.isFinite(snapshot.cameraLatitude) && expected.length > 0 && JSON.stringify(actual) === JSON.stringify(expected), `paths=${actual.length}/${expected.length}`)
+}
+async function continuityCase(name, pause, resume) {
+  await pause()
+  const before = await state(`${name}:paused`)
+  const wallStart = await evaluate(() => Date.now())
+  await sleep(4000)
+  const frozen = await state(`${name}:after-4s`)
+  const wallElapsed = await evaluate(() => Date.now()) - wallStart
+  check(`${name}：暂停4秒逻辑时间和真实路径均冻结`, wallElapsed >= 3900 && before.spinning === 'false' && frozen.spinning === 'false' && frozen.sweepTime === before.sweepTime && geometry(frozen) === geometry(before), `wall=${wallElapsed}ms, logical=${frozen.sweepTime - before.sweepTime}ms`)
+  await resume()
+  await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
+  const resumed = await state(`${name}:before-first-frame`)
+  check(`${name}：恢复前不补暂停时间`, resumed.sweepTime === frozen.sweepTime, `logical=${resumed.sweepTime - frozen.sweepTime}ms`)
+  const frame = await evaluate(() => window.__mapRafGate.frame(80))
+  await waitFor((time) => Number(document.querySelector('svg[data-map-canvas]')?.dataset.sweepTime) > time, frozen.sweepTime)
+  const after = await state(`${name}:first-frame`)
+  const delta = after.sweepTime - frozen.sweepTime
+  check(`${name}：恢复首个短帧连续，不追赶4秒墙上时间`, frame.callbacks > 0 && delta > 0 && delta < 500, `firstFrame=${delta.toFixed(2)}ms, wallPause=${wallElapsed}ms`)
+  await sweepPathCheck(name, after)
+}
+async function sweepContinuity() {
+  await navigate() // 重新载入正常存储上下文，移除前面故意拒绝Storage的当前文档。
+  const gate = await send('Page.addScriptToEvaluateOnNewDocument', { source: `(${installRafGate.toString()})()` })
+  await viewport(1440, 1000)
+  await media(false)
+  await preferences('3d', '1')
+  await evaluate(() => window.__mapRafGate.frame(80))
+  await sleep(100)
+  await sweepPathCheck('连续性基准', await state('sweep-controlled-baseline'))
+  await continuityCase('手动暂停恢复', () => control('spin'), () => control('spin'))
+  await continuityCase('2D返回3D', () => mode('2d'), () => mode('3d'))
+  let held
+  await continuityCase('拖动暂停恢复', async () => {
+    held = await evaluate(() => {
+      const svg = document.querySelector('svg[data-map-canvas]'), disk = svg.querySelector('.globe-disk'), point = svg.createSVGPoint()
+      point.x = Number(disk.getAttribute('cx'))
+      point.y = Number(disk.getAttribute('cy')) - Number(disk.getAttribute('r')) + 14
+      const p = point.matrixTransform(svg.getScreenCTM())
+      return { x: p.x, y: p.y }
+    })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...held, button: 'left', clickCount: 1 })
+    held.x += 15
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...held, button: 'left', buttons: 1 })
+    await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'false')
+  }, async () => {
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...held, button: 'left', clickCount: 1 })
+    await sleep(120)
+  })
+  await continuityCase('地区定位重新开始', () => region('JP'), () => control('spin'))
+  await allRegions()
+  await continuityCase('离屏恢复', async () => {
+    await evaluate(() => { const space = document.createElement('div'); space.style.height = '2500px'; document.body.append(space); scrollTo(0, document.documentElement.scrollHeight) })
+    await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'false')
+  }, async () => {
+    await evaluate(() => scrollTo(0, 0))
+    await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
+  })
+  await continuityCase('减弱动态效果恢复', () => media(false, true), () => media(false))
+  await continuityCase('visibilitychange恢复', async () => {
+    await evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')) })
+    await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'false')
+  }, async () => {
+    await evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')) })
+    await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
+  })
+  await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: gate.identifier })
+  await navigate()
+}
+async function aggregateMarkerChecks() {
+  const ordinaryNodes = nodes
+  nodes = [
+    ...Array.from({ length: 5 }, (_, i) => makeNode(101 + i, `Tokyo 聚合${i + 1}`, 'JP', '聚合', i < 3)),
+    ...Array.from({ length: 5 }, (_, i) => makeNode(201 + i, `Frankfurt 聚合${i + 1}`, 'DE', '聚合', false)),
+    ...Array.from({ length: 5 }, (_, i) => makeNode(301 + i, `Singapore 聚合${i + 1}`, 'SG', '聚合')),
+  ]
+  await viewport(1440, 1000)
+  await media(false)
+  await preferences('2d', '0')
+  await waitFor(() => document.querySelectorAll('svg[data-map-canvas] [data-node]').length === 3)
+  for (const selectedMode of ['2d', '3d']) {
+    await mode(selectedMode)
+    for (const dark of [false, true]) {
+      await media(dark)
+      const snapshot = await state(`markers-aggregate-${selectedMode}-${dark ? 'dark' : 'light'}`)
+      const mixed = snapshot.pins.find((p) => p.id === 101)
+      const offline = snapshot.pins.find((p) => p.id === 201)
+      const online = snapshot.pins.find((p) => p.id === 301)
+      renderingChecks(`聚合/${selectedMode}/${dark ? '暗' : '亮'}`, snapshot)
+      check(`聚合/${selectedMode}/${dark ? '暗' : '亮'}：三种真实状态精确区分`, mixed?.count === 5 && mixed.offlineCount === 2 && mixed.markerState === 'mixed' && offline?.count === 5 && offline.offlineCount === 5 && offline.markerState === 'offline' && online?.count === 5 && online.offlineCount === 0 && online.markerState === 'online')
+      check(`聚合/${selectedMode}/${dark ? '暗' : '亮'}：部分离线菱形保留在线核心`, mixed?.marker?.tag === 'path' && mixed.marker.core?.tag === 'circle' && mixed.marker.core.fill === online?.marker?.fill && offline?.marker?.tag === 'path' && !offline.marker.core && mixed.marker.stroke === offline.marker.stroke && mixed.marker.core.fill !== mixed.marker.fill)
+      await hoverNode(`聚合/${selectedMode}/${dark ? '暗' : '亮'}`, 101)
+      await screenshot(`markers-aggregate-${selectedMode}-${dark ? 'dark' : 'light'}`)
+    }
+    await region('JP')
+    const selected = await state(`markers-selected-${selectedMode}`)
+    check(`聚合/${selectedMode}：地区定位不会盖住部分离线核心`, selected.selected && selected.markersAboveSelection && selected.pins.find((p) => p.id === 101)?.marker?.core)
+    await allRegions()
+  }
+  await mode('2d')
+  await media(false)
+  const before = (await state('markers-live-mixed-before')).pins.find((p) => p.id === 101)
+  nodes = nodes.map((n) => n.country === 'JP' ? { ...n, online: true } : n)
+  await waitFor(() => document.querySelector('svg[data-map-canvas] [data-node="101"]')?.dataset.markerState === 'online')
+  const after = await state('markers-live-online-after')
+  const online = after.pins.find((p) => p.id === 101)
+  check('实时聚合由部分离线恢复全在线，形状、核心、计数及title同步', before?.marker?.tag === 'path' && before.marker.core && online?.marker?.tag === 'circle' && !online.marker.core && online.count === 5 && online.offlineCount === 0 && /在线\s*5\s*台/.test(online.title) && /离线\s*0\s*台/.test(online.title) && before.marker.stroke !== online.marker.stroke)
+  markerChecks('实时聚合全在线', after)
+  await screenshot('markers-aggregate-live-online')
+  nodes = nodes.map((n) => n.country === 'JP' ? { ...n, online: false } : n)
+  await waitFor(() => document.querySelector('svg[data-map-canvas] [data-node="101"]')?.dataset.markerState === 'offline')
+  const allOffline = await state('markers-live-offline-after')
+  const offline = allOffline.pins.find((p) => p.id === 101)
+  check('实时聚合全离线保持空心菱形，移除在线核心且title计数正确', offline?.marker?.tag === 'path' && !offline.marker.core && offline.count === 5 && offline.offlineCount === 5 && /在线\s*0\s*台/.test(offline.title) && /离线\s*5\s*台/.test(offline.title))
+  markerChecks('实时聚合全离线', allOffline)
+  await screenshot('markers-aggregate-live-offline')
+  nodes = ordinaryNodes
+  await navigate()
 }
 function layoutChecks(tag, snapshot) {
   check(`${tag}：实际绘出陆地与定位点，3D名称仍保留`, snapshot.paths?.some((p) => p.kind === 'globe-land' && p.d.length > 100) && snapshot.pins.length > 0 && (snapshot.mode === '2d' || snapshot.nameLabels > 0))
@@ -489,9 +658,13 @@ try {
   await evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === '地图控件验收')?.click())
   await ready()
   check('SPA返回首页保留2D偏好', (await state()).mode === '2d')
+  const offlineMarker = (await state('single-live-offline-before')).pins.find((p) => p.id === 2)
   nodes = nodes.map((n) => n.id === 2 ? { ...n, online: true } : n)
   await waitFor(() => document.querySelector('svg[data-map-canvas] [data-node="2"]')?.dataset.online === '1')
-  check('节点恢复在线后2D针与地区离线提示同步更新', !(await state()).rows.find((r) => r.code === 'JP')?.offline)
+  const live = await state('single-live-online-after')
+  const onlineMarker = live.pins.find((p) => p.id === 2)
+  check('节点恢复在线后2D针与地区离线提示同步更新', !live.rows.find((r) => r.code === 'JP')?.offline)
+  check('真实单台上线由离线菱形变在线圆，颜色和title同步', offlineMarker?.markerState === 'offline' && offlineMarker.offlineCount === 1 && offlineMarker.marker?.tag === 'path' && offlineMarker.title.includes('离线') && onlineMarker?.markerState === 'online' && onlineMarker.offlineCount === 0 && onlineMarker.marker?.tag === 'circle' && onlineMarker.title.includes('在线') && (offlineMarker.marker.fill !== onlineMarker.marker.fill || offlineMarker.marker.stroke !== onlineMarker.marker.stroke))
   await evaluate(() => [...document.querySelectorAll('[role="group"][aria-label="分组"] button')].find((b) => b.textContent.startsWith('欧洲'))?.click())
   await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 2)
   check('2D分组筛选同步地图、地区与卡片', (await state()).pins.every((p) => p.id === 3 || p.id === 10) && (await state()).rows.filter((r) => r.code).every((r) => r.code === 'DE' || r.code === 'FI'))
@@ -599,6 +772,8 @@ try {
   await mode('2d')
   check('存储拒绝时控件仍可在本次会话工作', (await state()).mode === '2d' && (await state()).spin === 'false')
   await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: denied.identifier })
+  await sweepContinuity()
+  await aggregateMarkerChecks()
   check('验收期间无未捕获页面异常', exceptions.length === 0, exceptions.join(' ; '))
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))

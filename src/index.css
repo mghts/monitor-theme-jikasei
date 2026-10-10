@@ -60,6 +60,8 @@
   --globe-ocean: rgba(72, 118, 136, 0.12);
   --globe-land: rgba(118, 86, 40, 0.3);
   --globe-rim: rgba(42, 33, 20, 0.2);
+  --globe-pin-online: oklch(0.48 0.065 195);
+  --globe-pin-offline: oklch(0.49 0.045 65);
   /* The status dot. Each clears 3:1 against the card (3.7 and 5.5), and 1.5:1
      against the other, the separation red-green colour blindness still
      perceives. */
@@ -124,6 +126,8 @@
   --globe-ocean: rgba(86, 138, 160, 0.12);
   --globe-land: rgba(186, 154, 102, 0.26);
   --globe-rim: rgba(8, 8, 8, 0.36);
+  --globe-pin-online: oklch(0.76 0.065 195);
+  --globe-pin-offline: oklch(0.75 0.045 65);
   /* 7.8 and 3.7 against the card, 2.1 apart. The muted grey would sit 1.15 from
      the green. */
 }
@@ -292,9 +296,12 @@
 .globe-sweep { fill: none; stroke: var(--foreground); }
 .globe-base { stroke: var(--foreground); stroke-opacity: 0.4; stroke-width: 1; }
 .globe-stem { fill: none; stroke: var(--foreground); stroke-width: 0.75; }
-/* 针是空心的琥珀色圆环（上游那枚 #e2ad45 就是这一档）：只表示"这里有一台"，
-   不表示在线与否 —— 在线/离线在下面的卡片里有话说。 */
-.globe-pin { fill: none; stroke: var(--warn); stroke-width: 1.15; }
+/* 颜色与形状一起表示状态；聚合部分离线时，菱形中的青灰核心保留在线信息。 */
+.globe-pin { stroke-linejoin: round; }
+.globe-pin[data-marker-state="online"] { fill: var(--globe-pin-online); stroke: var(--card); stroke-width: 0.8; }
+.globe-pin[data-marker-state="offline"],
+.globe-pin[data-marker-state="mixed"] { fill: var(--card); stroke: var(--globe-pin-offline); stroke-width: 1.2; }
+.globe-pin-core { fill: var(--globe-pin-online); stroke: none; }
 .globe-selected-ring { fill: none; stroke: var(--foreground); stroke-width: 1.2; stroke-dasharray: 2 2; }
 .globe-selected-core { fill: var(--foreground); stroke: var(--card); stroke-width: 1.4; }
 /* 标签底下垫一道卡片底色的描边（paint-order: stroke）：引线从文字后面穿过去时

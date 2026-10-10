@@ -271,6 +271,7 @@ eq(mergeRegion(30, 2), true, "整队到 30 台 → 合并（哪怕这个地区�
 eq(placed.length, 9, "不合并：9 台有落点的机器各一枚针")
 eq(placed.map((p) => p.key), ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "顺序与节点列表一致（连线抽样要靠 index）")
 eq(placed.every((p) => p.count === 1), true, "不合并时针上没有台数")
+eq(placed.every((p) => p.offlineCount === 0), true, "单台全在线时真实离线计数为 0")
 // JP 那 4 台必须岔开：坐标两两不同，且都在落点附近（不是随便乱扔）。
 const jp = placed.filter((p) => p.region.key === "JP · Japan")
 eq(new Set(jp.map((p) => p.ll.join(","))).size, 4, "同地区 4 台岔开（一枚不盖住另一枚）")
@@ -282,6 +283,7 @@ const five = globeNodes([...fleet, node(11, "第五台 JP", "JP")])
 const jpMerged = five.filter((p) => p.region.key === "JP · Japan")
 eq(jpMerged.length, 1, "同地区到 5 台 → 只出一枚针")
 eq(jpMerged.map((p) => p.count), [5], "那枚针上写着 5 台")
+eq(jpMerged[0].offlineCount, 0, "全在线聚合的真实离线计数为 0")
 eq(jpMerged.map((p) => p.name), ["Japan ×5"], "多台的针标签是「地区 × 台数」")
 eq(jpMerged[0].ll, regionRows(fleet).find((r) => r.region.key === "JP · Japan")?.aim, "合并的针落在地区中心")
 eq(five.filter((p) => p.region.key === "CN").map((p) => p.count), [1], "没到门槛的地区照旧一台一枚")
@@ -289,6 +291,22 @@ eq(five.filter((p) => p.region.key === "CN").map((p) => p.count), [1], "没到�
 const jpOffline = globeNodes([...fleet, node(11, "第五台 JP", "JP")].map((n) => (n.id === 7 ? { ...n, online: false } : n)))
 eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.online, false, "合并的那枚针：地区里有一台离线就按离线画")
 eq(jpOffline.find((p) => p.region.key === "CN")?.online, true, "别的地区不受影响")
+eq(jpOffline.find((p) => p.region.key === "JP · Japan")?.offlineCount, 1, "部分离线聚合记录实际离线 1 台，不把所有台数判为离线")
+const singlesOffline = globeNodes(fleet.map((n) => n.id === 7 ? { ...n, online: false } : n))
+eq(singlesOffline.find((p) => p.id === 7)?.offlineCount, 1, "不合并时离线单台的真实计数为 1")
+eq(singlesOffline.filter((p) => p.id !== 7).every((p) => p.offlineCount === 0), true, "离线单台不影响邻近节点")
+const mixedSource = [...fleet, node(11, "第五台 JP", "JP")].map((n) => [5, 7].includes(n.id) ? { ...n, online: false } : n)
+const mixedBefore = JSON.stringify(mixedSource)
+const mixedGroup = globeNodes(mixedSource).find((p) => p.region.key === "JP · Japan")!
+eq([mixedGroup.id, mixedGroup.count, mixedGroup.offlineCount, mixedGroup.online], [5, 5, 2, false], "第一台离线时仍保留点击目标，同时正确统计在线 3 / 离线 2")
+const fullyOffline = globeNodes(mixedSource.map((n) => n.country === "JP" ? { ...n, online: false } : n)).find((p) => p.region.key === "JP · Japan")!
+eq([fullyOffline.count, fullyOffline.offlineCount, fullyOffline.online], [5, 5, false], "全离线聚合与部分离线计数有区别")
+const largeGroup = globeNodes([
+  node(50, "日本在线", "JP"), node(51, "日本离线", "JP", { online: false }),
+  ...Array.from({ length: 28 }, (_, i) => node(100 + i, "无落点", "")),
+]).find((p) => p.region.key === "JP · Japan")!
+eq([largeGroup.count, largeGroup.offlineCount, largeGroup.online], [2, 1, false], "总台数触发合并时也按实际两台统计状态")
+eq(JSON.stringify(mixedSource), mixedBefore, "统计状态不修改输入节点")
 
 const rows = regionRows(fleet)
 // ★ 一个 HK 只有一行：名字里写着 HK 的（`华纳云 HK`）与没写的（`野草云`）都落 `HK · Hong Kong`

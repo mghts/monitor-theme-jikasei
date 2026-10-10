@@ -220,12 +220,14 @@ const READ = `(() => {
     atlas: atlas ? { h: Math.round(atlas.getBoundingClientRect().height), w: Math.round(atlas.getBoundingClientRect().width), box: rect(atlas), touch: getComputedStyle(atlas).touchAction, cursor: getComputedStyle(atlas).cursor } : null,
     cols: panel ? getComputedStyle(panel).gridTemplateColumns : null,
     landFill: land ? getComputedStyle(land).fill : null,
-    pinStroke: pins.length ? getComputedStyle(pins[0]).stroke : null,
+    pinFill: pins.length ? getComputedStyle(pins[0]).fill : null,
+    pinState: pins.length ? pins[0].getAttribute('data-marker-state') : null,
+    pinTag: pins.length ? pins[0].tagName : null,
     labelFill: labels.length ? getComputedStyle(labels[0]).fill : null,
     labelFont: labels.length ? getComputedStyle(labels[0]).fontSize : null,
-    warn: (() => {
+    onlineColor: (() => {
       const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      el.style.stroke = 'var(--warn)';
+      el.style.stroke = 'var(--globe-pin-online)';
       document.body.appendChild(el);
       const v = getComputedStyle(el).stroke;
       el.remove();
@@ -311,7 +313,7 @@ check('地区按台数从多到少（东京 3、圣何塞 2、法兰克福 1、�
 check('每一行地区都配了旗子（全部那行没有）', s.flags === true && s.flagSrc === '/flags/JP.svg', `${s.flagSrc}`)
 check('没选地区时选中的只有「全部」那一行', s.regs[0].on === true && s.regs.slice(1).every((r) => !r.on), JSON.stringify(s.regs.map((r) => r.on)))
 check('侧栏标题就是「地区」（还没定位）', s.sideTitle === '地区', s.sideTitle)
-check('★ 针用主题里那个琥珀色（--warn）的空心环、标签垫了底色描边', s.pinStroke === s.warn && s.labelPaint === 'stroke', `${s.pinStroke} vs ${s.warn} / ${s.labelPaint}`)
+check('★ 在线针使用青灰实心圆，标签垫了底色描边', s.pinState === 'online' && s.pinTag === 'circle' && s.pinFill === s.onlineColor && s.labelPaint === 'stroke', `${s.pinState} / ${s.pinFill} vs ${s.onlineColor} / ${s.labelPaint}`)
 check('桌面基准画布高度增加至 320px', s.atlas?.h === 320, `${s.atlas?.h}`)
 check('桌面是两列（地球 1.35 : 侧栏 0.65）', String(s.cols).split(' ').length === 2, s.cols)
 check('顶栏那枚开关在、默认是按下的（默认开）', s.toggle?.pressed === 'true' && s.toggle?.w === 36 && s.toggle?.h === 36, JSON.stringify(s.toggle))
@@ -536,7 +538,7 @@ const themed = async (theme) => {
 const dark = await themed('dark')
 check('深色下照常渲染', dark.panel === true && dark.landPts > 200, JSON.stringify(dark.landPts))
 check('深色下 land/ocean 用的是深色那一套（与亮色不同）', dark.landFill !== '', `${dark.landFill}`)
-check('深色下针是深色那档的琥珀', dark.pinStroke === dark.warn, `${dark.pinStroke} vs ${dark.warn}`)
+check('深色下在线针使用深色主题的青灰色', dark.pinState === 'online' && dark.pinFill === dark.onlineColor, `${dark.pinFill} vs ${dark.onlineColor}`)
 check('深色下控制台无异常', errors.length === 0, errors.join(' | '))
 await shot('04a-synth-dark.png')
 await shotSide('04c-synth-dark-region.png')

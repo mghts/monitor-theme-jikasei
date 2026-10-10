@@ -133,6 +133,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     : zoomView(zoom, points.length), [mode, zoom, points.length, viewport])
   const mapBounds = viewport.bounds
   const reduced = useReducedMotion()
+  const pageVisible = useSyncExternalStore(subscribeVisibility, () => !document.hidden)
   // 标签左右侧的记忆：跨帧保留，圆心附近 ±18 的机器才不会左右闪。布局函数就地写它。
   const sides = useRef(new Map<string, "L" | "R">())
   const host = useRef<HTMLDivElement>(null)
@@ -176,22 +177,22 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
 
   const located = pinned && region !== null
   const rotationOn = rotating && !located
-  const spinning = mode === "3d" && rotating && inView && !dragging && !located && !reduced
+  const spinning = mode === "3d" && rotating && inView && pageVisible && !dragging && !located && !reduced
 
   useEffect(() => {
     if (!spinning) return
     let raf = 0
-    let last = 0
+    let last = performance.now()
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick)
       // 按档位的节奏重画，不是每帧：地球一转就要把整块岸线重算一遍。
-      if (last && now - last < profile.idleMs) return
-      // 后台标签页回来时 now-last 会很大：掐在 1 秒，免得地球"跳"过去一大截
-      // （上游同此，1 秒 ≈ 7.5°）。
-      const dt = last ? Math.min(1000, now - last) : profile.idleMs
+      if (now - last < profile.idleMs) return
+      // 极慢帧最多推进 1 秒，避免主线程长时间阻塞后突然跳过一大截。
+      const dt = Math.min(1000, now - last)
       last = now
       setView((v) => ({ ...v, lon: wrapLon(v.lon + dt * 0.0075) }))
-      setSweepTime(Date.now())
+      // 扫掠仅累计实际播放时间；暂停、切换模式和后台时不追赶墙上时间。
+      setSweepTime((time) => time + dt)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
@@ -371,7 +372,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
         >
           {/* 地球是下面那张列表的另一种画法，不是唯一的入口：对读屏隐藏，免得 26 枚针
               变成 26 个无名可点项。地区侧栏那几个是真按钮，留着。 */}
-          <svg data-map-canvas viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
+          <svg data-map-canvas data-sweep-time={sweepTime} data-sweep-longitude={sweepLonAt(sweepTime)} data-camera-longitude={view.lon} data-camera-latitude={view.lat} data-camera-cx={frame.cx} data-camera-cy={frame.cy} data-camera-r={frame.r} viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
             <defs>
               {/* 圆盘里那层明暗：中心几乎透明、边上压到 `--globe-rim`（上游同一套停点）。 */}
               <radialGradient id="globe-shade" cx="38%" cy="36%" r="68%">
@@ -403,15 +404,15 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
             ))}
             <line className="globe-base" x1={mode === "3d" ? frame.cx - frame.r - 28 : mapBounds.x} y1={frame.h - 20} x2={mode === "3d" ? frame.cx + frame.r + 28 : mapBounds.x + mapBounds.w} y2={frame.h - 20} />
             <g clipPath={mode === "2d" ? `url(#${mapClipId})` : undefined}>
-              {placed.map((p) => (
-                <Pin key={p.key} p={p} />
-              ))}
               {marker && (
               <g className="globe-selected">
                 <circle className="globe-selected-ring" cx={marker.x} cy={marker.y} r={7} />
                 <circle className="globe-selected-core" cx={marker.x} cy={marker.y} r={2.4} />
               </g>
               )}
+              {placed.map((p) => (
+                <Pin key={p.key} p={p} />
+              ))}
             </g>
             <text className="globe-caption" x={frame.cx} y={frame.h - 8} textAnchor="middle">
               {mode === "3d" ? globeCaption(view.lon, view.lat, profile.key) : `EQUIRECTANGULAR · ${zoom}% · ${profile.key.toUpperCase()}`}
@@ -482,18 +483,25 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
 }
 
 /**
- * 一枚针：引线 + 空心圆 + 标签，外加一枚透明的命中圆（半径 9，比 2.1 的针大多了，
- * 手指点得中）。标签的文字外侧对齐（左侧那一摞往左收 3px，右侧往右推 3px），
- * 所以它永远不会压到引线。
+ * 在线为实心圆，离线为空心菱形；部分离线的聚合菱形保留在线核心。
+ * 3D 保留引线与标签，2D 仅画标记。透明命中圆的半径与坐标保持不变。
  */
 function Pin({ p }: { p: Placed | FlatNode }) {
   const cx = p.px.toFixed(1)
   const cy = p.py.toFixed(1)
   const label = "label" in p ? p : null
+  const state = p.offlineCount === 0 ? "online" : p.offlineCount === p.count ? "offline" : "mixed"
+  const title = p.count > 1
+    ? `${p.name}：在线 ${p.count - p.offlineCount} 台，离线 ${p.offlineCount} 台（打开其中第一台）`
+    : `${p.name} · ${state === "online" ? "在线" : "离线"}（点击打开）`
+  const diamond = `M ${cx} ${(p.py - 3.6).toFixed(1)} L ${(p.px + 3.6).toFixed(1)} ${cy} L ${cx} ${(p.py + 3.6).toFixed(1)} L ${(p.px - 3.6).toFixed(1)} ${cy} Z`
   return (
     <g>
       {label && <path className="globe-stem" d={`M ${cx} ${cy} L ${label.lx.toFixed(1)} ${label.ly.toFixed(1)}`} />}
-      <circle className="globe-pin" cx={cx} cy={cy} r={2.1} />
+      {state === "online"
+        ? <circle className="globe-pin" data-marker-state={state} data-marker-x={cx} data-marker-y={cy} cx={cx} cy={cy} r={2.7} vectorEffect="non-scaling-stroke" />
+        : <path className="globe-pin" data-marker-state={state} data-marker-x={cx} data-marker-y={cy} d={diamond} vectorEffect="non-scaling-stroke" />}
+      {state === "mixed" && <circle className="globe-pin-core" cx={cx} cy={cy} r={1.3} />}
       {/* 多台地区：针边上挂一个小小的台数（标签里也写着「地区 ×N」，两处都在，
           因为标签可能被挤掉、针本身也常常落在标签的另一头）。 */}
       {label && p.count > 1 && (
@@ -504,8 +512,8 @@ function Pin({ p }: { p: Placed | FlatNode }) {
       {label && <text className="globe-label" x={label.lx + (label.end ? -3 : 3)} y={label.ly + 3} textAnchor={label.end ? "end" : "start"}>
         {label.label}
       </text>}
-      <circle className="hit" cx={cx} cy={cy} r={9} fill="transparent" data-node={p.id} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count}>
-        <title>{p.count > 1 ? `${p.region.label}：${p.count} 台（打开其中第一台）` : `打开 ${p.name}`}</title>
+      <circle className="hit" cx={cx} cy={cy} r={9} fill="transparent" data-node={p.id} data-index={p.index} data-region={p.region.key} data-online={p.online ? "1" : "0"} data-count={p.count} data-offline-count={p.offlineCount} data-marker-state={state}>
+        <title>{title}</title>
       </circle>
     </g>
   )
@@ -534,6 +542,11 @@ const REDUCE = matchMedia("(prefers-reduced-motion: reduce)")
 function subscribe(query: MediaQueryList, notify: () => void) {
   query.addEventListener("change", notify)
   return () => query.removeEventListener("change", notify)
+}
+
+function subscribeVisibility(notify: () => void) {
+  document.addEventListener("visibilitychange", notify)
+  return () => document.removeEventListener("visibilitychange", notify)
 }
 
 /** 窄屏（≤720px）走 low 档。与上游不同的是：上游在这个宽度上干脆不画地球。 */

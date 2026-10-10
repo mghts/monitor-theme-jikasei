@@ -133,10 +133,12 @@ const PROBE = `(() => {
   // ② 点（定位点 + 命中区）与线（连线/线路弧）是否都在盘内。
   // 标签引线本来就延伸到圆盘之外，不能把它拿来判圆盘越界（50% 时尤其容易误报）。
   const outside = []
-  const pins = [...svg.querySelectorAll('circle.globe-pin, circle.hit')]
+  const pins = [...svg.querySelectorAll('.globe-pin, circle.hit')]
   for (const c of pins) {
-    const rr = radius(+c.getAttribute('cx'), +c.getAttribute('cy'))
-    if (rr > R + 0.6) outside.push('点(' + c.getAttribute('cx') + ',' + c.getAttribute('cy') + ') r=' + rr.toFixed(1) + ' .' + c.getAttribute('class'))
+    const x = +(c.getAttribute('data-marker-x') ?? c.getAttribute('cx'))
+    const y = +(c.getAttribute('data-marker-y') ?? c.getAttribute('cy'))
+    const rr = radius(x, y)
+    if (rr > R + 0.6) outside.push('点(' + x + ',' + y + ') r=' + rr.toFixed(1) + ' .' + c.getAttribute('class'))
   }
   let lineWorst = 0, lineAt = '', lineCount = 0
   for (const p of svg.querySelectorAll('path.globe-wire, path.globe-sweep, path.globe-link')) {

@@ -41,6 +41,8 @@ export type Node = {
    */
   public_remark?: string | null
   last_seen: number
+  /** Seconds since the last report on the hub's clock; null before the first report. Absent on older hubs. */
+  last_seen_ago?: number | null
   metrics: Metrics | null
   os: string
   kernel: string
@@ -173,6 +175,7 @@ export function safeNodes(nodes: unknown): Node[] {
       if (!number(safe[key])) safe[key] = 0
     }
     if (safe.month_used !== undefined && !number(safe.month_used)) delete safe.month_used
+    if (safe.last_seen_ago !== undefined && safe.last_seen_ago !== null && !number(safe.last_seen_ago)) delete safe.last_seen_ago
     if (typeof safe.expires_in !== "number" || !Number.isFinite(safe.expires_in)) delete safe.expires_in
     if (typeof safe.expires_at !== "string") safe.expires_at = null
     if (typeof safe.sort !== "number" || !Number.isFinite(safe.sort)) safe.sort = 0

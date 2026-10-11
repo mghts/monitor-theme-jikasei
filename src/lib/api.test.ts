@@ -34,6 +34,20 @@ assert.equal(node.country, "JP", "validation does not mutate input")
 assert.equal(safeNodes([{ id: 2 }])[0].metrics, null, "missing fields on old hubs have safe defaults")
 console.log("invalid metadata and malformed nodes are isolated")
 
+for (const elapsed of [0, 120, null]) {
+  const report = { ...node, last_seen_ago: elapsed }
+  assert.equal(safeNodes([report])[0], report, "valid elapsed time, including zero and null, is retained")
+}
+for (const elapsed of [-1, Infinity, NaN, "120", {}]) {
+  const report = { ...node, last_seen_ago: elapsed }
+  const result = safeNodes([report, node])
+  assert.equal(result[0].last_seen_ago, undefined, "invalid optional elapsed time is discarded")
+  assert.equal(result[0].metrics, node.metrics, "invalid elapsed time does not remove live metrics")
+  assert.equal(result[1], node, "invalid elapsed time does not affect other nodes")
+  assert.equal(report.last_seen_ago, elapsed, "validation does not mutate elapsed time input")
+}
+console.log("hub elapsed time preserves zero, null and node isolation")
+
 // Tabs follow the node order; ungrouped nodes and a hub without the field add none.
 assert.deepEqual(groupsOf([{ group: "东京" }, { group: "" }, {}, { group: "香港" }, { group: "东京" }]), ["东京", "香港"])
 console.log("groups follow the node order")

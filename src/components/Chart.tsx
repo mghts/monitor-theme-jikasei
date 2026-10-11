@@ -1,9 +1,9 @@
-import { useLayoutEffect, useRef, useState } from "react"
+import { useId, useLayoutEffect, useRef, useState } from "react"
 
 import { ChartTooltip } from "@/components/ChartTooltip"
 import { linePath } from "@/lib/chart-path"
 import { clockFor, quarters, timeTicks } from "@/lib/format"
-import { nearestTimeIndex, timeIndexAtRatio } from "@/lib/history"
+import { nearestTimeIndex, timeIndexAtRatio, withTimeGaps } from "@/lib/history"
 
 /**
  * 零依赖的时间序列图：替掉 recharts（它给详情页背了 384KB 原始 / 110KB gzip 的包，
@@ -90,6 +90,7 @@ export function TimeChart({
   rows,
   series,
   hours,
+  step,
   top = 0,
   unit = "",
   format,
@@ -108,6 +109,8 @@ export function TimeChart({
   series: ChartSeries[]
   /** 窗口宽度，决定 X 轴标签的粒度（`clockFor`）。 */
   hours: number
+  /** Hub 给出的桶宽，单位与 rows.ts 相同；缺字段时不推测缺桶。 */
+  step?: number
   /** `domain="zero"` 时的 Y 轴顶端；刻度是它的四等分。 */
   top?: number
   /** 拼在 Y 轴刻度后面的单位（`%` / `/s` / `ms`），空字符串就不拼。 */
@@ -139,6 +142,7 @@ export function TimeChart({
   renderTooltip?: (row: ChartRow) => React.ReactNode
 }) {
   const box = useRef<HTMLDivElement>(null)
+  const clipId = useId()
   const tip = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<number | null>(null)
@@ -168,6 +172,7 @@ export function TimeChart({
   const a = Math.min(Math.max(Math.round(from), 0), last)
   const b = Math.min(Math.max(to ?? last, a), last)
   const view = rows.slice(a, b + 1)
+  const display = withTimeGaps(view, step)
 
   const w = size.w
   const h = size.h
@@ -203,7 +208,8 @@ export function TimeChart({
   }
 
   const lineOf = (s: ChartSeries) => linePath(
-    view.map((row) => {
+    display.map((row) => {
+      if (row === null) return null
       const v = num(row[s.key])
       return v === null ? null : { x: x(row.ts), y: y(v) }
     }),
@@ -227,13 +233,13 @@ export function TimeChart({
       )
       run = []
     }
-    for (const row of view) {
-      const v = num(row[s.key])
+    for (const row of display) {
+      const v = row === null ? null : num(row[s.key])
       if (v === null) {
         flush()
         continue
       }
-      run.push({ x: x(row.ts), y: y(v) })
+      if (row !== null) run.push({ x: x(row.ts), y: y(v) })
     }
     flush()
     return out
@@ -253,15 +259,15 @@ export function TimeChart({
       out.push(`M${up}L${down}Z`)
       run = []
     }
-    for (const row of view) {
-      const pair = row[s.key]
+    for (const row of display) {
+      const pair = row?.[s.key]
       const lo = num(Array.isArray(pair) ? pair[0] : null)
       const hi = num(Array.isArray(pair) ? pair[1] : null)
       if (lo === null || hi === null) {
         flush()
         continue
       }
-      run.push({ x: x(row.ts), lo, hi })
+      if (row !== null) run.push({ x: x(row.ts), lo, hi })
     }
     flush()
     return out
@@ -295,6 +301,11 @@ export function TimeChart({
     <div ref={box} data-chart="" data-connect-gaps={connectGaps} data-smooth-lines={smoothLines} className="relative h-full w-full">
       {w > 0 && h > 0 && (
         <svg width={w} height={h} role="img" aria-label={label} className="overflow-visible">
+          <defs>
+            <clipPath id={clipId}>
+              <rect x={left} y={TOP} width={plotW} height={plotH} />
+            </clipPath>
+          </defs>
           {/* 网格：只画横线（原来 `vertical={false}`），虚线、用边框色。 */}
           {scale.ticks.map((v) => (
             <line
@@ -329,6 +340,7 @@ export function TimeChart({
               {clock(t)}
             </text>
           ))}
+          <g clipPath={`url(#${clipId})`}>
           {series.map((s) =>
             s.band
               ? bandsOf(s).map((d, i) => <path key={`b${s.key}${i}`} d={d} fill={s.color} fillOpacity={0.16} stroke="none" />)
@@ -353,6 +365,7 @@ export function TimeChart({
               strokeLinecap="round"
             />
           ))}
+          </g>
           {/* 悬停竖线（原来 `CURSOR` 那枚）。 */}
           {hovered && !sel && (
             <line x1={x(hovered.ts)} x2={x(hovered.ts)} y1={TOP} y2={TOP + plotH} className="stroke-border" strokeWidth={1} />

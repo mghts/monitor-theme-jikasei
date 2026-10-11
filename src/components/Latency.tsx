@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import { api, type Node } from "@/lib/api"
 import { linePath } from "@/lib/chart-path"
 import { clockFor } from "@/lib/format"
-import { latestPing, withHistorySlot } from "@/lib/history"
+import { latestPing, withHistorySlot, withTimeGaps } from "@/lib/history"
 import { latencyLineOptions } from "@/lib/site-settings"
 import { useLatencyStyle } from "@/lib/theme-config"
 
@@ -18,9 +18,9 @@ type PingPoint = {
 type Probes = Record<string, string>
 type Loss = Record<string, number>
 
-type Probe = { id: number; name: string; points: PingPoint[]; loss: number }
+type Probe = { id: number; name: string; points: PingPoint[]; loss: number; step?: number }
 
-function normalize(d: { ping?: PingPoint[]; probes?: Probes; loss?: Loss }): Probe[] {
+function normalize(d: { ping?: PingPoint[]; probes?: Probes; loss?: Loss; step?: number }): Probe[] {
   const ping = d.ping ?? []
   const names = d.probes ?? {}
   const loss = d.loss ?? {}
@@ -30,6 +30,7 @@ function normalize(d: { ping?: PingPoint[]; probes?: Probes; loss?: Loss }): Pro
       name: names[String(id)] ?? `探测 ${id}`,
       points: ping.filter((p) => p.task_id === id).sort((a, b) => a.ts - b.ts),
       loss: Number(loss[String(id)] ?? 0),
+      step: d.step,
     }))
     .filter((p) => p.points.length > 0)
 }
@@ -68,7 +69,7 @@ function useNodePing(id: number) {
       const request = new AbortController()
       controller = request
       withHistorySlot(
-        () => api<{ ping?: PingPoint[]; probes?: Probes; loss?: Loss }>(
+        () => api<{ ping?: PingPoint[]; probes?: Probes; loss?: Loss; step?: number }>(
           `/nodes/${id}/metrics?hours=1&points=40&series=ping`,
           { signal: request.signal },
         ),
@@ -127,7 +128,7 @@ const SPARK_W = 100
 const SPARK_H = 20
 
 /** 走势线与详情共用样式和路径算法；null 时间仍占轴宽，不压缩丢包或采样缺口。 */
-function Sparkline({ points, probeId, className }: { points: PingPoint[]; probeId: number; className: string }) {
+function Sparkline({ points, probeId, className, step }: { points: PingPoint[]; probeId: number; className: string; step?: number }) {
   const { style } = useLatencyStyle()
   const options = latencyLineOptions(style)
   const nums = points.filter((point) => Number.isFinite(point.ts) && typeof point.latency === "number" && Number.isFinite(point.latency))
@@ -145,7 +146,7 @@ function Sparkline({ points, probeId, className }: { points: PingPoint[]; probeI
     const position = Number.isFinite(span) ? (value - low) / span : (value / 2 - low / 2) / (high / 2 - low / 2)
     return Math.max(0, Math.min(1, position))
   }
-  const path = linePath(points.map((point) => Number.isFinite(point.ts) && typeof point.latency === "number" && Number.isFinite(point.latency)
+  const path = linePath(withTimeGaps(points, step).map((point) => point !== null && Number.isFinite(point.ts) && typeof point.latency === "number" && Number.isFinite(point.latency)
     ? { x: ratio(point.ts, first, last) * SPARK_W, y: SPARK_H - 2 - ratio(point.latency, min, max) * (SPARK_H - 4) }
     : null), options)
   return (
@@ -205,7 +206,7 @@ function ProbeRow({ probe, now, compact = false }: { probe: Probe; now: number; 
         <span className={`tnum ${compact ? "w-12" : "w-14"} shrink-0 text-right font-medium ${gray}`}>
           {ms === null ? "超时" : `${ms} ms`}
         </span>
-        <Sparkline points={probe.points} probeId={probe.id} className={gray} />
+        <Sparkline points={probe.points} probeId={probe.id} className={gray} step={probe.step} />
         <span className={`tnum ${compact ? "w-9" : "w-10"} shrink-0 text-right text-muted-foreground`}>
           {probe.loss > 0 ? `${probe.loss.toFixed(1)}%` : "0.0%"}
         </span>

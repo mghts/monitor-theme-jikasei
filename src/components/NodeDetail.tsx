@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Country, deployed, RemarkChips } from "@/components/NodeCard"
 import { api, type Node } from "@/lib/api"
 import {
-  axisBytes, axisTop, bytes, despike, cpuName, osName, rate, uptime,
+  axisBytes, axisTop, bytes, despike, cpuName, offlineSeconds, osName, rate, uptime,
 } from "@/lib/format"
 import { hasDetailRemarks, remarkChips } from "@/lib/notes"
 import { latencyLineOptions, latencyStyleFromOptions, remarksOnCards, type RemarkPlacement } from "@/lib/site-settings"
@@ -109,8 +109,8 @@ function despikeWindow(points: { ts: number }[]): number {
 function onlineFor(node: Node) {
   if (node.online) return node.metrics ? uptime(node.metrics.uptime) : "—"
   if (!deployed(node)) return "未接入"
-  const down = node.last_seen ? Date.now() / 1000 - node.last_seen : 0
-  return down >= 60 ? `离线 ${uptime(down)}` : "离线"
+  const down = offlineSeconds(node)
+  return down !== null && down >= 60 ? `离线 ${uptime(down)}` : "离线"
 }
 
 function Fact({ label, value }: { label: string; value?: string | number | null }) {
@@ -152,7 +152,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
     if (!peekOpen) return
     const onDown = (e: PointerEvent) => {
       const el = e.target
-      if (!(el instanceof HTMLElement) || !peekRef.current?.contains(el)) setPeekOpen(false)
+      if (!(el instanceof globalThis.Node) || !peekRef.current?.contains(el)) setPeekOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPeekOpen(false) }
     document.addEventListener("pointerdown", onDown)
@@ -174,7 +174,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
   // Probes switched off. Hiding a slow one is what makes the fast ones readable,
   // as the axis rescales to what remains.
   const [hiddenProbes, setHiddenProbes] = useState<number[]>([])
-  const [data, setData] = useState<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss } | null>(null)
+  const [data, setData] = useState<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss; step?: number } | null>(null)
   // Retained rather than folded into an empty result: a refused request and an
   // empty window are different answers, and the hub has reason to refuse this one
   // -- it caps how many history windows it builds concurrently, since each holds
@@ -223,7 +223,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
       const request = new AbortController()
       controller = request
       withHistorySlot(
-        () => api<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss }>(
+        () => api<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss; step?: number }>(
           `/nodes/${node.id}/metrics?hours=${hours}&points=${points}&series=${series}`,
           { signal: request.signal },
         ),
@@ -297,6 +297,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
     () => resourceHistory(data?.metrics ?? []),
     [data],
   )
+  const stepMs = typeof data?.step === "number" ? data.step * 1_000 : undefined
   const missingHistory = [
     !available.swap_used && "Swap",
     !available.tcp && "TCP",
@@ -317,6 +318,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
       cpu: axisTop(max((m) => m.cpu), 4, 10, 100),
       // Base 1024, so the steps are round in the unit `axisBytes` prints.
       rate: axisTop(max((m) => Math.max(m.net_rx, m.net_tx)), 1024, 1024),
+      memory: max((m) => m.mem_used),
+      disk: max((m) => m.disk_used),
       connections: countAxisTop(Math.max(peaks.tcp, peaks.udp)),
       procs: countAxisTop(peaks.procs),
     }
@@ -518,8 +521,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                   <span
                     ref={peekRef}
                     className="relative inline-flex items-center sm:hidden"
-                    onPointerEnter={() => setPeekOpen(true)}
-                    onPointerLeave={() => setPeekOpen(false)}
+                    onPointerEnter={(e) => { if (e.pointerType === "mouse") setPeekOpen(true) }}
+                    onPointerLeave={(e) => { if (e.pointerType === "mouse") setPeekOpen(false) }}
                   >
                     <button
                       data-note-popover
@@ -629,6 +632,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                     })),
                   ]}
                   hours={hours}
+                  step={stepMs}
                   // 延迟轴不从 0 起：这些线路活在一条窄带里，锚到 0 会把起伏压平。
                   domain="auto"
                   unit="ms"
@@ -652,7 +656,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                 drawn in it is picked here. Recharts paints the brush into the
                 same SVG as the axis, so this is as close beneath as HTML
                 sits. */}
-            {(pingSeries.length > 1 || pingSeries.some((s) => s.loss > 0)) && (
+            {(pingSeries.length > 1 || pingSeries.some((s) => s.loss > 0 || hiddenProbes.includes(s.id))) && (
             <div className="flex flex-wrap items-center justify-center gap-1.5">
               {pingSeries.map((s) => {
                 const shown = !hiddenProbes.includes(s.id)
@@ -712,6 +716,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               rows={metricRows}
               series={[{ key: "cpu", name: "CPU", color: "var(--chart-1)", area: true }]}
               hours={hours}
+              step={stepMs}
               top={tops.cpu}
               unit="%"
               format={(v) => `${v.toFixed(1)}%`}
@@ -729,7 +734,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               rows={metricRows}
               series={[{ key: "mem_used", name: "内存", color: "var(--chart-4)", area: true }]}
               hours={hours}
-              top={node.mem_total}
+              step={stepMs}
+              top={tops.memory > node.mem_total ? axisTop(tops.memory, 1024, 1024) : node.mem_total}
               yFormat={axisBytes}
               format={(v) => bytes(v)}
               label="内存使用量走势"
@@ -742,6 +748,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               rows={metricRows}
               series={[{ key: "swap_used", name: "Swap", color: "var(--chart-5)", area: true }]}
               hours={hours}
+              step={stepMs}
               top={Math.max(node.swap_total, axisTop(peaks.swap_used, 1024, 1024))}
               yFormat={axisBytes}
               format={(v) => bytes(v)}
@@ -760,6 +767,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                 { key: "net_tx", name: "上行", color: "var(--chart-2)" },
               ]}
               hours={hours}
+              step={stepMs}
               top={tops.rate}
               unit="/s"
               yFormat={axisBytes}
@@ -776,7 +784,8 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               rows={metricRows}
               series={[{ key: "disk_used", name: "硬盘", color: "var(--chart-3)", area: true }]}
               hours={hours}
-              top={node.disk_total}
+              step={stepMs}
+              top={tops.disk > node.disk_total ? axisTop(tops.disk, 1024, 1024) : node.disk_total}
               yFormat={axisBytes}
               format={(v) => bytes(v)}
               label="硬盘使用量走势"
@@ -792,6 +801,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
                 ...(available.udp ? [{ key: "udp", name: "UDP", color: "var(--chart-7)", dash: "4 3" }] : []),
               ]}
               hours={hours}
+              step={stepMs}
               top={tops.connections}
               yFormat={String}
               format={String}
@@ -806,6 +816,7 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               rows={metricRows}
               series={[{ key: "procs", name: "进程", color: "var(--chart-8)", area: true }]}
               hours={hours}
+              step={stepMs}
               top={tops.procs}
               yFormat={String}
               format={String}

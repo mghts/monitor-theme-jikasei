@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card"
 import { LatencyPanel, PeekLatency } from "@/components/Latency"
 import { Meter } from "@/components/Meter"
 import type { Node } from "@/lib/api"
-import { CYCLES, FOREVER, bytes, daysUntil, money, pair, percent, rate, uptime } from "@/lib/format"
+import { CYCLES, FOREVER, bytes, daysUntil, money, offlineSeconds, pair, percent, rate, uptime } from "@/lib/format"
 import { remarkChips, type RemarkChip } from "@/lib/notes"
 import { remarksOnCards, type RemarkPlacement } from "@/lib/site-settings"
 
@@ -91,8 +91,8 @@ export function Country({ node }: { node: Node }) {
 function onlineText(node: Node): string | null {
   if (node.online) return node.metrics ? `在线 ${uptime(node.metrics.uptime)}` : "在线"
   if (!deployed(node)) return null
-  const down = node.last_seen ? Date.now() / 1000 - node.last_seen : 0
-  return down >= 60 ? `离线 ${uptime(down)}` : "离线"
+  const down = offlineSeconds(node)
+  return down !== null && down >= 60 ? `离线 ${uptime(down)}` : "离线"
 }
 
 function priceText(node: Node): string | null {
@@ -233,9 +233,9 @@ export function NodeCard({ node, onOpen, onWarm, latencyLines, cardStyle, remark
     if (!peekOpen) return
     const onDown = (e: PointerEvent) => {
       // 别写 `e.target as Node`：本文件里的 `Node` 是主题自己的节点类型（@/lib/api），
-      // 会和 DOM 的 Node 撞名。用 instanceof 收窄，既避开名字冲突也真的判了类型。
+      // 会和 DOM 的 Node 撞名。globalThis.Node 也包含 SVG 与 path 等图标节点。
       const el = e.target
-      if (!(el instanceof HTMLElement) || !peekRef.current?.contains(el)) setPeekOpen(false)
+      if (!(el instanceof globalThis.Node) || !peekRef.current?.contains(el)) setPeekOpen(false)
     }
     document.addEventListener("pointerdown", onDown)
     return () => document.removeEventListener("pointerdown", onDown)
@@ -344,11 +344,12 @@ export function NodeCard({ node, onOpen, onWarm, latencyLines, cardStyle, remark
             ★ 这两档常驻这枚控件（20px，挂在标题行右端）：没写备注时它照样在，
             点开是在线时间/价格/到期；「详细」档不挂它——那几项本来就在卡面上写着。 */}
         {peek && (
+          // 触摸只走 click 开合，避免 touchEnd 的 pointerleave 先关、随后 click 又打开。
           <span
             ref={peekRef}
             className="relative ml-auto shrink-0"
-            onPointerEnter={() => setPeekOpen(true)}
-            onPointerLeave={() => setPeekOpen(false)}
+            onPointerEnter={(e) => { if (e.pointerType === "mouse") setPeekOpen(true) }}
+            onPointerLeave={(e) => { if (e.pointerType === "mouse") setPeekOpen(false) }}
           >
             <button
               type="button"

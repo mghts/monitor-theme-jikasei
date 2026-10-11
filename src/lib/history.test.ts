@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { createHistoryQueue, latestPing, PING_STALE_MS, timeIndexAtRatio, timeRangeIndices } from "./history.ts"
+import { createHistoryQueue, latestPing, PING_STALE_MS, timeIndexAtRatio, timeRangeIndices, withTimeGaps } from "./history.ts"
+import { linePath } from "./chart-path.ts"
 
 // 离线缺口占了大半画布时，光标仍必须选中它实际指着的样本。
 const irregular = [0, 60, 3600, 3660].map((ts) => ({ ts }))
@@ -17,6 +18,28 @@ assert.deepEqual(timeRangeIndices([60, 120, 180, 240].map((ts) => ({ ts })), [60
 assert.deepEqual(timeRangeIndices([120, 180, 240].map((ts) => ({ ts })), [60, 180]), [0, 1])
 assert.equal(timeRangeIndices([240, 300].map((ts) => ({ ts })), [60, 180]), null, "已移出窗口的选区回全图")
 assert.equal(timeRangeIndices(irregular, null), null)
+
+// Hub 会省略整个空桶。显示断点由响应 step 判定，原始时间轴、样本和丢包值不变。
+const buckets = [
+  { ts: 0, latency: 20, loss: 0 },
+  { ts: 60, latency: 30, loss: 25 },
+  { ts: 360, latency: 40, loss: 0 },
+  { ts: 420, latency: 50, loss: 0 },
+]
+const display = withTimeGaps(buckets, 60)
+assert.deepEqual(display, [buckets[0], buckets[1], null, buckets[2], buckets[3]])
+assert.equal(display[3], buckets[2], "断点两侧仍引用原始样本")
+const pathPoints = display.map((point) => point && ({ x: point.ts, y: point.latency }))
+assert.equal((linePath(pathPoints).match(/M/g) ?? []).length, 2, "默认线形不能跨省略的空桶")
+assert.equal((linePath(pathPoints, { connectGaps: true }).match(/M/g) ?? []).length, 1, "连接断点只影响路径")
+assert.equal(timeIndexAtRatio(buckets, 360 / 420), 2, "tooltip 仍定位真实样本，不定位显示断点")
+for (const step of [undefined, 0, -60, NaN, Infinity]) {
+  assert.deepEqual(withTimeGaps(buckets, step), buckets, "没有可信桶宽时不猜测低频采样缺测")
+}
+assert.deepEqual(withTimeGaps(buckets, 300), buckets, "较宽汇总桶的间隔不能误判为缺测")
+assert.deepEqual(withTimeGaps(buckets.map((point) => ({ ...point, ts: point.ts * 1000 })), 60_000).map((point) => point?.ts ?? null),
+  [0, 60_000, null, 360_000, 420_000], "资源图毫秒轴和延迟秒轴使用同一判定")
+assert.deepEqual(buckets.map((point) => [point.latency, point.loss]), [[20, 0], [30, 25], [40, 0], [50, 0]])
 
 const now = 1_800_000_000_000
 const points = [
@@ -96,4 +119,4 @@ const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
   assert.equal(await queue(async () => 42, new AbortController().signal), 42)
 }
 
-console.log("历史数据：时间命中、缩放保持、最新超时、陈旧状态、并发与取消全部通过")
+console.log("历史数据：时间命中、缩放保持、缺桶显示断点、最新超时、陈旧状态、并发与取消全部通过")

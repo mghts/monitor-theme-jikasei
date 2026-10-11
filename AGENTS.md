@@ -21,7 +21,7 @@
 
 | 模块 | 文件入口 |
 |---|---|
-| 页面、筛选与详情入口 | `src/App.tsx`；`src/lib/search.ts` |
+| 页面、筛选与详情入口 | `src/App.tsx`；`src/components/DetailLoader.tsx`；`src/lib/search.ts` |
 | 公开接口、实时更新与降级 | `src/lib/api.ts`；`src/lib/transport.ts` |
 | 3D / 2D 地图、信标与地区 | `src/components/Globe.tsx`；`src/lib/globe.ts`；`src/lib/map.ts`；`src/lib/world.ts` |
 | 首页节点卡片与延迟图 | `src/components/NodeCard.tsx`；`src/components/Latency.tsx` |
@@ -71,9 +71,11 @@
   CHART_DIST="$PWD/dist" node tools/verify_detail_charts.mjs
   node tools/verify_summary.mjs 5321
   FX_DIST="$PWD/dist" node tools/verify_exchange_rates.mjs
+  DETAIL_DIST="$PWD/dist" node tools/verify_detail_loading.mjs
   ```
 
   资源 / 延迟图修改选第一项，概览 / 预算 / 筛选 / 读数布局修改选第二项，汇率修改选第三项。
+  详情脚本加载或地图关闭时地区筛选修改选第四项；延迟线形与缺桶修改还需运行 `node tools/verify_latency_options.mjs`。
   Summary 从当前目录的 `dist/` 读取，HTTP 端口默认 5321、CDP 为端口 + 4000；占用时换一个同时可用的端口。
   预算专项可用 `node tools/verify_summary.mjs 5321 --custom-only`，不能省略前面的端口参数。
   图表工具可用 `SHOT_DIR` 指定新的证据目录；汇率工具的第一个参数可指定证据父目录。

@@ -23,9 +23,9 @@ if (typeof WebSocket === 'undefined') throw new Error('本工具需要提供原�
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.woff2': 'font/woff2', '.ico': 'image/x-icon' }
 const GB = 1024 ** 3
-const START = Math.floor(Date.now() / 1000) - 2100
-// 两条线路共用真实时间轴，间隔不等；第二条另外缺两个采样桶。
-const OFFSETS = [0, 60, 150, 210, 360, 420, 480, 630, 690, 780, 840, 900, 1080, 1140, 1230, 1290, 1410, 1470, 1560, 1620, 1770, 1830]
+const START = Math.floor(Date.now() / 60_000) * 60 - 2100
+// Hub 的 step=60 秒网格：360、840、1260 前各省略整桶，第二条另缺两个桶。
+const OFFSETS = [0, 60, 120, 180, 240, 360, 420, 480, 540, 600, 660, 720, 840, 900, 960, 1020, 1080, 1140, 1260, 1320, 1380, 1440]
 const LATENCIES = [40, 52, 43, 58, 44, 49, null, null, 45, 53, 41, 720, 43, 55, 46, null, 48, 56, 42, 51, 44, 50]
 const PING = {
   // Monitor v1.4.0 src/api.rs:437-439：未请求的另一系列也以空数组返回。
@@ -56,6 +56,7 @@ const NODE = {
 }
 let config = { cardStyle: 'detailed', listTop: 'none' }
 let configDelay = 0
+let omitStep = false
 const requests = []
 const configResponses = []
 const results = []
@@ -94,6 +95,7 @@ const server = createServer((req, res) => {
     else if (url.pathname === '/api/nodes/1/metrics') {
       requests.push(url.pathname + url.search)
       body = url.searchParams.get('series') === 'ping' ? PING : METRICS
+      if (omitStep) body = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'step'))
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     return res.end(JSON.stringify(body))
@@ -215,10 +217,10 @@ function pathsMatch(paths, connect, smooth, breaks) {
   return paths.length === 2 && paths.every((p) => p.d.length > 0 && (p.d.match(/M/g) || []).length === (connect ? 1 : breaks[p.key]) && (smooth ? p.d.includes('C') : p.d.includes('L') && !p.d.includes('C')))
 }
 function sparksMatch(sparks, connect, smooth) {
-  return sparks.length === 2 && sparks.every((s) => s.connect === String(connect) && s.smooth === String(smooth) && s.paths.length === 1) && pathsMatch(sparks.flatMap((s) => s.paths), connect, smooth, { t1: 3, t2: 2 })
+  return sparks.length === 2 && sparks.every((s) => s.connect === String(connect) && s.smooth === String(smooth) && s.paths.length === 1) && pathsMatch(sparks.flatMap((s) => s.paths), connect, smooth, { t1: 6, t2: 6 })
 }
 function detailMatches(detail, connect, smooth) {
-  return detail.connect === String(connect) && detail.smooth === String(smooth) && detail.controls.length === 2 && detail.controls.every((control) => control.checked === (control.key === 'connect-gaps' ? connect : smooth)) && pathsMatch(detail.paths, connect, smooth, { t1: 3, t2: 4 })
+  return detail.connect === String(connect) && detail.smooth === String(smooth) && detail.controls.length === 2 && detail.controls.every((control) => control.checked === (control.key === 'connect-gaps' ? connect : smooth)) && pathsMatch(detail.paths, connect, smooth, { t1: 6, t2: 6 })
 }
 async function navigateConfig(saved, path = '/', { width = 1280, delay = 0 } = {}) {
   config = { cardStyle: 'detailed', listTop: 'none', ...saved }
@@ -286,7 +288,7 @@ try {
   await clickText('网络延迟')
   await ready()
   const baseline = await state()
-  check('两个选项默认关闭，原始延迟折线保留丢包/缺测断点', baseline.connect === 'false' && baseline.smooth === 'false' && baseline.controls.length === 2 && baseline.controls.every((c) => !c.checked) && baseline.paths.length === 2 && baseline.paths.every((p) => (p.d.match(/M/g) || []).length >= 2 && p.d.includes('L') && !p.d.includes('C')), JSON.stringify(baseline.paths.map((p) => ({ key: p.key, moves: (p.d.match(/M/g) || []).length }))))
+  check('默认延迟折线同时保留超时、单线路缺测及整个省略桶的断点', detailMatches(baseline, false, false), JSON.stringify(baseline.paths.map((p) => ({ key: p.key, moves: (p.d.match(/M/g) || []).length }))))
   const xs = [...baseline.paths[0].d.matchAll(/[ML]([\d.-]+),[\d.-]+/g)].map((m) => Number(m[1]))
   check('非等距采样按时间比例绘制', xs.length > 5 && new Set(xs.slice(1, 6).map((x, i) => Math.round((x - xs[i]) * 10))).size > 1)
   const lossTip = await hoverAt(6)
@@ -312,7 +314,7 @@ try {
   await evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.includes('联通夹具'))?.click())
   await waitFor(() => document.querySelectorAll('svg[aria-label="节点延迟走势"] path[data-series]').length === 1)
   const single = await state()
-  check('隐藏探测后单条曲线仍应用选项；band 保留分段且不跨丢包', single.paths[0]?.key === 't1' && single.paths[0].d.includes('C') && (single.paths[0].d.match(/M/g) || []).length === 1 && single.bands.length === 3 && single.bands.every((d) => !d.includes('C')), `bands=${single.bands.length}`)
+  check('隐藏探测后单条曲线仍应用选项；band 不跨丢包或整个省略桶', single.paths[0]?.key === 't1' && single.paths[0].d.includes('C') && (single.paths[0].d.match(/M/g) || []).length === 1 && single.bands.length === 5 && single.bands.every((d) => !d.includes('C')), `bands=${single.bands.length}`)
   await evaluate(() => [...document.querySelectorAll('label')].find((label) => label.textContent.trim() === '削峰')?.querySelector('input')?.click())
   await waitFor(() => !!document.querySelector('svg[aria-label="节点延迟走势"] path[data-series="s1"]'))
   const despiked = await state()
@@ -477,6 +479,14 @@ try {
     const detailBroken = detailMatches(await readyDetailStyle(false, false), false, false)
     check(`${label}：首页和详情安全回退 broken`, homeBroken && detailBroken)
   }
+  omitStep = true
+  await navigateConfig({ latencyStyle: 'broken' })
+  const legacySparks=await readySparks(false,false)
+  check('旧 Hub 未给 step：卡面保留显式超时，不猜测采样频率',pathsMatch(legacySparks.flatMap(s=>s.paths),false,false,{t1:3,t2:2}))
+  await openConfiguredDetail({ latencyStyle: 'broken' })
+  const legacyDetail=await readyDetailStyle(false,false)
+  check('旧 Hub 未给 step：详情仍保留显式超时和单线路空值',pathsMatch(legacyDetail.paths,false,false,{t1:3,t2:4}))
+  omitStep = false
   check('验收期间无未捕获页面异常', exceptions.length === 0, exceptions.join(' ; '))
 } catch (error) {
   check('验收脚本完成', false, error.stack || String(error))

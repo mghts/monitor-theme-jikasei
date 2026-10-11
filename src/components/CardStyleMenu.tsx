@@ -70,7 +70,7 @@ export function CardStyleMenu({ value, siteDefault, onPick }: {
     if (!open) return
     const onDown = (e: PointerEvent) => {
       const el = e.target
-      if (!(el instanceof HTMLElement) || !(box.current?.contains(el) || menu.current?.contains(el))) setOpen(false)
+      if (!(el instanceof globalThis.Node) || !(box.current?.contains(el) || menu.current?.contains(el))) setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false)

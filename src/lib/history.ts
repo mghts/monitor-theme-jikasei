@@ -28,6 +28,17 @@ export function timeRangeIndices(rows: { ts: number }[], range: [number, number]
   return from < to ? [from, to] : null
 }
 
+/** 仅按 Hub 给出的桶宽插入显示断点；ts 与 step 使用同一单位，不改写或补造采样。 */
+export function withTimeGaps<T extends { ts: number }>(points: readonly T[], step?: number): Array<T | null> {
+  if (typeof step !== "number" || !Number.isFinite(step) || step <= 0) return [...points]
+  const display: Array<T | null> = []
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0 && points[i].ts - points[i - 1].ts > step) display.push(null)
+    display.push(points[i])
+  }
+  return display
+}
+
 /** 卡片是一小时 / 40 桶，最新桶可能落后约 90 秒；超过三分钟明确标记陈旧。 */
 export const PING_STALE_MS = 180_000
 

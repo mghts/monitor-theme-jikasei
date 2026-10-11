@@ -91,6 +91,16 @@ export function uptime(seconds: number): string {
   return d > 0 ? `${d} 天 ${h} 小时` : h > 0 ? `${h} 小时 ${m} 分` : `${m} 分`
 }
 
+/** 优先用 Hub 的离线秒数；null 不补造时长，旧 Hub 缺字段时才按访客时钟回退。 */
+export function offlineSeconds(node: { last_seen: number; last_seen_ago?: number | null }, nowMs = Date.now()): number | null {
+  if (node.last_seen_ago !== undefined) {
+    return typeof node.last_seen_ago === "number" && Number.isFinite(node.last_seen_ago) && node.last_seen_ago >= 0
+      ? node.last_seen_ago : null
+  }
+  if (!Number.isFinite(node.last_seen) || node.last_seen <= 0 || !Number.isFinite(nowMs)) return null
+  return Math.max(0, nowMs / 1000 - node.last_seen)
+}
+
 /** Whole days until a date, negative once it has passed. */
 export function daysUntil(date?: string | null): number | null {
   if (!date) return null

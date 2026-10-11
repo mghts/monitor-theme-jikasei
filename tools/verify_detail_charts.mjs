@@ -64,11 +64,24 @@ const HISTORIES = {
   invalid: { metrics: samples.map((row, i) => ({ ...row, swap_used: null, tcp: i % 2 ? -1 : '12', udp: null, procs: i % 2 ? [] : null })) },
   empty: { metrics: [] },
   'capacity-off': { metrics: samples },
+  'capacity-reduced': { metrics: samples, step: 300 },
+  'capacity-covering': { metrics: samples, step: 300 },
+  'omitted-buckets': { metrics: samples.filter((_row, i) => i < 12 || i > 15), step: 300 },
+  'single-hidden': { metrics: samples, step: 300 },
 }
 const PING = {
   ping: Array.from({ length: 40 }, (_, i) => ({ task_id: 1, ts: START + i * 300, latency: 30 + (i % 5) * 3,
     band: [28 + (i % 5) * 3, 34 + (i % 5) * 3], loss: 0 })),
   probes: { 1: '北京电信' }, loss: { 1: 0.4 },
+  step: 300,
+}
+function pingFor(hours) {
+  if (fixture === 'omitted-buckets') return { ...PING, ping: PING.ping.filter((_row, i) => i < 12 || i > 15) }
+  if (fixture === 'single-hidden') return {
+    ...PING, probes: { 1: '线路 A', 2: '线路 B' }, loss: {},
+    ping: [...PING.ping, ...(hours === '1' ? [] : PING.ping.map((point) => ({ ...point, task_id: 2, latency: 80 })))],
+  }
+  return PING
 }
 const serveFile = (res, path) => {
   const file = join(DIST, normalize(path === '/' ? '/index.html' : path).replace(/^(\.\.[/\\])+/, ''))
@@ -93,7 +106,7 @@ const server = createServer((req, res) => {
     const body = path === '/api/me' ? { authed: false, github: false, public_page: true, site: BASE, site_name: '图表', history_days: 7 }
       : path === '/api/nodes' ? NODES
         : path.endsWith('/config') ? { listTop: 'both', cardStyle: 'detailed', remarkPlacement: 'both', pingLines: '' }
-          : path.includes('/metrics') ? (url.searchParams.get('series') === 'metrics' ? HISTORIES[fixture] : url.searchParams.get('series') === 'ping' ? PING : { metrics: [], ping: [], probes: {}, loss: {} }) : {}
+          : path.includes('/metrics') ? (url.searchParams.get('series') === 'metrics' ? HISTORIES[fixture] : url.searchParams.get('series') === 'ping' ? pingFor(url.searchParams.get('hours')) : { metrics: [], ping: [], probes: {}, loss: {} }) : {}
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     return res.end(JSON.stringify(body))
   }
@@ -160,6 +173,9 @@ const PROBE = `(() => {
     const paths = svg ? [...svg.querySelectorAll('path')] : []
     return { title:h.textContent, chartH:chart?.getBoundingClientRect().height ?? 0, svg:rect(svg), panel:rect(box),
       ariaLabel:svg?.getAttribute('aria-label'), plot:rect(svg?.querySelector('rect[fill="transparent"]')),
+      clip:svg ? (()=>{const clip=svg.querySelector('clipPath'),r=clip?.querySelector('rect');return {id:clip?.id,
+        reference:svg.querySelector('path[data-series]')?.parentElement.getAttribute('clip-path'),
+        x:+r?.getAttribute('x'),y:+r?.getAttribute('y'),w:+r?.getAttribute('width'),h:+r?.getAttribute('height')}})():null,
       plotLocal:svg ? (()=>{const r=svg.querySelector('rect[fill="transparent"]');return {x:+r.getAttribute('x'),y:+r.getAttribute('y'),w:+r.getAttribute('width'),h:+r.getAttribute('height')}})():null,
       ys:texts.filter((t)=>t.getAttribute('text-anchor')==='end').map((t)=>t.textContent),
       xs:texts.filter((t)=>t.getAttribute('text-anchor')==='middle').map((t)=>t.textContent),
@@ -196,6 +212,10 @@ async function caseOpen(name, count) {
   fixture = name
   node.swap_total = name === 'capacity-off' || name === 'zero' ? 0 : 2147483648
   node.metrics.swap_total = node.swap_total
+  node.mem_total = name === 'capacity-reduced' ? 134217728 : name === 'capacity-covering' ? 700_000_000 : 2147483648
+  node.disk_total = name === 'capacity-reduced' ? 268435456 : name === 'capacity-covering' ? 1_800_000_000 : 42949672960
+  node.metrics.mem_total = node.mem_total
+  node.metrics.disk_total = node.disk_total
   const charts = await open(`${BASE}/node/1?fixture=${encodeURIComponent(name)}`, count)
   const state = await pageState()
   evidence.push({fixture:name,charts,state})
@@ -230,13 +250,13 @@ function verifySeries(name, charts, fields) {
     const chart=charts.find((chart)=>chart.series.some((series)=>series.key===key)), series=chart?.series.find((series)=>series.key===key)
     const rows=HISTORIES[name].metrics, indices=rows.flatMap((row,i)=>valid(row[key])?[i]:[])
     let runs=0,previous=-2
-    for(const index of indices){if(index!==previous+1)runs++;previous=index}
+    for(const index of indices){if(index!==previous+1 || (HISTORIES[name].step && rows[index].ts-rows[previous].ts>HISTORIES[name].step))runs++;previous=index}
     const points=coords(series?.d||'')
     check(`${name}/${key}: 有效采样逐点保留、缺测处断线`, !!series && series.moves===runs && points.length===indices.length,
       `点=${points.length}/${indices.length};段=${series?.moves}/${runs}`)
     const p=chart?.plotLocal
     check(`${name}/${key}: 使用完整时间域且线条在绘图区内`, !!p && points.length===indices.length && points.every((point,i)=>
-      Math.abs(point.x-(p.x+p.w*indices[i]/39))<=.11 && point.y>=p.y-.11 && point.y<=p.y+p.h+.11) && !/NaN|Infinity|[CQ]/.test(series?.d||''), series?.d?.slice(0,100))
+      Math.abs(point.x-(p.x+p.w*(rows[indices[i]].ts-rows[0].ts)/(rows.at(-1).ts-rows[0].ts)))<=.11 && point.y>=p.y-.11 && point.y<=p.y+p.h+.11) && !/NaN|Infinity|[CQ]/.test(series?.d||''), series?.d?.slice(0,100))
     if (key==='tcp'||key==='udp'||key==='procs') check(`${name}/${key}: 计数刻度为不同整数`, chart.ys.length===5 && chart.ys.every((t)=>/^\d+$/.test(t)) && new Set(chart.ys).size===5,chart.ys.join('/'))
   }
 }
@@ -253,6 +273,8 @@ try {
   check('资源面板完整（旧四图及可用新增三图）', charts.length===count && ([4,5,6,7].includes(count)),charts.map(c=>c.title).join('/'))
   check('每块 SVG 撑满 160px 图表容器',charts.length===count && charts.every(c=>c.svg&&Math.abs(c.svg.h-c.chartH)<=2&&c.chartH===160))
   check('每张 SVG 都有 aria-label',charts.length>0&&charts.every(c=>!!c.ariaLabel))
+  check('数据路径由每图独立的绘图区 clipPath 裁剪，坐标轴仍在其外',charts.length>0&&new Set(charts.map(c=>c.clip?.id)).size===charts.length&&charts.every(c=>
+    c.clip?.id&&c.clip.reference===`url(#${c.clip.id})`&&['x','y','w','h'].every(key=>c.clip[key]===c.plotLocal[key])))
   check('五条 Y 刻度和真实 HH:MM 时间轴',charts.length>0&&charts.every(c=>c.ys.length===5&&c.xs.length>=3&&c.xs.every(s=>/^\d{2}:\d{2}$/.test(s))))
   const cpu=chartOf(charts,'CPU'), memory=chartOf(charts,'内存'), network=chartOf(charts,'网络速率'), disk=chartOf(charts,'硬盘')
   check('旧 CPU/内存/硬盘面积填充及网络双折线保留',cpu?.area>=1&&memory?.area>=1&&disk?.area>=1&&network?.area===0&&network?.line===2)
@@ -310,6 +332,18 @@ try {
     const disabled=await caseOpen('capacity-off',7)
     verifySeries('capacity-off',disabled.charts,['swap_used'])
     check('当前 Swap 容量为零但正历史仍完整显示',chartOf(disabled.charts,'Swap').ys.some(t=>t!=='0 B'))
+    const reduced=await caseOpen('capacity-reduced',7)
+    verifySeries('capacity-reduced',reduced.charts,['mem_used','disk_used'])
+    await shot('capacity-reduced-resources')
+    const covering=await caseOpen('capacity-covering',7)
+    for(const [prefix,key,total] of [['内存','mem_used',node.mem_total],['硬盘','disk_used',node.disk_total]]) {
+      const chart=chartOf(covering.charts,prefix),p=chart.plotLocal
+      const actual=coords(chart.series.find(series=>series.key===key).d),validRows=samples.filter(row=>valid(row[key]))
+      check(`容量覆盖历史时 ${prefix} 仍固定当前容量`,actual.length===validRows.length&&actual.every((point,i)=>Math.abs(point.y-(p.y+p.h-validRows[i][key]/total*p.h))<=.11))
+    }
+    const omitted=await caseOpen('omitted-buckets',7)
+    verifySeries('omitted-buckets',omitted.charts,['cpu','mem_used','disk_used','net_rx','net_tx',...EXTRA])
+    await shot('omitted-buckets-resources')
     for(const width of [320,390]) for(const dark of [false,true]) {
       await viewport(width,dark,true)
       const phone=await caseOpen('modern',7)
@@ -394,6 +428,50 @@ if (!REAL) {
   }
 }
 
+if (!REAL && !UPSTREAM) {
+  const openLatency = async (name) => {
+    await caseOpen(name, 7)
+    await js(`(() => { [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='网络延迟').click() })()`)
+    for (let i = 0; i < 30; i++) {
+      if (await js(`!!document.querySelector('svg[aria-label="节点延迟走势"] path[data-series]')`)) return
+      await sleep(100)
+    }
+    throw new Error('延迟夹具没有就绪')
+  }
+  const latencyState = () => js(`(() => {
+    const svg=document.querySelector('svg[aria-label="节点延迟走势"]');return {
+      paths:[...(svg?.querySelectorAll('path[data-series]')||[])].map(p=>({key:p.dataset.series,d:p.getAttribute('d'),moves:(p.getAttribute('d').match(/M/g)||[]).length})),
+      bands:svg?.querySelectorAll('path[fill-opacity="0.16"]').length??0,
+      connect:document.querySelector('[data-latency-option="connect-gaps"]')?.checked,
+      empty:document.body.textContent.includes('没有选中任何探测'),
+      legend:[...document.querySelectorAll('button')].filter(b=>/^线路 [AB]$/.test(b.textContent.trim())).map(b=>b.textContent.trim())}
+  })()`)
+  await openLatency('omitted-buckets')
+  const broken=await latencyState()
+  check('整桶省略时默认延迟线和 band 保留缺口',broken.connect===false&&broken.paths[0]?.moves===2&&coords(broken.paths[0].d).length===36&&broken.bands===2,JSON.stringify(broken))
+  await js(`document.querySelector('[data-latency-option="connect-gaps"]').click()`)
+  await sleep(150)
+  const connected=await latencyState()
+  check('仅开启连接断点时主线跨空桶，band 与真实采样保持',connected.connect===true&&connected.paths[0]?.moves===1&&coords(connected.paths[0].d).length===36&&connected.bands===2,JSON.stringify(connected))
+  await shot('omitted-buckets-latency')
+  await openLatency('single-hidden')
+  await js(`(() => { [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='线路 A').click() })()`)
+  await sleep(150)
+  await js(`(() => { [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='1 小时').click() })()`)
+  let hidden
+  for (let i = 0; i < 30; i++) {
+    await sleep(100)
+    hidden=await latencyState()
+    if(hidden.empty) break
+  }
+  check('隐藏线路成为唯一健康线路时仍有图例恢复入口',hidden.empty&&hidden.paths.length===0&&JSON.stringify(hidden.legend)===JSON.stringify(['线路 A']),JSON.stringify(hidden))
+  await shot('hidden-single-probe-recovery')
+  await js(`(() => { [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='线路 A').click() })()`)
+  await sleep(200)
+  const restored=await latencyState()
+  check('点击保留的单线路图例恢复真实曲线',!restored.empty&&restored.paths.length===1&&restored.paths[0].key==='t1'&&restored.paths[0].d.length>0,JSON.stringify(restored))
+  evidence.push({fixture:'omitted-buckets-ping',broken,connected},{fixture:'hidden-single-probe',hidden,restored})
+}
 
   check('没有页面 JavaScript 异常',errors.length===0,JSON.stringify(errors))
   if(!REAL&&!UPSTREAM) check('隔离 CNY 夹具没有第三方请求',external.length===0,JSON.stringify(external))

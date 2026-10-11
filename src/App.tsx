@@ -1,9 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { Globe as GlobeIcon, Moon, Sun, Wrench } from "lucide-react"
 
 import { CardStyleMenu } from "@/components/CardStyleMenu"
 import { NodeCard } from "@/components/NodeCard"
 import { CompactList } from "@/components/CompactList"
+import { DetailLoader, warmNodeDetail } from "@/components/DetailLoader"
 import { Globe } from "@/components/Globe"
 import { SearchBox, SearchRow } from "@/components/SearchBox"
 import { SummaryCards } from "@/components/Summary"
@@ -39,8 +40,7 @@ const REPO_URL = "https://github.com/mghts/monitor-theme-jikasei"
 // chart. The landing page is 242 kB rather than 629 kB (77 kB gzipped against
 // 188 kB). 取它的时机见 App 里的 warmDetail：列表画完之后空闲时取、指针落到卡片上时立刻取、
 // 开页就在详情页时立刻取 —— 不再和首屏的入口包与第一批数据抢带宽。
-const loadDetail = () => import("@/components/NodeDetail").then((m) => ({ default: m.NodeDetail }))
-const NodeDetail = lazy(loadDetail)
+// 加载本身由 DetailLoader 与紧凑展开共享；失败时提供刷新与返回入口。
 
 /**
  * 详情页的骨架：按详情页真实的那几块摆（标题行 + 规格格 + 备注块 + 页签行 + 四张图），
@@ -243,6 +243,8 @@ export default function App() {
   // ★ 站长那档是「节点地球」的**闸门**：他关掉时 `globeOn` 一律是 false，顶栏那枚开关也一起
   //   不挂（见下面那段渲染条件）——关掉的整块不该在页面上留一枚点了没落点的按钮。
   const [globeOn, toggleGlobe] = useGlobeVisible(config.globeOn)
+  // 异步站点配置也可能关闭地图；清除其筛选，避免没有取消入口或重新开启时复活旧地区。
+  if (!globeOn && region !== null) setRegion(null)
   const [cardStyle, chooseStyle] = useCardStyle(config.cardStyle)
   // 顶栏那个搜索框：词与「窄屏那一行展开了没」都留在这儿 —— 进详情页再回来，
   // 搜到的那几台还在（与分组标签、地区选择同一套「看哪几台」的记忆）。
@@ -295,7 +297,7 @@ export default function App() {
   const warmed = useRef(false)
   const warmDetail = useCallback(() => {
     warmed.current = true
-    void loadDetail()
+    warmNodeDetail()
   }, [])
   const listReady = nodes !== null
   useEffect(() => {
@@ -343,7 +345,7 @@ export default function App() {
   //     切分组时地球上的针与地区台数一起变；
   //   · 下面的列表再按地区收窄一层（`listView`）。
   // 这样「上头写着 JP 4 台、下面只剩 2 张卡片」不会出现：地球是分组的地图，不是列表的地图。
-  const regions = regionView(view.shown, region)
+  const regions = regionView(view.shown, globeOn ? region : null)
   // 再叠一层搜索（口径见 @/lib/search）：这一层与地区筛选同一套——**下面那张列表与上面
   // 那行概览卡片一起收窄**，地球仍然是「分组的地图」（它画的是分组里有哪些地方，
   // 不是搜索结果热力图；地区列表点一行照样能把列表收窄到那个地区）。
@@ -496,7 +498,7 @@ export default function App() {
             <Suspense fallback={<DetailSkeleton hasRemarks={hasDetailRemarks(selected, config.remarkPlacement)} />}>
               {/* 整页详情与紧凑展开里是同一个组件：保留天数也要一起给它，
                   否则「展开里有 30 天、点进去只有 7 天」会显得不一致。 */}
-              <NodeDetail node={selected} historyDays={me.history_days} remarkPlacement={config.remarkPlacement} />
+              <DetailLoader node={selected} historyDays={me.history_days} remarkPlacement={config.remarkPlacement} onLoadFailureBack={() => go(null)} />
             </Suspense>
           ) : (
             <p className="py-16 text-center text-sm text-muted-foreground">

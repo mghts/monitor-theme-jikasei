@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react"
 
 import { Country, deployed, monthUsage } from "@/components/NodeCard"
+import { DetailLoader } from "@/components/DetailLoader"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { Node } from "@/lib/api"
 import type { RemarkPlacement } from "@/lib/site-settings"
@@ -46,7 +47,7 @@ import { FOREVER, CYCLES, bytes, daysUntil, money, osName, pair, percent, rate }
 
 // 点开一行就地摊开的那块：整页详情（含那张延迟图）单独一个 chunk，与 App 里那份同一个——
 // 表格本身不必背上 recharts，点开时才取（App 开页已经在预热这个 chunk）。
-const NodeDetail = lazy(() => import("@/components/NodeDetail").then((m) => ({ default: m.NodeDetail })))
+// 加载与失败恢复由 DetailLoader 和整页详情共享。
 
 /**
  * 单元格内的一条细进度条。高度、圆角、色值都照 Meter 来（h-1.5、填色 bg-foreground/70），
@@ -128,7 +129,7 @@ function useSpan(): number {
 }
 
 /** 展开行里那块：整页详情的延迟图就地渲染；从没接入的机器没有历史可画，写一句话带过。 */
-function Expanded({ node, span, onOpenDetail, historyDays, remarkPlacement }: { node: Node; span: number; onOpenDetail: () => void; historyDays?: number; remarkPlacement?: RemarkPlacement }) {
+function Expanded({ node, span, onOpenDetail, onClose, historyDays, remarkPlacement }: { node: Node; span: number; onOpenDetail: () => void; onClose: () => void; historyDays?: number; remarkPlacement?: RemarkPlacement }) {
   return (
     <tr className="bg-muted/30">
       {/* 展开行要跨满当前看得见的列数：colSpan 得跟着断点走（见 useSpan），写死一个数会
@@ -137,7 +138,7 @@ function Expanded({ node, span, onOpenDetail, historyDays, remarkPlacement }: { 
         <div className="border-t border-border/60 px-4 py-3">
           {deployed(node) ? (
             <Suspense fallback={<Skeleton className="h-72" />}>
-              <NodeDetail node={node} embedded onOpenDetail={onOpenDetail} historyDays={historyDays} remarkPlacement={remarkPlacement} />
+              <DetailLoader node={node} embedded onOpenDetail={onOpenDetail} historyDays={historyDays} remarkPlacement={remarkPlacement} onLoadFailureBack={onClose} />
             </Suspense>
           ) : (
             <p className="py-6 text-center text-sm text-muted-foreground">还没有接入。在后台生成安装命令并执行一次。</p>
@@ -240,7 +241,7 @@ function Row({ node, span, open, onToggle, onOpenDetail, onWarm, historyDays, re
           <Bar pct={traffic} />
         </td>
       </tr>
-      {open && <Expanded node={node} span={span} onOpenDetail={onOpenDetail} historyDays={historyDays} remarkPlacement={remarkPlacement} />}
+      {open && <Expanded node={node} span={span} onOpenDetail={onOpenDetail} onClose={onToggle} historyDays={historyDays} remarkPlacement={remarkPlacement} />}
     </>
   )
 }

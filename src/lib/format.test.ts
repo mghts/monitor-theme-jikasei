@@ -4,7 +4,7 @@
 //
 // Nothing imports it, so the bundle never includes it.
 import {
-  axisBytes, axisTop, bytes, cpuName, daysUntil, despike, osName, pair, quarters, rate, timeTicks, uptime,
+  axisBytes, axisTop, bytes, cpuName, daysUntil, despike, offlineSeconds, osName, pair, quarters, rate, timeTicks, uptime,
 } from "./format.ts"
 
 let failed = 0
@@ -119,6 +119,23 @@ eq(uptime(0), "—", "没上报过就不写时长")
 eq(uptime(90), "1 分", "不足一小时")
 eq(uptime(3 * 3600 + 25 * 60), "3 小时 25 分", "不足一天")
 eq(uptime(2 * 86400 + 5 * 3600), "2 天 5 小时", "超过一天不再写分钟")
+
+// 离线时长与 Hub 同钟；访客钟偏移不应改写服务器已给出的时长。
+{
+  const nowMs = 1_800_000_000_000
+  const reported = { last_seen: nowMs / 1000 - 120, last_seen_ago: 120 }
+  for (const offset of [-8 * 3600_000, 0, 8 * 3600_000]) {
+    eq(offlineSeconds(reported, nowMs + offset), 120, `Hub 秒数不受访客钟偏移 ${offset} ms 影响`)
+  }
+  eq(offlineSeconds({ ...reported, last_seen_ago: 0 }, nowMs), 0, "Hub 的零秒是有效值")
+  eq(offlineSeconds({ ...reported, last_seen_ago: null }, nowMs), null, "Hub 的 null 不退回本地计算")
+  eq(offlineSeconds({ last_seen: reported.last_seen }, nowMs), 120, "旧 Hub 缺字段时回退")
+  eq(offlineSeconds({ last_seen: 0 }, nowMs), null, "从未上报不补时长")
+  eq(offlineSeconds({ last_seen: nowMs / 1000 + 120 }, nowMs), 0, "旧 Hub 的未来时间不产生负时长")
+  for (const bad of [-1, NaN, Infinity]) {
+    eq(offlineSeconds({ ...reported, last_seen_ago: bad }, nowMs), null, "非法 Hub 秒数不参与时长显示")
+  }
+}
 
 // despike：孤立的尖峰被拉回邻域，持续的高延迟保留，超时仍是缺口。
 {

@@ -1,6 +1,6 @@
 # jikasei
 
-当前版本：`1.34.0`。
+当前版本：`1.34.1`。
 
 ![jikasei](preview.png?v=2)
 

@@ -2,7 +2,7 @@
   "name": "jikasei",
   "short": "jikasei",
   "description": "自家制の极简探针（Monitor）主题：五种卡片形态、节点地球、分组筛选、明暗双色。",
-  "version": "1.32.2",
+  "version": "1.33.0",
   "author": "akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [
@@ -139,6 +139,17 @@
         }
       ],
       "help": "统一首页卡片、浮层、紧凑展开与节点详情的默认线形；仅影响显示，不改变丢包或无响应数据。"
+    },
+    {
+      "type": "title",
+      "label": "预算与汇率"
+    },
+    {
+      "type": "text",
+      "key": "exchangeRates",
+      "label": "自定义汇率",
+      "default": "",
+      "help": "可选，留空自动获取最新每日参考价。每行 CODE=人民币汇率，例如 USD=7.1；代表1单位该币种等于多少人民币。自定义值优先，可补充无公开报价的币种。"
     },
     {
       "type": "title",

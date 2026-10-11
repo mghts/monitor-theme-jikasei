@@ -21,6 +21,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { ISO_FIAT_CODES } from '../src/lib/currency-codes.ts'
 
 const PORT = Number(process.argv[2] || 5321)
 const CDP_PORT = PORT + 4000
@@ -62,7 +63,8 @@ const base = (id, name, over) => ({
 //   ③ 在线但还没上报指标（不计入速率，也不参与选最忙）+ 季付 €300（＝每月 €100）
 //   ④ 掉线（有累计流量、不贡献速率）→「1 台离线」+ 月付 ¥30，**没有到期日**（也没分组，供分组标签行用）
 //
-// 预算两块的期望值（照 FX_CNY：USD 6.7179、EUR 7.6172；手工可复算）：
+// 预算两块使用确定性缓存夹具（USD 6.7179、EUR 7.6172）；金额独立手算。
+// 真实网络更新与故障回退由 verify_exchange_rates.mjs 专项验收，不访问外网来决定本脚本结果。
 //   月度预算 = 12×6.7179 + 120×6.7179÷12 + 300×7.6172÷3 + 30
 //            = 80.6148 + 67.179 + 761.72 + 30 = 939.5138 → ≈¥939.51（4 台计费）
 //   剩余价值 = 12×6.7179×15÷30 + 120×6.7179×73÷365 + 300×7.6172×30÷90
@@ -213,12 +215,22 @@ for (let i = 0; i < 80 && !wsUrl; i++) {
 if (!wsUrl) throw new Error('Chrome 没起来')
 const ws = new WebSocket(wsUrl)
 await new Promise((r) => { ws.onopen = r })
-ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
+ws.onmessage = (e) => {
+  const m = JSON.parse(e.data)
+  if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+  if (m.method === 'Fetch.requestPaused') void send('Fetch.failRequest', { requestId: m.params.requestId, errorReason: 'BlockedByClient' })
+}
 const send = (method, params = {}) => new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })) })
 const evalJS = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value
 
 await send('Runtime.enable')
 await send('Page.enable')
+await send('Fetch.enable', { patterns: [{ urlPattern: 'https://*', requestStage: 'Request' }] })
+const FIXTURE_DATE = new Date().toISOString().slice(0, 10)
+const fixtureRates = { ...Object.fromEntries(ISO_FIAT_CODES.map((code) => [code, 1])), USD: 6.7179, EUR: 7.6172, HUF: 7.4992 / 365.08, NOK: 7.4992 / 10.7155 }
+await send('Page.addScriptToEvaluateOnNewDocument', {
+  source: `localStorage.setItem('jikasei:exchange_rates:v1', JSON.stringify({version:1,snapshot:{rates:${JSON.stringify(fixtureRates)},date:${JSON.stringify(FIXTURE_DATE)},source:'currency-api',fetchedAtMs:Date.now()}}))`,
+})
 const WIDE = { width: 1440, height: 1200, deviceScaleFactor: 1, mobile: false }
 await send('Emulation.setDeviceMetricsOverride', WIDE)
 await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] })
@@ -506,7 +518,7 @@ let classicNet = null
     budgetHint)
   check('预算版：剩余价值的提示写明口径（价格 × 剩余天数 ÷ 周期天数）',
     valueHint.includes('剩余天数') && valueHint.includes('无到期日') && valueHint.includes('折算'), valueHint)
-  check('预算版：折算日期写在提示里（不写来源站点）', budgetHint.includes('2026-09-30') && !/https?:\/\/|[a-z0-9-]+\.(com|net|org|io)/.test(budgetHint), budgetHint)
+  check('预算版：折算日期写在提示里（不写来源站点）', budgetHint.includes(FIXTURE_DATE) && !/https?:\/\/|[a-z0-9-]+\.(com|net|org|io)/.test(budgetHint), budgetHint)
 }
 
 /* 4) 一块都没有 / 一次性买断 / 没有汇率的降级 */
@@ -516,8 +528,8 @@ let classicNet = null
     block(free, '月度预算').text === '月度预算 | — | 未记录价格', block(free, '月度预算').text)
   check('没填价格：剩余价值写「— / 无预付到期」',
     block(free, '剩余价值').text === '剩余价值 | — | 无预付到期', block(free, '剩余价值').text)
-  check('没填价格：提示里只写「按固定汇率折算成人民币」（没有汇率可列）',
-    block(free, '月度预算').hint === '各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。按固定汇率折算成人民币',
+  check('没填价格：提示里只写「按参考汇率折算成人民币」（没有汇率可列）',
+    block(free, '月度预算').hint === '各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。按参考汇率折算成人民币',
     block(free, '月度预算').hint)
 
   const once = await render({ listTop: 'budget' }, 'once', 'once')
@@ -541,8 +553,8 @@ let classicNet = null
   check('29节点：NOK/HUF正确折算，零价节点仍不计费，显示28/29而非监控总数',
     block(rare, '月度预算').text === '月度预算 | ≈¥536.52 | 28/29 台计费' && block(rare, '剩余价值').text === '剩余价值 | ≈¥293.90 | 28/29 台未到期',
     `${block(rare, '月度预算').text} ／ ${block(rare, '剩余价值').text}`)
-  check('新增汇率提示准确标明ECB参考报价的日期与币种，零价USD不出现在折算清单',
-    block(rare, '月度预算').hint.includes('2026-10-09') && block(rare, '月度预算').hint.includes('HUF') && block(rare, '月度预算').hint.includes('NOK') && !block(rare, '月度预算').hint.includes('USD'),
+  check('参考报价提示准确标明缓存日期与币种，零价USD不出现在折算清单',
+    block(rare, '月度预算').hint.includes(FIXTURE_DATE) && block(rare, '月度预算').hint.includes('HUF') && block(rare, '月度预算').hint.includes('NOK') && !block(rare, '月度预算').hint.includes('USD'),
     block(rare, '月度预算').hint)
   for (const width of [320, 390, 1024, 1440]) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: width < 700 })

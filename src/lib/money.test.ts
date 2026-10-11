@@ -1,7 +1,7 @@
 // 概览卡片「预算版」两个数的口径：折算、封顶、哪些机器不计入。
 // 跑法同另外几个：`npm test`（Node 自己剥类型，不需要 runner）。
 // 没有任何东西 import 它，所以不进 bundle。
-import { budgetOf, cny, cycleDaysOf, cycleMonthsOf, fxNote, FX_CNY, FX_REFERENCES } from "./money.ts"
+import { budgetOf, cny, cycleDaysOf, cycleMonthsOf, fxNote, parseRateOverrides, FX_CNY, FX_REFERENCES } from "./money.ts"
 import type { Node } from "./api.ts"
 
 let failed = 0
@@ -90,6 +90,11 @@ eq([round(noCycle.monthly), round(noCycle.remaining), noCycle.monthlyCount], [ro
 /* 一次性买断：没有「每月」可言，两个数都不计入。 */
 const once = budgetOf([node({ price: 300, currency: "CNY", billing_cycle: "once", expires_in: 200 })])
 eq([once.monthly, once.remaining, once.monthlyCount], [null, null, 0], "一次性买断不计入")
+const onceForeign = budgetOf([
+  node({ price: 300, currency: "USD", billing_cycle: "once", expires_in: 200 }),
+  node({ price: 100, currency: "XYZ", billing_cycle: "once", expires_in: 50 }),
+])
+eq([onceForeign.used, onceForeign.skipped], [[], []], "一次性外币不需要折算，也不误报缺少汇率")
 
 /* 没填价格：不计账（不是花 0 元），两个数都因此是 null。 */
 const free = budgetOf([node({ price: 0, currency: "USD", billing_cycle: "monthly", expires_in: 30 })])
@@ -166,6 +171,28 @@ eq(fxNote(["CNY"], ["XYZ"]), "按固定汇率折算成人民币；XYZ 没有汇�
 eq(fxNote(["CNY", "HUF", "NOK"]), "按固定汇率折算（1 HUF = ¥0.02054125，1 NOK = ¥0.69984602，2026-10-09）", "补充币种保留八位小数并准确显示新取价日期")
 eq(fxNote(["HUF", "NOK", "USD"]), "按固定汇率折算（1 HUF = ¥0.02054125，1 NOK = ¥0.69984602，2026-10-09；1 USD = ¥6.7179，2026-09-30）", "混合不同取价日时分别说明，不能统一假报日期")
 eq(fxNote(["XYZ"]), "按固定汇率折算成人民币；XYZ 没有汇率，未计入", "提示单独收到未知币种时也不崩溃")
+
+/* 网络报价作为参数注入：方向已经归一为1币=CNY，两个预算必须使用同一张表。 */
+const latest = { CNY: 1, USD: 7.5, AED: 2 }
+const latestBudget = budgetOf([
+  node({ price: 10, currency: "USD", expires_in: 15 }),
+  node({ price: 10, currency: "AED", expires_in: 30 }),
+], latest)
+eq([latestBudget.monthly, latestBudget.remaining, latestBudget.monthlyCount, latestBudget.remainingCount], [95, 57.5, 2, 2], "自动报价注入后两金额同步重算，并支持原表没有的AED")
+eq(budgetOf([node({ price: 10, currency: "USD" })], { CNY: 1 }).skipped, ["USD"], "当前报价缺失时不能悄悄补入不同日期的旧USD价格")
+const overrides = parseRateOverrides("# 1币=人民币\n usd = 7.1\nNOK=.7\nHUF=2e-2\nCNY=1\nXAD=5\nUSD=7.3")
+eq({ ...overrides.rates }, { USD: 7.3, NOK: 0.7, HUF: 0.02, CNY: 1, XAD: 5 }, "自定义支持小数、科学计数、大小写与未公开计价单位，最后有效行优先")
+eq(overrides.invalid, 0, "空行和注释不算无效配置")
+const customBudget = budgetOf([node({ price: 10, currency: "USD", expires_in: 15 })], { ...latest, ...overrides.rates })
+eq([customBudget.monthly, customBudget.remaining], [73, 36.5], "管理员自定义汇率优先于网络报价")
+eq(fxNote(["AED", "USD"], [], { rates: { ...latest, ...overrides.rates }, custom: overrides.rates, date: "2026-10-10", label: "按参考汇率折算" }), "按参考汇率折算（1 AED = ¥2，2026-10-10；1 USD = ¥7.3，自定义）", "自动报价和人工值分别标日期，不冒用同日报价")
+for (const invalid of ["USD=0", "USD=-1", "USD=Infinity", "USD=NaN", "USD=0x10", "USD=1e999", "USD=1e-999", "USD=1e13", "CNY=2", "__proto__=1", "BTC<script>=1", "US=1", "USD=7,1"]) {
+  const parsed = parseRateOverrides(invalid)
+  eq([Object.keys(parsed.rates).length, parsed.invalid], [0, 1], `拒绝无效自定义汇率 ${invalid}`)
+}
+const longOverride = "#" + "x".repeat(16376) + "\nUSD=7.1234"
+eq([Object.keys(parseRateOverrides(longOverride).rates).length, parseRateOverrides(longOverride).invalid], [0, 1], "超长配置整项拒绝，不能截出错误的USD=7")
+eq(Object.getPrototypeOf(overrides.rates), null, "自定义表不读取继承键")
 
 if (failed) {
   console.error(`\n${failed} 处不符`)

@@ -94,6 +94,11 @@ eq(normalizeConfig({ pingLines: "" }).pingLines, "", "延迟线路空串保留")
 eq(normalizeConfig({ cardStyle: "detail" }).cardStyle, "latency", "normalizeConfig 也走 cardStyle 迁移")
 eq(normalizeConfig({ showSummary: true }).listTop, "summary", "normalizeConfig 也走 listTop 迁移")
 eq(normalizeConfig({ listTop: "both" }).listTop, "both", "新值优先")
+eq(DEFAULTS.exchangeRates, "", "默认自动获取参考价，无需填写自定义汇率")
+eq(normalizeConfig({ exchangeRates: "USD=7.1\nNOK=0.7" }).exchangeRates, "USD=7.1\nNOK=0.7", "站点自定义汇率完整保留")
+for (const value of [null, 0, false, [], {}]) eq(normalizeConfig({ exchangeRates: value }).exchangeRates, "", "自定义汇率只接受文本")
+const oversizedRates = "#" + "x".repeat(16376) + "\nUSD=7.1234"
+eq(normalizeConfig({ exchangeRates: oversizedRates }).exchangeRates, oversizedRates, "配置不截到行中间，过长输入交由解析器拒绝")
 
 // ── 延迟线形：四档互相独立，缺失或无效的老配置保留原断点折线 ─────────
 eq(LATENCY_STYLES, ["broken", "connected", "smooth", "connectedSmooth"], "延迟曲线四档顺序")
@@ -123,14 +128,15 @@ eq(normalizeConfig({ cardStyle: "detail", showSummary: true }).latencyStyle, "br
 // ★ 2026-10-07 站长先要了「节点地球」与「主题模式」两项（7 个），随后**把「养鸡场入口」删掉**
 //   （顶栏入口改成自动探测，不再需要设置项）→ 回到 **6 个**，面板也回到那套一页平铺的单列版式
 //   （最好看的那一档）。1.29.0 用户明确新增「延迟曲线样式」→ **7 个**。
-//   **上限仍是 7**：再加第 8 项之前先问清楚，或者先想能不能并进现有的某一格。
+//   1.33.0 用户要求全球币种自动折算，新增「自定义汇率」作为无公开报价币种的补充 → **8 个**。
+//   后续增加仍需有对应用户需求，避免后台配置无关扩张。
 const manifest = JSON.parse(readFileSync(new URL("../../theme.json", import.meta.url), "utf8"))
 const fields = manifest.config.filter((f: { type: string }) => f.type !== "title")
-if (fields.length > 7) {
+if (fields.length > 8) {
   failed++
-  console.error(`✗ theme.json 的非标题设置项有 ${fields.length} 个（> 7）：面板的两列版式已经吃满，再加就要先想清楚`)
+  console.error(`✗ theme.json 的非标题设置项有 ${fields.length} 个（> 8）：请核对新增字段的需求与布局`)
 }
-eq(fields.length, 7, "就是 7 个设置项（含用户新增的延迟曲线样式）")
+eq(fields.length, 8, "8 个设置项（含全球币种折算所需的自定义汇率）")
 // 两边的 key 必须一一对上：面板按 theme.json 画表单，页面按 DEFAULTS 兜底。
 const keys = fields.map((f: { key: string }) => f.key).sort()
 eq(keys, Object.keys(DEFAULTS).sort(), "theme.json 的字段与 DEFAULTS 的键一致")

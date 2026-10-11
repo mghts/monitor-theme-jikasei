@@ -1,10 +1,11 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react"
+import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react"
 import { ArrowDown, ArrowUp } from "lucide-react"
 
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
 import { bytes, rate } from "@/lib/format"
-import { budgetOf, cny, fxNote } from "@/lib/money"
+import { budgetOf, cny, fxNote, parseRateOverrides } from "@/lib/money"
+import { useExchangeRates } from "@/lib/use-exchange-rates"
 import { summarize, type Fleet } from "@/lib/summary"
 import { speedSeriesOf } from "@/lib/speed-history"
 
@@ -18,8 +19,8 @@ import { speedSeriesOf } from "@/lib/speed-history"
  *        两块分居同一张卡片的两端，下沿对齐）
  *     后两张两副面孔完全一样。
  *
- * 两副面孔的数据都来自 `/api/nodes` 里本来就有的字段，开着它不会多发一个请求——唯一的
- * 例外是第四张下面那条走势线，它画的是访客打开页面之后自己攒下的实时速率（api.ts 的
+ * 节点与价格数据来自 `/api/nodes`；预算版需要外币折算时统一更新每日参考汇率。第四张
+ * 下面那条走势线画的是访客打开页面之后自己攒下的实时速率（api.ts 的
  * `speedHistory`，每 2 秒一个采样、留最近 60 个 ≈ 2 分钟）：hub 没有「全站速率历史」
  * 这种接口，刷新页面就得重新攒，所以冷启动头几秒那里是空的。
  *
@@ -255,16 +256,30 @@ function BusiestBlock({ fleet }: { fleet: Fleet }) {
   )
 }
 
-export function SummaryCards({ nodes, finance = false, searching = false }: { nodes: Node[]; finance?: boolean; searching?: boolean }) {
+export function SummaryCards({ nodes, finance = false, searching = false, exchangeRates = "" }: { nodes: Node[]; finance?: boolean; searching?: boolean; exchangeRates?: string }) {
   const fleet = summarize(nodes)
-  const budget = budgetOf(nodes)
+  const custom = useMemo(() => parseRateOverrides(exchangeRates), [exchangeRates])
+  const needsFx = finance && nodes.some((node) => {
+    const code = (node.currency || "").trim().toUpperCase()
+    return Number.isFinite(node.price) && node.price > 0 && node.billing_cycle !== "once" && code !== "CNY" && !Object.hasOwn(custom.rates, code)
+  })
+  const fx = useExchangeRates(needsFx)
+  const rates = useMemo(() => ({ ...fx.snapshot.rates, ...custom.rates, CNY: 1 }), [fx.snapshot.rates, custom.rates])
+  const budget = budgetOf(nodes, rates)
   // 与上方读数使用相同节点集合：分组、地区、搜索三层筛选都作用于历史快照。
   // 缓冲仍由 useNodes 维护，进详情再返回不会丢失已收集的历史。
   const series = speedSeriesOf(nodes)
   // 折算说明：只列真的用到过的币种——各站的账混着 USD / EUR / CNY 记，合起来必须说明口径。
-  const note = fxNote(budget.used, budget.skipped)
+  const note = fxNote(budget.used, budget.skipped, { rates, date: fx.snapshot.date, custom: custom.rates, label: "按参考汇率折算" })
   const monthlyCoverage = budget.monthlyCount < nodes.length ? `${budget.monthlyCount}/${nodes.length}` : `${budget.monthlyCount}`
   const remainingCoverage = budget.remainingCount < nodes.length ? `${budget.remainingCount}/${nodes.length}` : `${budget.remainingCount}`
+  const showFx = finance && (budget.used.some((code) => code !== "CNY") || budget.skipped.length > 0 || custom.invalid > 0)
+  const stateLabel = fx.loading ? "正在更新"
+    : fx.failed ? fx.origin === "builtin" ? "更新失败，使用内置报价" : "更新失败，使用缓存报价"
+    : fx.origin === "builtin" ? "内置报价" : fx.origin === "cache" ? "使用缓存" : "已自动更新"
+  const oldQuote = Date.now() - Date.parse(`${fx.snapshot.date}T00:00:00Z`) >= 3 * 86_400_000
+  const status = needsFx ? `每日参考价 · ${fx.snapshot.date} · ${stateLabel}${oldQuote ? "（旧报价）" : ""}` : "自定义汇率"
+  const received = fx.origin === "builtin" ? "随主题提供的离线报价" : `获取于 ${new Date(fx.snapshot.fetchedAtMs).toLocaleString("zh-CN")}`
 
   return (
     /* 版式照参考站：`sm` 起两列、`lg` 起四列。**手机是一列而不是参考站的两列**——参考站每张
@@ -273,7 +288,7 @@ export function SummaryCards({ nodes, finance = false, searching = false }: { no
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {finance ? (
         <>
-          {/* 第一张卡：月度预算 + 剩余价值。两个数都是把各站的账按固定汇率折成人民币后相加，
+          {/* 第一张卡：月度预算 + 剩余价值。两个数使用同一份汇率折成人民币后相加，
               所以写「≈」；口径与汇率清单放在悬停提示里（见 lib/money.ts）。 */}
           <Pair>
             <Block title="月度预算" hint={`各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。${note}`}>
@@ -333,6 +348,17 @@ export function SummaryCards({ nodes, finance = false, searching = false }: { no
           <Sparkline series={series} />
         </Block>
       </Tile>
+      {showFx && (
+        <div className="col-span-full -mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+          role="status" aria-label="预算汇率状态" data-exchange-rate-status="" data-fx-origin={fx.origin}
+          data-fx-failed={fx.failed ? "true" : "false"} data-fx-loading={fx.loading ? "true" : "false"}
+          title={`${note}。${needsFx ? `${received}；数据按日发布，具体付款以成交汇率为准。` : "使用站点设置中的自定义报价。"}`}>
+          <span>{status}</span>
+          {needsFx && <a href="https://github.com/fawazahmed0/exchange-api" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">汇率来源</a>}
+          {budget.skipped.length > 0 && <span>{budget.skipped.length} 种币种缺少报价，未计入</span>}
+          {custom.invalid > 0 && <span>忽略 {custom.invalid} 项无效自定义汇率</span>}
+        </div>
+      )}
     </div>
   )
 }

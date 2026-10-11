@@ -7,7 +7,7 @@ import { daysUntil } from "./format.ts"
  * 概览卡片「预算版」那两块读数：月度预算、剩余价值。
  *
  * 两个数都来自 `/api/nodes` 里本来就有的 `price` / `currency` / `billing_cycle` /
- * `expires_in`，所以切成预算版不会多发任何请求。
+ * `expires_in`；汇率由页面统一提供，计费周期与到期口径不受汇率更新影响。
  *
  * 口径：
  *   月度预算 = Σ 价格 × 汇率 ÷ 周期月数——把每个节点的账摊到一个月上再加起来
@@ -45,10 +45,9 @@ export function cycleDaysOf(cycle: string): number {
 /**
  * 固定汇率：1 单位该币种 = N 人民币。
  *
- * 主题是一个离线的静态包，访客的浏览器里不会（也不该）去查实时汇率，所以这里写死一份，
- * 只用来把站长填的各币种账折成同一把尺子求合计——卡片上的数字因此是「≈」。改这张表
- * 就够了，别处不用动。原表日期为 `FX_DATE`，新增币种的日期与来源单独记录在
- * `FX_REFERENCES`，提示按日期分组，不把不同取价日误报为同一天。
+ * 历史参考表保留纯函数的默认口径，供旧调用及回归使用。首页预算会传入自动更新、缓存或
+ * 随主题打包的完整参考报价，不再依赖这里的 13 币种表。卡片的人民币折算仍为「≈」。
+ * 原表日期为 `FX_DATE`，后补币种的日期与来源单独记录在 `FX_REFERENCES`。
  *
  * 取值：2026-09-30 的公开汇率参考价，四舍五入到四位小数。
  */
@@ -80,8 +79,8 @@ export const FX_CNY: Record<string, number> = {
 }
 
 /** 无效、零或继承来的汇率都不能拿来折算，尤其不能把未知币种当作 0 元。 */
-function rateOf(currency: string): number | undefined {
-  const rate = Object.hasOwn(FX_CNY, currency) ? FX_CNY[currency] : undefined
+function rateOf(currency: string, rates: Record<string, number> = FX_CNY): number | undefined {
+  const rate = Object.hasOwn(rates, currency) ? rates[currency] : undefined
   return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : undefined
 }
 
@@ -100,7 +99,7 @@ export type Budget = {
   skipped: string[]
 }
 
-export function budgetOf(nodes: Node[]): Budget {
+export function budgetOf(nodes: Node[], rates: Record<string, number> = FX_CNY): Budget {
   let monthly = 0
   let remaining = 0
   let monthlyCount = 0
@@ -110,9 +109,9 @@ export function budgetOf(nodes: Node[]): Budget {
 
   for (const node of nodes) {
     // 没填价格（0 / 空）＝这台不计账，不是「花 0 元」。
-    if (!Number.isFinite(node.price) || !(node.price > 0)) continue
+    if (!Number.isFinite(node.price) || !(node.price > 0) || node.billing_cycle === "once") continue
     const currency = (node.currency || "").trim().toUpperCase()
-    const fx = rateOf(currency)
+    const fx = rateOf(currency, rates)
     if (fx === undefined) {
       skipped.add(currency || "（空）")
       continue
@@ -154,30 +153,62 @@ export function cny(amount: number): string {
 }
 
 /** 提示里那句汇率说明。只列真的用到的币种（人民币自身不必写「1 CNY = ¥1」）。 */
-export function fxNote(used: string[], skipped: string[] = []): string {
+export type RateReference = {
+  rates: Record<string, number>
+  date: string
+  /** 管理员的自定义汇率独立标记，不能冒用自动报价的日期。 */
+  custom?: Record<string, number>
+  label: string
+}
+
+export function fxNote(used: string[], skipped: string[] = [], reference?: RateReference): string {
+  const table = reference?.rates ?? FX_CNY
   const dates = new Map<string, string[]>()
   const missing = new Set(skipped)
   for (const code of new Set(used.map((currency) => currency.trim().toUpperCase()))) {
-    const rate = rateOf(code)
+    const rate = rateOf(code, table)
     if (rate === undefined) {
       missing.add(code || "（空）")
       continue
     }
     if (code === "CNY") continue
-    const date = Object.hasOwn(FX_REFERENCES, code) ? FX_REFERENCES[code].date : FX_DATE
+    const date = reference
+      ? reference.custom && Object.hasOwn(reference.custom, code) ? "自定义" : reference.date
+      : Object.hasOwn(FX_REFERENCES, code) ? FX_REFERENCES[code].date : FX_DATE
     const group = dates.get(date) ?? []
     group.push(`1 ${code} = ¥${trimRate(rate)}`)
     dates.set(date, group)
   }
   const rates = [...dates].map(([date, group]) => `${group.join("，")}，${date}`)
-  const head = rates.length
-    ? `按固定汇率折算（${rates.join("；")}）`
-    : "按固定汇率折算成人民币"
+  const label = reference?.label ?? "按固定汇率折算"
+  const head = rates.length ? `${label}（${rates.join("；")}）` : `${label}成人民币`
   const miss = missing.size ? `；${[...missing].sort().join("、")} 没有汇率，未计入` : ""
   return head + miss
 }
 
+/** 任意三字母币种可人工补价；1 单位该币种 = N 人民币。格式不明的行直接拒绝。 */
+export function parseRateOverrides(text: string): { rates: Record<string, number>; invalid: number } {
+  const rates: Record<string, number> = Object.create(null)
+  // 拒绝整项，避免截到行中间后把 USD=7.1234 误读为 USD=7。
+  if (text.length > 16_384) return { rates, invalid: 1 }
+  let invalid = 0
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith("#")) continue
+    const match = /^([A-Za-z]{3})\s*=\s*((?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)$/.exec(line)
+    const code = match?.[1].toUpperCase()
+    const value = match ? Number(match[2]) : NaN
+    if (!code || !Number.isFinite(value) || value < 1e-12 || value > 1e12 || (code === "CNY" && value !== 1)) {
+      invalid++
+      continue
+    }
+    rates[code] = value
+  }
+  return { rates, invalid }
+}
+
 /** 最多八位小数，避免小币值交叉汇率过早取整；原表去掉尾零后仍显示原值。 */
 function trimRate(rate: number): string {
+  if (rate > 0 && rate < 1e-8) return rate.toPrecision(8)
   return rate.toFixed(8).replace(/\.?0+$/, "")
 }

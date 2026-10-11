@@ -12,6 +12,7 @@ import { daysUntil } from "./format.ts"
  * 口径：
  *   月度预算 = Σ 价格 × 汇率 ÷ 周期月数——把每个节点的账摊到一个月上再加起来
  *     （年付 $120 就是每月 $10；一个月按 30 天、一年按 365 天，两把尺子都写在 CYCLE 里）。
+ *     hub 的自定义 `<n>m` 支持 1–1200 月；已有命名周期对应的月数沿用原天数，其他每月按 30 天。
  *     一次性买断（`once`）没有「每月」可言，不计入；价格没填（0/空）的不计。
  *   剩余价值 = Σ 价格 × 汇率 × (剩余天数 ÷ 周期天数)——已经付掉、还没用掉的那一段。
  *     剩余天数取 hub 算好的 `expires_in`（它按 hub 的日历算，在线节点还会顺延到期日），
@@ -32,14 +33,24 @@ const CYCLE: Record<string, { months: number; days: number }> = {
   once: { months: 0, days: 0 },
 }
 
+function cycleOf(cycle: string): { months: number; days: number } {
+  if (Object.hasOwn(CYCLE, cycle)) return CYCLE[cycle]
+  const match = /^(\d+)m$/.exec(cycle)
+  const months = match && match[0] === cycle ? Number(match[1]) : NaN
+  // 与 hub 的有效范围一致；无效或旧数据仍按月付，不让节点从预算中消失。
+  if (!Number.isInteger(months) || months < 1 || months > 1200) return CYCLE.monthly
+  // `12m` 与 `yearly` 等别名必须使用同一把天数尺子，而不是退回 360 天。
+  return Object.values(CYCLE).find((period) => period.months === months) ?? { months, days: months * 30 }
+}
+
 /** 实际周期是几「月份」。没写周期（老数据 / 手填）按月付——最常见的记法。 */
 export function cycleMonthsOf(cycle: string): number {
-  return CYCLE[cycle]?.months ?? 1
+  return cycleOf(cycle).months
 }
 
 /** 实际周期是几天。用户的「剩余天数」按这把尺子折。 */
 export function cycleDaysOf(cycle: string): number {
-  return CYCLE[cycle]?.days ?? 30
+  return cycleOf(cycle).days
 }
 
 /**

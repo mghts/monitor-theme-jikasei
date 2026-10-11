@@ -1,6 +1,6 @@
 // 验「概览卡片行」的两副面孔、合计口径与开关。
 //
-// 用法：node tools/verify_summary.mjs [port]
+// 用法：node tools/verify_summary.mjs [port] [--custom-only]
 //
 // 为什么要它：这一行有六处只能靠实测确认——
 //   ① 开关关着时**整个不挂载**（不是 display:none 藏起来），首屏与没有这个功能时一致；
@@ -17,14 +17,19 @@
 //
 // 判据全部走 DOM 文本、子元素计数与矩形，不靠看图。
 import { createServer } from 'node:http'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
+import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { ISO_FIAT_CODES } from '../src/lib/currency-codes.ts'
 
 const PORT = Number(process.argv[2] || 5321)
+const CUSTOM_ONLY = process.argv.includes('--custom-only')
 const CDP_PORT = PORT + 4000
+const OUTPUT = mkdtempSync(join(tmpdir(), 'monitor-summary-'))
+const startedAt = new Date().toISOString()
+console.log(`验收证据目录：${OUTPUT}`)
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
@@ -124,6 +129,27 @@ const RARE_CURRENCY_FLEET = {
   ],
 }
 
+// 独立手算，不导入 money.ts 作为判据；本场景配置明确 USD=7.5、EUR=8。
+// 自定义组：120/2 + 600×7.5/60 + 1200/1200 = 136 元/月；
+//           120×30/60 + 600×7.5×900/1800 + 1200×18000/36000 = 2910 元剩余。
+// 别名组：12m 与 yearly 各 120 EUR，月摊各80、剩73/365各192，共160/384。
+// 排除组：已到期60/2m与无到期日180/18m仅进月摊30+10；买断与零价不计。
+// 全站因此月度336、剩余3294，7/9计费、5/9未到期。
+const CUSTOM_CYCLE_CONFIG = { listTop: 'bothBudget', exchangeRates: 'USD=7.5\nEUR=8' }
+const CUSTOM_CYCLES = {
+  nodes: [
+    base(101, '两月付人民币', { group: '自定义周期', price: 120, currency: 'CNY', billing_cycle: '2m', expires_in: 30 }),
+    base(102, '五年付美元', { group: '自定义周期', price: 600, currency: 'USD', billing_cycle: '60m', expires_in: 900 }),
+    base(103, '百年周期上限', { group: '自定义周期', price: 1200, currency: 'CNY', billing_cycle: '1200m', expires_in: 18000 }),
+    base(104, '十二月别名欧元', { group: '标准别名', price: 120, currency: 'EUR', billing_cycle: '12m', expires_in: 73 }),
+    base(105, '命名年付欧元', { group: '标准别名', price: 120, currency: 'EUR', billing_cycle: 'yearly', expires_in: 73 }),
+    base(106, '已到期自定义周期', { group: '排除口径', price: 60, currency: 'CNY', billing_cycle: '2m', expires_in: 0 }),
+    base(107, '无到期日自定义周期', { group: '排除口径', price: 180, currency: 'CNY', billing_cycle: '18m' }),
+    base(108, '一次性买断', { group: '排除口径', price: 1000, currency: 'CNY', billing_cycle: 'once', expires_in: 100 }),
+    base(109, '未记录价格', { group: '排除口径', price: 0, currency: 'USD', billing_cycle: '60m', expires_in: 900 }),
+  ],
+}
+
 /** 一次性买断：两块都不计入（那是「买断」，没有每月、也没有剩余天数）。 */
 const ONCE_ONLY = {
   nodes: [base(1, '买断机', { online: true, price: 300, currency: 'CNY', billing_cycle: 'once', expires_in: 200 })],
@@ -143,6 +169,7 @@ const MAX_MB = { nodes: [base(1, 'Node A', { online: true, metrics: metrics({ cp
 const BIG_MONEY = { nodes: [base(1, 'Node A', { online: true, price: 3000, currency: 'CNY', billing_cycle: 'yearly', expires_in: 341, metrics: metrics({ cpu: 12.5, net_rx: KB, net_tx: KB }) })] }
 
 const VARIANTS = { mixed: MIXED, down: ALL_DOWN, tied: TIED, free: NO_PRICE, exotic: EXOTIC, rare: RARE_CURRENCY_FLEET, unknownonly: { nodes: [EXOTIC.nodes[0]] }, once: ONCE_ONLY, long: LONG_KB, maxkb: MAX_KB, maxmb: MAX_MB, bigmoney: BIG_MONEY,
+  customcycles: CUSTOM_CYCLES, cycle2: { nodes: [CUSTOM_CYCLES.nodes[0]] }, cycle60: { nodes: [CUSTOM_CYCLES.nodes[1]] }, cycle1200: { nodes: [CUSTOM_CYCLES.nodes[2]] }, cycle12: { nodes: [CUSTOM_CYCLES.nodes[3]] }, cycleyear: { nodes: [CUSTOM_CYCLES.nodes[4]] },
   // 分组跟随（第 12 组）：站点里**只有某一个分组那几台**——当对照用。
   // 概览卡片在「全部」档切到某个分组时的数字，必须与「站点里只有这几台」时逐字相同。
   gusa: { nodes: [MIXED.nodes[0]] }, geu: { nodes: [MIXED.nodes[1], MIXED.nodes[2]] }, gnone: { nodes: [MIXED.nodes[3]] } }
@@ -198,7 +225,7 @@ const chrome = spawn(CHROME, [
   '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars',
   '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
   '--disable-renderer-backgrounding', '--no-proxy-server',
-  `--user-data-dir=${process.env.LOCALAPPDATA || '/tmp'}/Temp/summary${CDP_PORT}`,
+  `--user-data-dir=${join(OUTPUT, 'chrome-profile')}`,
   'about:blank',
 ], { stdio: 'ignore' })
 
@@ -259,6 +286,10 @@ const PROBE = `JSON.stringify((() => {
         innerCol: inner ? Math.round(inner.getBoundingClientRect().left) : null,
         // 主数字那个盒子带 truncate：真装不下时 scrollWidth 会大于 clientWidth。
         clip: num ? num.scrollWidth - num.clientWidth : 0,
+        // scroll/clientWidth会取整，文本稍超真实宽度也可能触发省略号；保留亚像素几何证据。
+        numW: num ? num.getBoundingClientRect().width : null,
+        numTextW: num ? (() => { const range = document.createRange(); range.selectNodeContents(num); return range.getBoundingClientRect().width })() : null,
+        numFontSize: num ? getComputedStyle(num).fontSize : null,
         // 读数盒子**自身**的行高：缩号时它该纹丝不动（卡片高度是栅格行给的，量卡片量不出这件事）
         numH: num ? Math.round(num.getBoundingClientRect().height) : null,
         // 主数字那行是两列小栅格时，两个格子里各自的截断量——栅格自己不溢出，格子里的
@@ -364,7 +395,19 @@ async function clickGroup(label) {
 const SHRINK_W = 1024
 
 const results = []
+const evidence = []
 const check = (name, ok, detail) => { results.push({ name, ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`) }
+async function capture(name) {
+  // Big 在字体就位与1200ms延迟后重新缩号；证据不能截在这段重测过程里。
+  await evalJS('(async () => { await document.fonts.ready; await new Promise((r) => setTimeout(r, 1300)); await new Promise(requestAnimationFrame); return true })()')
+  const dom = JSON.parse(await evalJS(PROBE))
+  const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
+  if (!shot.result?.data) throw new Error(`无法保存截图 ${name}: ${JSON.stringify(shot.error)}`)
+  const path = join(OUTPUT, `${name}.png`)
+  writeFileSync(path, Buffer.from(shot.result.data, 'base64'))
+  evidence.push({ name, path, dom })
+  return dom
+}
 // 找不到那张卡片 / 那块读数时返回一个空壳而不是 undefined：断言要报出一行 FAIL，
 // 而不是在第 12 条上抛 TypeError 把后面几十条一起带走（反向自测时尤其明显——
 // 旧构建上「月度预算」根本不存在，护栏得把所有该报的都报出来）。
@@ -421,6 +464,7 @@ function checkRhythm(where, dom) {
     `右列 ${pair}px ／ 今日流量第二列 ${day === null ? '—' : day - tile(dom, '今日流量').x}px ／ 实时网速第二列 ${net === null ? '—' : net - tile(dom, '实时网速').x}px`)
 }
 
+if (!CUSTOM_ONLY) {
 /* 1) 默认（后台没存过：GET config 回 {}）→ 出厂默认「两个都显示·概览卡片价值版」 */
 {
   const dom = await render({}, 'default')
@@ -814,10 +858,92 @@ let classicNet = null
   await send('Emulation.setDeviceMetricsOverride', WIDE)
 }
 
+}
+
+/* 14) Hub 自定义月数：真实 DOM 的两金额、计数、标准别名与当前分组。 */
+{
+  const texts = (dom) => ['月度预算', '剩余价值'].map((title) => block(dom, title).text)
+  const solo = new Map()
+  for (const [name, v, monthly, remaining] of [
+    ['2m', 'cycle2', '60.00', '60.00'],
+    ['60m（USD=7.5）', 'cycle60', '75.00', '2,250.00'],
+    ['1200m上限', 'cycle1200', '1.00', '600.00'],
+    ['12m别名（EUR=8）', 'cycle12', '80.00', '192.00'],
+    ['yearly命名周期（EUR=8）', 'cycleyear', '80.00', '192.00'],
+  ]) {
+    const dom = await render(CUSTOM_CYCLE_CONFIG, `custom-${v}`, v)
+    solo.set(v, texts(dom))
+    evidence.push({ name: `custom-${v}`, dom })
+    check(`自定义计费·${name}：两金额与独立手算一致且各计入1台`,
+      JSON.stringify(texts(dom)) === JSON.stringify([`月度预算 | ≈¥${monthly} | 1 台计费`, `剩余价值 | ≈¥${remaining} | 1 台未到期`]),
+      texts(dom).join(' ／ '))
+  }
+  check('标准月数别名：12m与yearly的DOM金额、计数完全一致（剩余仍按365天）',
+    JSON.stringify(solo.get('cycle12')) === JSON.stringify(solo.get('cycleyear')),
+    `${solo.get('cycle12').join(' ／ ')} = ${solo.get('cycleyear').join(' ／ ')}`)
+
+  const all = await render(CUSTOM_CYCLE_CONFIG, 'custom-all', 'customcycles')
+  check('混合自定义周期：月度预算336元，9台中7台计费',
+    block(all, '月度预算').text === '月度预算 | ≈¥336.00 | 7/9 台计费', block(all, '月度预算').text)
+  check('混合自定义周期：剩余价值3294元，9台中5台未到期',
+    block(all, '剩余价值').text === '剩余价值 | ≈¥3,294.00 | 5/9 台未到期', block(all, '剩余价值').text)
+  check('自定义周期外币：提示确认注入的USD/EUR汇率为人工值',
+    block(all, '月度预算').hint.includes('1 USD = ¥7.5') && block(all, '月度预算').hint.includes('1 EUR = ¥8') && block(all, '月度预算').hint.includes('自定义'),
+    block(all, '月度预算').hint)
+  check('自定义周期分组：全部9 / 自定义3 / 标准别名2 / 排除口径4',
+    JSON.stringify((all.groupRow?.tabs ?? []).map((t) => t.text)) === JSON.stringify(['全部9', '自定义周期3', '标准别名2', '排除口径4']),
+    JSON.stringify(all.groupRow?.tabs))
+  const settledDesktop = await capture('custom-cycles-desktop')
+  check('自定义周期 @1440：大额数字实际文本宽度不超出盒子（含亚像素边界）',
+    ['月度预算', '剩余价值'].every((title) => {
+      const b = block(settledDesktop, title)
+      return b.numTextW !== null && b.numW !== null && b.numTextW <= b.numW
+    }),
+    ['月度预算', '剩余价值'].map((title) => { const b = block(settledDesktop, title); return `${title}: ${b.text}, 文本${b.numTextW}px/盒子${b.numW}px,字号${b.numFontSize},整数clip${b.clip}` }).join(' ／ '))
+
+  const custom = await clickGroup('自定义周期')
+  check('自定义周期分组：2m/60m/1200m重新合计为月136、剩2910，各3台',
+    custom.clicked === 'ok' && JSON.stringify(texts(custom.dom)) === JSON.stringify(['月度预算 | ≈¥136.00 | 3 台计费', '剩余价值 | ≈¥2,910.00 | 3 台未到期']) && custom.dom.nodeCards === 3,
+    `点击 ${custom.clicked} ／ ${texts(custom.dom).join(' ／ ')} ／ 节点卡片 ${custom.dom.nodeCards}`)
+  const aliases = await clickGroup('标准别名')
+  check('标准别名分组：12m与yearly各计入，月160、剩384，各2台',
+    aliases.clicked === 'ok' && JSON.stringify(texts(aliases.dom)) === JSON.stringify(['月度预算 | ≈¥160.00 | 2 台计费', '剩余价值 | ≈¥384.00 | 2 台未到期']) && aliases.dom.nodeCards === 2,
+    `点击 ${aliases.clicked} ／ ${texts(aliases.dom).join(' ／ ')}`)
+  const excluded = await clickGroup('排除口径')
+  check('自定义周期计数：已到期/无到期日只计月摊，买断/零价排除；无预付到期',
+    excluded.clicked === 'ok' && JSON.stringify(texts(excluded.dom)) === JSON.stringify(['月度预算 | ≈¥40.00 | 2/4 台计费', '剩余价值 | — | 无预付到期']) && excluded.dom.nodeCards === 4,
+    `点击 ${excluded.clicked} ／ ${texts(excluded.dom).join(' ／ ')}`)
+  const back = await clickGroup('全部')
+  check('自定义周期分组：切回全部恢复两金额与计数',
+    back.clicked === 'ok' && JSON.stringify(texts(back.dom)) === JSON.stringify(texts(all)) && back.dom.nodeCards === 9,
+    texts(back.dom).join(' ／ '))
+
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+  const phone = await render(CUSTOM_CYCLE_CONFIG, 'custom-mobile', 'customcycles')
+  check('自定义周期 @390：金额/覆盖比例正确、无截断与横向滚动',
+    JSON.stringify(texts(phone)) === JSON.stringify(texts(all)) && phone.scroll[0] <= phone.scroll[1] &&
+    ['月度预算', '剩余价值'].every((title) => block(phone, title).clip <= 0 && block(phone, title).footClip <= 0),
+    `${texts(phone).join(' ／ ')} ／ scroll ${phone.scroll.join('/')} ／ clip ${['月度预算', '剩余价值'].map((title) => `${block(phone, title).clip}/${block(phone, title).footClip}`).join(',')}`)
+  await capture('custom-cycles-mobile-390')
+  const phoneCustom = await clickGroup('自定义周期')
+  check('自定义周期 @390：切分组继续使用实际月数与当前分组计数',
+    phoneCustom.clicked === 'ok' && JSON.stringify(texts(phoneCustom.dom)) === JSON.stringify(texts(custom.dom)) && phoneCustom.dom.nodeCards === 3 && phoneCustom.dom.scroll[0] <= phoneCustom.dom.scroll[1],
+    texts(phoneCustom.dom).join(' ／ '))
+  await capture('custom-cycles-mobile-390-group')
+  await send('Emulation.setDeviceMetricsOverride', WIDE)
+}
+
 ws.close()
 chrome.kill()
 server.close()
 
 const failed = results.filter((r) => !r.ok)
+const reportPath = join(OUTPUT, 'report.json')
+writeFileSync(reportPath, JSON.stringify({
+  startedAt, finishedAt: new Date().toISOString(), workspace: process.cwd(), port: PORT, customOnly: CUSTOM_ONLY,
+  fixtureDate: FIXTURE_DATE, customCycleConfig: CUSTOM_CYCLE_CONFIG, customCycleNodes: CUSTOM_CYCLES.nodes,
+  passed: results.length - failed.length, failed: failed.length, results, evidence,
+}, null, 2))
+console.log(`验收报告：${reportPath}`)
 console.log(`\n${results.length - failed.length} PASS / ${failed.length} FAIL`)
 process.exit(failed.length ? 1 : 0)

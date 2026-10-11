@@ -81,13 +81,20 @@ function Big({ children }: { children: ReactNode }) {
       el.style.fontSize = ""                        // 先回到基准字号量，免得越缩越小
       el.style.lineHeight = ""
       const baseH = el.getBoundingClientRect().height
-      const cw = el.clientWidth
-      const sw = el.scrollWidth
+      // scrollWidth/clientWidth 都会取整，亚像素溢出也会触发浏览器的省略号。
+      const cw = Math.max(0, el.getBoundingClientRect().width - 1)
+      const text = document.createRange()
+      text.selectNodeContents(el)
+      const textWidth = () => text.getBoundingClientRect().width
+      const sw = textWidth()
       if (cw > 0 && sw > cw) {
         // 行高钉在基准字号那一档：缩号只改字的大小，卡片高度零位移
         // （否则长读数那张卡会矮几像素，整行卡片跟着参差）。
         el.style.lineHeight = `${baseH}px`
-        el.style.fontSize = `${Math.max(BIG_MIN, Math.floor((BIG_BASE * cw) / sw))}px`
+        let size = Math.max(BIG_MIN, Math.floor((BIG_BASE * cw) / sw))
+        el.style.fontSize = `${size}px`
+        // 数字旁的单位可能有独立字号，缩号后再次实测，而非假设整串同比例缩小。
+        while (size > BIG_MIN && textWidth() > cw) el.style.fontSize = `${--size}px`
       }
     }
     fit()

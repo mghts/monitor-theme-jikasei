@@ -35,6 +35,15 @@ eq([cycleDaysOf("monthly"), cycleDaysOf("quarterly"), cycleDaysOf("semiannual"),
   [30, 90, 180, 365, 730, 1095], "周期天数表")
 eq([cycleMonthsOf("once"), cycleMonthsOf(""), cycleMonthsOf("weird")], [0, 1, 1], "一次性 = 0；没写或不认识按月付")
 eq([cycleDaysOf("once"), cycleDaysOf(""), cycleDaysOf("weird")], [0, 30, 30], "同上（天数）")
+const namedAliases = ["1m", "3m", "6m", "12m", "24m", "36m"]
+eq(namedAliases.map(cycleMonthsOf), [1, 3, 6, 12, 24, 36], "标准月数别名沿用命名周期的月数")
+eq(namedAliases.map(cycleDaysOf), [30, 90, 180, 365, 730, 1095], "标准月数别名沿用原天数，年付不能误作360天")
+eq(["2m", "18m", "60m", "1199m", "1200m"].map((cycle) => [cycleMonthsOf(cycle), cycleDaysOf(cycle)]),
+  [[2, 60], [18, 540], [60, 1800], [1199, 35970], [1200, 36000]], "其余自定义周期每月按30天，支持100年上限")
+eq([cycleMonthsOf("0002m"), cycleDaysOf("0002m")], [2, 60], "整月数允许前导零，按其实际月数折算")
+for (const cycle of ["0m", "1201m", "-2m", "+2m", "1.5m", "1e2m", "Infinitym", "999999999999999999999m", "2M", " 2m", "2m ", "2m\n", "m", "__proto__"]) {
+  eq([cycleMonthsOf(cycle), cycleDaysOf(cycle)], [1, 30], `无效周期 ${cycle} 保留月付兜底`)
+}
 
 /* 空列表：两个数都是 null（卡片显示「—」），不是 ¥0.00。 */
 eq(budgetOf([]), { monthly: null, remaining: null, monthlyCount: 0, remainingCount: 0, used: [], skipped: [] }, "空列表")
@@ -48,6 +57,28 @@ eq([monthly.monthlyCount, monthly.remainingCount, monthly.used], [1, 1, ["CNY"]]
 const yearly = budgetOf([node({ price: 120, currency: "USD", billing_cycle: "yearly", expires_in: 100 })])
 eq([round(yearly.monthly), round(yearly.remaining)], [round(120 * FX_CNY.USD / 12), round(120 * FX_CNY.USD * 100 / 365)],
   "年付 120 USD：月摊 + 剩 100 天")
+
+/* 自定义周期不能误当月付：两月价120元、剩30天，两个数都应60元。 */
+const twoMonths = budgetOf([node({ price: 120, billing_cycle: "2m", expires_in: 30 })])
+eq([twoMonths.monthly, twoMonths.remaining, twoMonths.monthlyCount, twoMonths.remainingCount], [60, 60, 1, 1],
+  "两月付120元剩30天：月摊与剩余均为60，而不是旧月付兜底的120")
+const customFleet = [
+  node({ id: 1, price: 600, currency: "USD", billing_cycle: "60m", expires_in: 900 }),
+  node({ id: 2, price: 1200, billing_cycle: "1200m", expires_in: 18000 }),
+  node({ id: 3, price: 180, billing_cycle: "18m", expires_in: 900 }),
+]
+const customFleetBefore = JSON.stringify(customFleet)
+const longCycles = budgetOf(customFleet, { CNY: 1, USD: 7.5 })
+eq([longCycles.monthly, longCycles.remaining, longCycles.monthlyCount, longCycles.remainingCount, longCycles.used],
+  [86, 3030, 3, 3, ["CNY", "USD"]], "自定义长周期按实际月数摊销、折算与封顶，不把整期价计为月价")
+eq(JSON.stringify(customFleet), customFleetBefore, "自定义周期统计不改写Hub节点字段")
+for (const [named, alias] of [["monthly", "1m"], ["quarterly", "3m"], ["semiannual", "6m"], ["yearly", "12m"], ["biennial", "24m"], ["triennial", "36m"]]) {
+  eq(budgetOf([node({ price: 360, billing_cycle: alias, expires_in: 180 })]),
+    budgetOf([node({ price: 360, billing_cycle: named, expires_in: 180 })]), `预算中 ${alias} 与 ${named} 的两个金额及计数一致`)
+}
+const invalidCycle = budgetOf([node({ price: 120, billing_cycle: "1201m", expires_in: 15 })])
+eq([invalidCycle.monthly, invalidCycle.remaining, invalidCycle.monthlyCount, invalidCycle.remainingCount], [120, 60, 1, 1],
+  "超出Hub上限的周期仍按原月付兜底")
 
 /* 混合币种：各自折成人民币后相加，`used` 按字母序（提示里要按这个顺序写汇率）。 */
 const mixed = budgetOf([

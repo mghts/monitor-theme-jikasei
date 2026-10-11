@@ -15,15 +15,9 @@ import { latencyLineOptions, latencyStyleFromOptions, remarksOnCards, type Remar
 import { useLatencyStyle } from "@/lib/theme-config"
 import { rangesFor } from "@/lib/ranges"
 import { timeRangeIndices, withHistorySlot } from "@/lib/history"
+import { countAxisTop, resourceHistory, type MetricPoint } from "@/lib/resource-history"
 
-type Point = {
-  ts: number
-  cpu: number
-  mem_used: number
-  disk_used: number
-  net_rx: number
-  net_tx: number
-}
+type Point = MetricPoint
 // `latency` is the bucket's median round trip, null when every probe in it timed
 // out. `band` is the range its answers spanned, absent when they spanned nothing.
 // `loss` is the percentage that timed out, absent when none did.
@@ -298,11 +292,17 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
     [data],
   )
 
-  // The hub answers in seconds; the time axis requires milliseconds.
-  const metricRows = useMemo(
-    () => (data?.metrics ?? []).map((m) => ({ ...m, ts: m.ts * 1_000 })),
+  // 时间转换与新历史字段的有效性判断共用一次遍历，旧 Hub 的缺字段保留为断点。
+  const { rows: metricRows, available, peaks } = useMemo(
+    () => resourceHistory(data?.metrics ?? []),
     [data],
   )
+  const missingHistory = [
+    !available.swap_used && "Swap",
+    !available.tcp && "TCP",
+    !available.udp && "UDP",
+    !available.procs && "进程数",
+  ].filter(Boolean).join("、")
 
   // Axis tops for the two panels with no capacity to measure against. CPU and a
   // transfer rate do not express fullness: against a fixed 0-100, a machine
@@ -317,8 +317,10 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
       cpu: axisTop(max((m) => m.cpu), 4, 10, 100),
       // Base 1024, so the steps are round in the unit `axisBytes` prints.
       rate: axisTop(max((m) => Math.max(m.net_rx, m.net_tx)), 1024, 1024),
+      connections: countAxisTop(Math.max(peaks.tcp, peaks.udp)),
+      procs: countAxisTop(peaks.procs),
     }
-  }, [metricRows])
+  }, [metricRows, peaks])
 
   const shownProbes = useMemo(
     () => pingSeries.filter((s) => !hiddenProbes.includes(s.id)),
@@ -695,6 +697,16 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
         <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有历史数据</p>
       ) : (
         <div className="space-y-5">
+          {missingHistory && (
+            <p className="text-xs text-muted-foreground">
+              当前 Hub 或这段历史未提供 {missingHistory} 数据
+            </p>
+          )}
+          {(available.swap_used || available.tcp || available.udp || available.procs) && (
+            <p className="text-xs text-muted-foreground">
+              Swap、连接数与进程数为采样区间均值；连接数、进程数由 Hub 取整。
+            </p>
+          )}
           <Panel title="CPU">
             <TimeChart
               rows={metricRows}
@@ -723,6 +735,20 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               label="内存使用量走势"
             />
           </Panel>
+
+          {available.swap_used && (
+          <Panel title={`Swap · ${bytes(node.swap_total)}`}>
+            <TimeChart
+              rows={metricRows}
+              series={[{ key: "swap_used", name: "Swap", color: "var(--chart-5)", area: true }]}
+              hours={hours}
+              top={Math.max(node.swap_total, axisTop(peaks.swap_used, 1024, 1024))}
+              yFormat={axisBytes}
+              format={(v) => bytes(v)}
+              label="Swap 使用量走势"
+            />
+          </Panel>
+          )}
 
           {/* A rate has no total to be a fraction of, so this one climbs the
               ladder like CPU rather than pinning to a capacity. */}
@@ -756,6 +782,37 @@ export function NodeDetail({ node, embedded = false, onOpenDetail, historyDays, 
               label="硬盘使用量走势"
             />
           </Panel>
+
+          {(available.tcp || available.udp) && (
+          <Panel title="连接数 · TCP / UDP">
+            <TimeChart
+              rows={metricRows}
+              series={[
+                ...(available.tcp ? [{ key: "tcp", name: "TCP", color: "var(--chart-6)" }] : []),
+                ...(available.udp ? [{ key: "udp", name: "UDP", color: "var(--chart-7)", dash: "4 3" }] : []),
+              ]}
+              hours={hours}
+              top={tops.connections}
+              yFormat={String}
+              format={String}
+              label="TCP / UDP 连接数走势"
+            />
+          </Panel>
+          )}
+
+          {available.procs && (
+          <Panel title="进程数">
+            <TimeChart
+              rows={metricRows}
+              series={[{ key: "procs", name: "进程", color: "var(--chart-8)", area: true }]}
+              hours={hours}
+              top={tops.procs}
+              yFormat={String}
+              format={String}
+              label="进程数走势"
+            />
+          </Panel>
+          )}
         </div>
       )}
     </div>

@@ -1,93 +1,88 @@
-// 详情页那四张资源图（CPU / 内存 / 网络速率 / 硬盘）的护栏 —— 它们从 recharts 换成了自绘
-// `TimeChart`（src/components/Chart.tsx），所以判据得落在「画出来的东西」上：
-//   ① 四块面板各有一张 svg，且撑满面板高度；② Y 轴刻度就是 quarters(top)（不是 recharts 挑的"整"数）；
-//   ③ X 轴是真时间轴（标签是时刻，不是序号）；④ 断点照断：数据中间空一段，路径要断成两笔（不连桥）；
-//   ⑤ 悬停出 tooltip（那枚自绘的，值带单位）。
-//
-// 跑法：
-//   node tools/verify_detail_charts.mjs                      # 本机夹具（含一段空档）
-//   node tools/verify_detail_charts.mjs http://127.0.0.1:5199 http://127.0.0.1:7980
-//     第二个参数是上游 hub：静态走本机 dist、/api/* 转给真 hub，用**真数据**验一版新构建
-//     （这时夹具那几条数值断言跳过，只留结构断言 + 出截图）。
-import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
+// 详情资源图的原生 Chrome 验收。Monitor 1.4.1 的新增字段是可选历史数据，缺测不能伪造为零。
+// 运行：CHART_DIST=/absolute/fresh/dist SHOT_DIR=/absolute/new/evidence node tools/verify_detail_charts.mjs
+// 可选保留旧真站模式：node tools/verify_detail_charts.mjs <local-url> <http-upstream-hub>
+// 本机夹具不访问真实 Hub；金额、断点与坐标预期不导入任何生产归一化/图表 helper。
+import { existsSync, readFileSync, statSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createServer, request } from 'node:http'
-import { join, extname, normalize } from 'node:path'
-// 期望值用**页面同一套函数**算（手写刻度是猜的：轴顶走的是 axisTop 的阶梯，
-// 这台夹具的最大 CPU 16% 给出的是 0/4/8/12/16，不是 0/5/10/15/20）。
-import { axisTop, quarters } from '../src/lib/format.ts'
+import { join, extname, normalize, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const REAL = process.argv[2] || ''
 const UPSTREAM = (process.argv[3] || '').replace(/\/$/, '')
-const PORT = 5221
-const BASE = REAL || `http://127.0.0.1:${PORT}`
-const SHOTS = process.env.SHOT_DIR || 'shots/detail-charts'
+const PORT = Number(process.env.CHART_PORT || 0)
+let BASE = REAL || `http://127.0.0.1:${PORT}`
+const DIST = resolve(process.env.CHART_DIST || 'dist')
+const SHOTS = process.env.SHOT_DIR || mkdtempSync(join(tmpdir(), 'monitor-detail-charts-'))
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.woff2': 'font/woff2', '.ico': 'image/x-icon' }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 mkdirSync(SHOTS, { recursive: true })
-
-let passed = 0
-let failed = 0
-function check(what, ok, detail = '') {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}${detail ? ' — ' + detail : ''}`)
+let passed = 0, failed = 0
+const results = [], evidence = [], historyRequests = [], errors = [], external = []
+function check(name, ok, detail = '') {
+  results.push({ name, ok: !!ok, detail })
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`)
   if (ok) passed++
   else failed++
 }
-
-// ── 夹具：一台机器 + 一段 40 点的历史，**第 12~15 点是空的**（验「断点照断」） ──
-const node = (id, name, group, country, os) => ({
-  id, name, group, country, os, sort: id, online: true, public: true, country_pin: '', last_seen: 1790311292,
+const EXTRA = ['swap_used', 'tcp', 'udp', 'procs']
+const START = 1790300000
+const node = {
+  id: 1, name: '东京一号', group: '东京', country: 'JP', os: 'Debian GNU/Linux 12 (bookworm)',
+  sort: 1, online: true, public: true, country_pin: '', last_seen: 1790311292,
   kernel: '6.1.0', arch: 'x86_64', virt: 'kvm', cpu_name: 'AMD EPYC 7763', cpu_cores: 2, mem_total: 2147483648,
-  swap_total: 0, disk_total: 42949672960, traffic_limit: 536870912000, traffic_mode: 'sum', billing_cycle: 'monthly',
+  swap_total: 2147483648, disk_total: 42949672960, traffic_limit: 536870912000, traffic_mode: 'sum', billing_cycle: 'monthly',
   currency: 'CNY', price: 349, expires_at: '2027-07-21', expires_in: 299, month_start: '2026-09-21',
   traffic_reset_day: 21, day_rx: 2140585887, day_tx: 2191393745, month_rx: 4650258264, month_tx: 4351673970,
   total_rx: 5707805336, total_tx: 5203609923,
-  metrics: { cpu: 13, load: [0, 0, 0], mem_used: 431800320, mem_total: 2147483648, swap_used: 0, swap_total: 0, disk_used: 1524510720, disk_total: 42949672960, net_rx: 867, net_tx: 465, procs: 75, tcp: 16, udp: 3, uptime: 318521, month_rx: 4650258264, month_tx: 4351673970, total_rx: 5707805336, total_tx: 5203609923 },
+  metrics: { cpu: 13, load: [0, 0, 0], mem_used: 431800320, mem_total: 2147483648, swap_used: 268435456, swap_total: 2147483648, disk_used: 1524510720, disk_total: 42949672960, net_rx: 867, net_tx: 465, procs: 75, tcp: 16, udp: 3, uptime: 318521, month_rx: 4650258264, month_tx: 4351673970, total_rx: 5707805336, total_tx: 5203609923 },
+}
+const NODES = { nodes: [node] }
+const samples = Array.from({ length: 40 }, (_, i) => {
+  const gap = i >= 12 && i <= 15
+  return { ts: START + i * 300, cpu: gap ? null : 4 + (i % 7) * 2,
+    mem_used: gap ? null : 400_000_000 + i * 5_000_000, disk_used: gap ? null : 1_500_000_000 + i * 1_000_000,
+    net_rx: gap ? null : 300 + i * 10, net_tx: gap ? null : 200 + i * 8,
+    swap_used: gap ? null : (i % 5) * 134217728,
+    tcp: gap ? null : (i === 0 ? 0 : 20 + (i % 5)), udp: gap ? null : i % 4,
+    procs: gap ? null : (i === 0 ? 0 : 48 + (i % 5) * 12) }
 })
-const NODES = { nodes: [node(1, '东京一号', '东京', 'JP', 'Debian GNU/Linux 12 (bookworm)')] }
-const START = 1790300000
-const METRICS = {
-  metrics: Array.from({ length: 40 }, (_, i) => {
-    const gap = i >= 12 && i <= 15            // 这一段「agent 没上报」
-    return {
-      ts: START + i * 300,
-      cpu: gap ? null : 4 + (i % 7) * 2,      // 4~16 → axisTop(16,4,10,100) = 20
-      mem_used: gap ? null : 400_000_000 + i * 5_000_000,
-      disk_used: gap ? null : 1_500_000_000 + i * 1_000_000,
-      net_rx: gap ? null : 300 + i * 10,
-      net_tx: gap ? null : 200 + i * 8,
-    }
-  }),
+const without = (row, keys) => Object.fromEntries(Object.entries(row).filter(([key]) => !keys.includes(key)))
+let fixture = 'modern'
+const HISTORIES = {
+  modern: { metrics: samples },
+  legacy: { metrics: samples.map((row) => without(row, EXTRA)) },
+  partial: { metrics: samples.map((row, i) => {
+    const next = without(row, ['tcp'])
+    if (i < 4 || i > 36 || (i >= 18 && i <= 21)) delete next.swap_used
+    if (i >= 27 && i <= 29) next.udp = null
+    if (i >= 18 && i <= 21) delete next.procs
+    return next
+  }) },
+  'tcp-only': { metrics: samples.map((row) => without(row, ['swap_used', 'udp', 'procs'])) },
+  zero: { metrics: samples.map((row) => ({ ...row, swap_used: 0, tcp: 0, udp: 0, procs: 0 })) },
+  invalid: { metrics: samples.map((row, i) => ({ ...row, swap_used: null, tcp: i % 2 ? -1 : '12', udp: null, procs: i % 2 ? [] : null })) },
+  empty: { metrics: [] },
+  'capacity-off': { metrics: samples },
 }
-
-// 延迟页签要一段 ping 历史（一条线路，带区间与丢包）
 const PING = {
-  ping: Array.from({ length: 40 }, (_, i) => ({
-    task_id: 1,
-    ts: START + i * 300,
-    latency: 30 + (i % 5) * 3,
-    band: [28 + (i % 5) * 3, 34 + (i % 5) * 3],
-    loss: 0,
-  })),
-  probes: { 1: '北京电信' },
-  loss: { 1: 0.4 },
+  ping: Array.from({ length: 40 }, (_, i) => ({ task_id: 1, ts: START + i * 300, latency: 30 + (i % 5) * 3,
+    band: [28 + (i % 5) * 3, 34 + (i % 5) * 3], loss: 0 })),
+  probes: { 1: '北京电信' }, loss: { 1: 0.4 },
 }
-
 const serveFile = (res, path) => {
-  const file = join('dist', normalize(path === '/' ? '/index.html' : path).replace(/^(\.\.[/\\])+/, ''))
-  if (!existsSync(file) || statSync(file).isDirectory()) { res.writeHead(200, { 'Content-Type': TYPES['.html'] }); return res.end(readFileSync('dist/index.html')) }
+  const file = join(DIST, normalize(path === '/' ? '/index.html' : path).replace(/^(\.\.[/\\])+/, ''))
+  if (!existsSync(file) || statSync(file).isDirectory()) { res.writeHead(200, { 'Content-Type': TYPES['.html'] }); return res.end(readFileSync(join(DIST, 'index.html'))) }
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' })
   res.end(readFileSync(file))
 }
 const server = createServer((req, res) => {
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`)
-  const path = url.pathname
-  // 判 `series=metrics` 必须带上查询串 —— 只看 pathname 的话永远不匹配，夹具会静默回一份空历史，
-  // 表现就是「详情页说这段时间没有历史数据」（第一版就踩了这个）。
-  const full = url.pathname + url.search
+  const url = new URL(req.url, BASE)
+  const path = url.pathname, full = path + url.search
+  if (path.includes('/metrics') && url.searchParams.get('series') === 'metrics') historyRequests.push({ fixture, at: Date.now(), path: full })
   if (path.startsWith('/api/')) {
     if (UPSTREAM) {
-      const up = new URL(UPSTREAM + path + new URL(req.url, 'http://x').search)
+      const up = new URL(UPSTREAM + full)
       const proxied = request(up, { method: req.method, headers: { host: up.host, accept: req.headers.accept || '*/*' } }, (r) => {
         res.writeHead(r.statusCode || 502, { 'Content-Type': r.headers['content-type'] || 'application/json', 'Cache-Control': 'no-store' })
         r.pipe(res)
@@ -95,204 +90,247 @@ const server = createServer((req, res) => {
       proxied.on('error', (e) => { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: String(e) })) })
       return req.pipe(proxied)
     }
-    const body = path === '/api/me' ? { authed: false, github: false, public_page: true, site: BASE, site_name: '图表' }
+    const body = path === '/api/me' ? { authed: false, github: false, public_page: true, site: BASE, site_name: '图表', history_days: 7 }
       : path === '/api/nodes' ? NODES
         : path.endsWith('/config') ? { listTop: 'both', cardStyle: 'detailed', remarkPlacement: 'both', pingLines: '' }
-          : path.includes('/metrics') ? (full.includes('series=metrics') ? METRICS : full.includes('series=ping') ? PING : { metrics: [], ping: [], probes: {}, loss: {} })
-            : {}
+          : path.includes('/metrics') ? (url.searchParams.get('series') === 'metrics' ? HISTORIES[fixture] : url.searchParams.get('series') === 'ping' ? PING : { metrics: [], ping: [], probes: {}, loss: {} }) : {}
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     return res.end(JSON.stringify(body))
   }
   serveFile(res, path)
 })
-if (!REAL) await new Promise((r) => server.listen(PORT, '127.0.0.1', r))
-
-const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => existsSync(p)) || 'chrome'
-const dbgPort = 9960 + Math.floor(Math.random() * 15)
-const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbgPort}`, '--remote-allow-origins=*', '--no-first-run',
+server.on('upgrade', (_req, socket) => socket.end('HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'))
+if (!REAL) { await new Promise((r) => server.listen(PORT, '127.0.0.1', r)); BASE = `http://127.0.0.1:${server.address().port}` }
+const CHROME = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome', '/usr/bin/chromium'].find((p) => existsSync(p)) || 'chrome'
+const profile = join(SHOTS, 'chrome-profile')
+const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', '--remote-allow-origins=*', '--no-first-run',
   '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars', '--window-size=1000,1200', '--force-device-scale-factor=2',
-  '--user-data-dir=' + (process.env.TEMP || '/tmp') + '/charts-' + dbgPort + '-' + Date.now(), 'about:blank'], { stdio: 'ignore' })
+  '--disable-background-networking', '--disable-component-update', '--disable-sync', '--user-data-dir=' + profile, 'about:blank'], { stdio: 'ignore' })
 let wsUrl = null
 for (let i = 0; i < 120 && !wsUrl; i++) {
-  try { wsUrl = (await (await fetch(`http://127.0.0.1:${dbgPort}/json/list`)).json()).find((t) => t.type === 'page')?.webSocketDebuggerUrl } catch { }
+  try { const port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); wsUrl = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === 'page')?.webSocketDebuggerUrl } catch { /* Chrome 尚未就绪。 */ }
   if (!wsUrl) await sleep(250)
 }
-if (!wsUrl) throw new Error('Chrome 起不来')
+if (!wsUrl) { chrome.kill(); server.close(); throw new Error('Chrome 起不来') }
 let id = 0
 const pending = new Map()
 const ws = new WebSocket(wsUrl)
 await new Promise((r) => { ws.onopen = r })
-const send = (m, p = {}) => new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method: m, params: p })) })
-const errors = []
+const send = (method, params = {}) => new Promise((resolve, reject) => {
+  const next = ++id
+  const timer = setTimeout(() => { pending.delete(next); reject(new Error(`CDP timeout: ${method}`)) }, 15000)
+  pending.set(next, (response) => { clearTimeout(timer); if (response.error) reject(new Error(JSON.stringify(response.error))); else resolve(response) })
+  ws.send(JSON.stringify({ id: next, method, params }))
+})
 ws.onmessage = (e) => {
-  const m = JSON.parse(e.data)
-  if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return }
-  if (m.method === 'Runtime.exceptionThrown') errors.push(m.params?.exceptionDetails?.exception?.description || '异常')
-}
-const js = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value
-await send('Runtime.enable'); await send('Page.enable')
-await send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 1200, deviceScaleFactor: 2, mobile: false })
-
-// 每一块面板量：标题、svg 尺寸、Y 轴刻度文字、X 轴刻度文字、面积/折线路径、路径里的断笔数
-const PROBE = `(() => {
-  const panels = [...document.querySelectorAll('h4')].filter((h) => /^(CPU|内存|网络速率|硬盘)/.test(h.textContent || ''))
-  return JSON.stringify(panels.map((h) => {
-    const box = h.parentElement
-    const svg = box.querySelector('svg')
-    const texts = svg ? [...svg.querySelectorAll('text')] : []
-    const ys = texts.filter((t) => t.getAttribute('text-anchor') === 'end').map((t) => t.textContent)
-    const xs = texts.filter((t) => t.getAttribute('text-anchor') === 'middle').map((t) => t.textContent)
-    const paths = svg ? [...svg.querySelectorAll('path')] : []
-    const rect = svg ? svg.getBoundingClientRect() : null
-    const chartBox = box.querySelector('div')
-    return {
-      title: (h.textContent || '').slice(0, 14),
-      chartH: chartBox ? Math.round(chartBox.getBoundingClientRect().height) : 0,
-      svg: rect ? { w: Math.round(rect.width), h: Math.round(rect.height) } : null,
-      ariaLabel: svg ? svg.getAttribute('aria-label') : null,
-      ys, xs,
-      area: paths.filter((p) => getComputedStyle(p).fill !== 'none').length,
-      line: paths.filter((p) => getComputedStyle(p).stroke !== 'none' && p.getAttribute('stroke-width')).length,
-      breaks: paths.map((p) => ((p.getAttribute('d') || '').match(/M/g) || []).length),
-      colors: paths.map((p) => getComputedStyle(p).fill !== 'none' ? getComputedStyle(p).fill : getComputedStyle(p).stroke),
-    }
-  }))
-})()`
-
-async function open(url) {
-  await send('Page.navigate', { url })
-  await sleep(1500)
-  await send('Page.navigate', { url })
-  // 轮询到四块面板真的画出来为止：经隧道取真 hub 的历史指标要两三秒，写死等待会偶发量到空页
-  // （第一版就因为这个假 FAIL 过一次）。
-  let charts = []
-  for (let i = 0; i < 40; i++) {
-    await sleep(400)
-    charts = JSON.parse(await js(PROBE))
-    // 等曲线真的画出来（只有坐标轴、还没有数据时截图会拍到一片空白 —— 第一版就拍到过）。
-    if (charts.length === 4 && charts.every((c) => c.svg && (c.area > 0 || c.line > 0))) break
+  const message = JSON.parse(e.data)
+  if (message.id && pending.has(message.id)) { pending.get(message.id)(message); pending.delete(message.id); return }
+  if (message.method === 'Runtime.exceptionThrown') errors.push(message.params?.exceptionDetails?.exception?.description || '异常')
+  if (message.method === 'Fetch.requestPaused') {
+    external.push({ url: message.params.request.url, resourceType: message.params.resourceType })
+    void send('Fetch.failRequest', { requestId: message.params.requestId, errorReason: 'BlockedByClient' }).catch((e) => errors.push(String(e)))
   }
-  return charts
+}
+const js = async (expression) => {
+  const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
+  if (response.result?.exceptionDetails) throw new Error(response.result.exceptionDetails.text)
+  return response.result?.result?.value
+}
+await send('Runtime.enable'); await send('Page.enable')
+// 只在夹具模式拦截第三方 URL，保证隔离验收不会访问外网。
+if (!REAL && !UPSTREAM) await send('Fetch.enable', { patterns: [{ urlPattern: 'https://*' }, { urlPattern: 'http://*', requestStage: 'Request' }] })
+// Fetch 的本地请求需继续，外部请求才拒绝。
+const originalMessage = ws.onmessage
+ws.onmessage = (e) => {
+  const message = JSON.parse(e.data)
+  if (message.method === 'Fetch.requestPaused' && message.params.request.url.startsWith(BASE + '/')) { void send('Fetch.continueRequest', { requestId: message.params.requestId }).catch((e) => errors.push(String(e))); return }
+  originalMessage(e)
+}
+async function viewport(width = 1000, dark = false, mobile = false) {
+  await send('Emulation.setDeviceMetricsOverride', { width, height: 1200, deviceScaleFactor: 2, mobile })
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }, { name: 'prefers-reduced-motion', value: 'reduce' }] })
+}
+await viewport()
+const PROBE = `(() => {
+  const rect = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom} }
+  const panels = [...document.querySelectorAll('h4')].filter((h) => /^(CPU|内存|网络速率|硬盘|Swap|连接数|进程数)/.test(h.textContent || ''))
+  return panels.map((h) => {
+    const box = h.parentElement, svg = box.querySelector('svg'), chart = box.querySelector('[data-chart]')
+    const texts = svg ? [...svg.querySelectorAll('text')] : []
+    const paths = svg ? [...svg.querySelectorAll('path')] : []
+    return { title:h.textContent, chartH:chart?.getBoundingClientRect().height ?? 0, svg:rect(svg), panel:rect(box),
+      ariaLabel:svg?.getAttribute('aria-label'), plot:rect(svg?.querySelector('rect[fill="transparent"]')),
+      plotLocal:svg ? (()=>{const r=svg.querySelector('rect[fill="transparent"]');return {x:+r.getAttribute('x'),y:+r.getAttribute('y'),w:+r.getAttribute('width'),h:+r.getAttribute('height')}})():null,
+      ys:texts.filter((t)=>t.getAttribute('text-anchor')==='end').map((t)=>t.textContent),
+      xs:texts.filter((t)=>t.getAttribute('text-anchor')==='middle').map((t)=>t.textContent),
+      labels:texts.map((t)=>({text:t.textContent,...rect(t)})),
+      area:paths.filter((p)=>getComputedStyle(p).fill!=='none').length,
+      line:paths.filter((p)=>p.hasAttribute('data-series')).length,
+      series:paths.filter((p)=>p.hasAttribute('data-series')).map((p)=>({key:p.getAttribute('data-series'),d:p.getAttribute('d'),moves:(p.getAttribute('d').match(/M/g)||[]).length})),
+      breaks:paths.map((p)=>(p.getAttribute('d').match(/M/g)||[]).length) }
+  })
+})()`
+const inspect = () => js(PROBE)
+const chartOf = (charts, prefix) => charts.find((chart) => chart.title.startsWith(prefix))
+async function pageState() {
+  return js(`(() => ({missing:[...document.querySelectorAll('p')].find((p)=>p.textContent.startsWith('当前 Hub 或这段历史未提供'))?.textContent.trim()??null,
+    means:[...document.querySelectorAll('p')].find((p)=>p.textContent.includes('为采样区间均值'))?.textContent.trim()??null,
+    empty:document.body.textContent.includes('这段时间没有历史数据'),width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
+    dark:document.documentElement.classList.contains('dark')}))()`)
+}
+async function open(url, expected = 7) {
+  const before = historyRequests.length
+  await send('Page.navigate', { url })
+  let charts = []
+  for (let i = 0; i < 50; i++) {
+    await sleep(200)
+    charts = await inspect()
+    const state = await pageState()
+    if (REAL || UPSTREAM) { if ([4,5,6,7].includes(charts.length) && charts.every((c) => c.svg && c.line > 0)) break }
+    else if (historyRequests.length > before && (expected === 0 ? state.empty && charts.length === 0 : charts.length === expected && charts.every((c) => c.svg && c.line > 0))) break
+  }
+  await sleep(150)
+  return inspect()
+}
+async function caseOpen(name, count) {
+  fixture = name
+  node.swap_total = name === 'capacity-off' || name === 'zero' ? 0 : 2147483648
+  node.metrics.swap_total = node.swap_total
+  const charts = await open(`${BASE}/node/1?fixture=${encodeURIComponent(name)}`, count)
+  const state = await pageState()
+  evidence.push({fixture:name,charts,state})
+  check(`${name}: 面板数为 ${count}`, charts.length === count, charts.map((c)=>c.title).join(' / '))
+  return {charts,state}
 }
 async function shot(name, selector) {
-  // 拍一块区域：给了 selector 就拍它，没给就拍「四张资源图那一块」。
-  // ★captureBeyondViewport 在无头 + --disable-gpu 下不可靠：超出视口的部分会拍到空白，
-  //   看着像「图表根本没渲染」（第一版两张对比图就是这么废掉的）。所以先把目标滚进视口。
-  const target = selector ? JSON.stringify(selector) : `'main'`
-  await js(`(() => { const el = document.querySelector(${target}); el && el.scrollIntoView({ block: 'center' }); return true })()`)
-  await sleep(350)
   const clip = await js(`(() => {
-    if (${selector ? 'true' : 'false'}) {
-      const el = document.querySelector(${target})
-      if (!el) return null
-      const r = el.getBoundingClientRect()
-      return { x: Math.max(0, Math.round(r.x - 6)), y: Math.round(r.y + scrollY - 6), width: Math.round(r.width + 12), height: Math.round(r.height + 12), scale: 2 }
-    }
-    const els = [...document.querySelectorAll('h4')].filter((h) => /^(CPU|内存|网络速率|硬盘)/.test(h.textContent || ''))
-    if (els.length < 4) return null
-    const first = els[0].getBoundingClientRect()
-    const last = els[els.length - 1].parentElement.getBoundingClientRect()
-    return { x: Math.max(0, Math.round(first.x - 6)), y: Math.round(first.y + scrollY - 6), width: Math.round(first.width + 12), height: Math.round(last.bottom - first.top + 12), scale: 2 }
+    const el=document.querySelector(${JSON.stringify(selector || 'main')});if(!el)return null
+    const r=el.getBoundingClientRect();return {x:Math.max(0,r.x),y:Math.max(0,r.y+scrollY),width:Math.max(1,r.width),height:Math.max(1,r.height),scale:1}
   })()`)
-  if (!clip) {
-    console.log(`   （${name}：没找到要拍的区域，跳过）`)
-    return
+  if (!clip) throw new Error(`截图目标不存在: ${selector || 'main'}`)
+  const r=await send('Page.captureScreenshot',{format:'png',clip,captureBeyondViewport:true})
+  writeFileSync(join(SHOTS,name+'.png'),Buffer.from(r.result.data,'base64'))
+  console.log(`SHOT ${join(SHOTS,name+'.png')}`)
+}
+async function hover(prefix, index, fy = .5) {
+  await send('Input.dispatchMouseEvent', {type:'mouseMoved',x:2,y:2})
+  await js(`(() => {const h=[...document.querySelectorAll('h4')].find(h=>h.textContent.startsWith(${JSON.stringify(prefix)}));h?.parentElement.scrollIntoView({block:'center'});return !!h})()`)
+  await sleep(100)
+  const charts = await inspect(), plot = chartOf(charts,prefix)?.plot
+  if (!plot) return null
+  const x=plot.x+plot.w*index/39, y=plot.y+plot.h*fy
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',x,y})
+  await sleep(150)
+  return js(`(() => {const h=[...document.querySelectorAll('h4')].find(h=>h.textContent.startsWith(${JSON.stringify(prefix)}));const el=h?.parentElement.querySelector('[data-chart] .rounded-lg');if(!el)return null;const b=el.getBoundingClientRect();return {text:el.textContent,rows:[...el.querySelectorAll('li')].map(li=>li.textContent),x:b.x,y:b.y,w:b.width,h:b.height}})()`)
+}
+const valid = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
+const coords = (path) => [...path.matchAll(/[ML](-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g)].map((m)=>({x:Number(m[1]),y:Number(m[2])}))
+function verifySeries(name, charts, fields) {
+  for (const key of fields) {
+    const chart=charts.find((chart)=>chart.series.some((series)=>series.key===key)), series=chart?.series.find((series)=>series.key===key)
+    const rows=HISTORIES[name].metrics, indices=rows.flatMap((row,i)=>valid(row[key])?[i]:[])
+    let runs=0,previous=-2
+    for(const index of indices){if(index!==previous+1)runs++;previous=index}
+    const points=coords(series?.d||'')
+    check(`${name}/${key}: 有效采样逐点保留、缺测处断线`, !!series && series.moves===runs && points.length===indices.length,
+      `点=${points.length}/${indices.length};段=${series?.moves}/${runs}`)
+    const p=chart?.plotLocal
+    check(`${name}/${key}: 使用完整时间域且线条在绘图区内`, !!p && points.length===indices.length && points.every((point,i)=>
+      Math.abs(point.x-(p.x+p.w*indices[i]/39))<=.11 && point.y>=p.y-.11 && point.y<=p.y+p.h+.11) && !/NaN|Infinity|[CQ]/.test(series?.d||''), series?.d?.slice(0,100))
+    if (key==='tcp'||key==='udp'||key==='procs') check(`${name}/${key}: 计数刻度为不同整数`, chart.ys.length===5 && chart.ys.every((t)=>/^\d+$/.test(t)) && new Set(chart.ys).size===5,chart.ys.join('/'))
   }
-  const r = await send('Page.captureScreenshot', { format: 'png', clip, captureBeyondViewport: false })
-  writeFileSync(`${SHOTS}/${name}.png`, Buffer.from(r.result.data, 'base64'))
-  console.log(`   已拍 ${SHOTS}/${name}.png（${clip.width}×${clip.height}）`)
+}
+function verifyMissing(name,state,names) {
+  const actual=state.missing?.match(/未提供 (.+) 数据/)?.[1]?.split('、')||[]
+  check(`${name}: 缺字段说明准确，不伪造零`, JSON.stringify(actual)===JSON.stringify(names),state.missing||'无缺字段说明')
 }
 
-console.log(`\n详情页四张资源图（${REAL ? '真站' : UPSTREAM ? `本机 dist + 上游 ${UPSTREAM}` : '本机夹具'}）:`)
-const charts = await open(`${BASE}/node/1`)
-check('四块面板都在（CPU / 内存 / 网络速率 / 硬盘）', charts.length === 4, JSON.stringify(charts.map((c) => c.title)))
-check('每块都有一张 svg，且撑满图表容器（h-40 = 160）',
-  charts.length === 4 && charts.every((c) => c.svg && Math.abs(c.svg.h - c.chartH) <= 2 && c.chartH === 160),
-  JSON.stringify(charts.map((c) => `${c.title} svg ${c.svg?.w}×${c.svg?.h} / 容器 ${c.chartH}`)))
-check('每张 svg 都带 aria-label（读屏知道画的是什么）', charts.every((c) => !!c.ariaLabel), JSON.stringify(charts.map((c) => c.ariaLabel)))
-check('Y 轴 5 条刻度、X 轴有时刻标签',
-  charts.every((c) => c.ys.length === 5 && c.xs.length >= 3),
-  JSON.stringify(charts.map((c) => `${c.title} y=${c.ys.length} x=${c.xs.length}`)))
-check('X 轴标签是时刻（HH:MM），不是序号', charts.every((c) => c.xs.every((s) => /^\d{2}:\d{2}$/.test(s))), JSON.stringify(charts[0]?.xs))
-check('面积图有线下面的填充（CPU / 内存 / 硬盘；断点会把它切成两块），折线图没有（网络速率）',
-  charts[0]?.area >= 1 && charts[1]?.area >= 1 && charts[3]?.area >= 1 && charts[2]?.area === 0,
-  JSON.stringify(charts.map((c) => `${c.title} 面积 ${c.area}`)))
-check('网络速率是两条折线（下行 / 上行）', charts[2]?.line === 2, `line=${charts[2]?.line}`)
-// 断笔数要按**数据里到底有没有空档**来判：夹具中间挖了一段（第 12~15 点），
-// 真 hub 的历史是连续的 —— 拿「必须 ≥2 笔」去卡真数据，是我判据写错了（第一版就错在这里）。
-const gaps = METRICS.metrics.filter((m) => m.cpu === null).length
-if (!REAL && !UPSTREAM) {
-  check(`★断点照断：夹具里挖了 ${gaps} 个空点，路径要断成两笔（不连桥）`,
-    charts.every((c) => c.breaks.some((n) => n >= 2)),
-    JSON.stringify(charts.map((c) => `${c.title} 断笔 ${c.breaks.join(',')}`)))
-} else {
-  check('真数据是连续的：每条曲线一笔画完（没有多余断笔）',
-    charts.every((c) => c.breaks.every((n) => n >= 1)),
-    JSON.stringify(charts.map((c) => `${c.title} 断笔 ${c.breaks.join(',')}`)))
-}
-
-if (!REAL && !UPSTREAM) {
-  const maxCpu = Math.max(...METRICS.metrics.map((m) => m.cpu ?? 0))
-  const cpuTicks = quarters(axisTop(maxCpu, 4, 10, 100)).map((v) => `${v}%`)
-  check(`CPU 的 Y 轴刻度就是 quarters(axisTop(max))（${cpuTicks.join(' / ')}）`,
-    JSON.stringify(charts[0]?.ys) === JSON.stringify(cpuTicks), JSON.stringify(charts[0]?.ys))
-  check('网络速率的 Y 轴带 /s 单位', (charts[2]?.ys ?? []).every((s) => s.endsWith('/s')), JSON.stringify(charts[2]?.ys))
-  check('内存 / 硬盘的 Y 轴按字节印', (charts[1]?.ys ?? []).every((s) => /B$/.test(s)), JSON.stringify(charts[1]?.ys))
-}
-
-// 悬停：鼠标落到 CPU 那块绘图区中间，应该出一枚 tooltip（时间戳 + CPU + 带 % 的值）
-await js(`(() => {
-  const h = [...document.querySelectorAll('h4')].find((x) => /^CPU/.test(x.textContent || ''))
-  const rect = h.parentElement.querySelector('svg rect[fill="transparent"]')
-  if (!rect) return null
-  const r = rect.getBoundingClientRect()
-  const ev = (type) => rect.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }))
-  ev('mousemove')
-  return JSON.stringify({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) })
-})()`)
-await sleep(250)
-const tip = await js(`(() => { const el = [...document.querySelectorAll('div')].find((d) => /CPU/.test(d.textContent || '') && d.className.includes('pointer-events-none') && d.className.includes('rounded-lg')); return el ? el.textContent : null })()`)
-check('悬停出 tooltip：带时间戳 + 系列名 + 带单位的值', !!tip && /CPU/.test(tip) && /%/.test(tip), JSON.stringify(tip))
-
-// 卡片要**跟着鼠标走**（原来钉在图表顶端）：同一列上下各停一次，卡片纵向位置得跟着变，
-// 而且始终夹在绘图区里（上下都不越界）。
-// ★两次悬停之间必须**等一帧**：React 的状态更新是异步的，派发完立刻量会量到上一帧的位置
-//   （第一版就是这么误判成「没跟着走」的）。
-const hoverAt = async (fy) => {
-  await js(`(() => {
-    const h = [...document.querySelectorAll('h4')].find((x) => /^CPU/.test(x.textContent || ''))
-    const rect = h.parentElement.querySelector('svg rect[fill="transparent"]')
-    const r = rect.getBoundingClientRect()
-    rect.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height * ${fy} }))
-    return true
-  })()`)
-  await sleep(180)
-  return JSON.parse(await js(`(() => {
-    const h = [...document.querySelectorAll('h4')].find((x) => /^CPU/.test(x.textContent || ''))
-    const r = h.parentElement.querySelector('svg rect[fill="transparent"]').getBoundingClientRect()
-    const card = [...document.querySelectorAll('div')].find((d) => /CPU/.test(d.textContent || '') && (d.className || '').includes('rounded-lg'))
-    const b = card ? card.getBoundingClientRect() : null
-    return JSON.stringify({ plotH: Math.round(r.height), nearY: Math.round(r.height * ${fy}),
-      top: b ? Math.round(b.top - r.top) : null, bottom: b ? Math.round(b.bottom - r.top) : null })
-  })()`))
-}
-const up = await hoverAt(0.15)
-const down = await hoverAt(0.85)
-check('鼠标停在上半 / 下半，卡片纵向位置跟着变（不再是钉在顶端）',
-  // ★别写 `!!up.top`：夹到顶端时 top 正好是 0，会被当成「没有值」——第一版就这么误判过。
-  up.top !== null && down.top !== null && down.top - up.top > 20,
-  `上半 y=${up.nearY} → 卡片 top=${up.top}；下半 y=${down.nearY} → 卡片 top=${down.top}`)
-check('卡片始终夹在绘图区里（上下都没越界）',
-  up.top >= -2 && down.bottom <= down.plotH + 2,
-  `上半 top=${up.top}；下半 bottom=${down.bottom} / 绘图区 ${down.plotH}`)
-check('没有控制台异常', errors.length === 0, errors.slice(0, 2).join(' | '))
-// 真站那轮也出图：同一台机器、同一时刻，改前改后各拍一张才能比。
-await shot(REAL ? 'live-detail-charts' : 'detail-charts')
-
+try {
+  console.log(`DETAIL dist=${DIST} evidence=${SHOTS}`)
+  const initial=await open(`${BASE}/node/1`,7)
+  const charts=initial
+  const count=REAL||UPSTREAM?charts.length:7
+  check('资源面板完整（旧四图及可用新增三图）', charts.length===count && ([4,5,6,7].includes(count)),charts.map(c=>c.title).join('/'))
+  check('每块 SVG 撑满 160px 图表容器',charts.length===count && charts.every(c=>c.svg&&Math.abs(c.svg.h-c.chartH)<=2&&c.chartH===160))
+  check('每张 SVG 都有 aria-label',charts.length>0&&charts.every(c=>!!c.ariaLabel))
+  check('五条 Y 刻度和真实 HH:MM 时间轴',charts.length>0&&charts.every(c=>c.ys.length===5&&c.xs.length>=3&&c.xs.every(s=>/^\d{2}:\d{2}$/.test(s))))
+  const cpu=chartOf(charts,'CPU'), memory=chartOf(charts,'内存'), network=chartOf(charts,'网络速率'), disk=chartOf(charts,'硬盘')
+  check('旧 CPU/内存/硬盘面积填充及网络双折线保留',cpu?.area>=1&&memory?.area>=1&&disk?.area>=1&&network?.area===0&&network?.line===2)
+  if (!REAL&&!UPSTREAM) {
+    check('旧 CPU 五刻度保持准确',JSON.stringify(cpu?.ys)===JSON.stringify(['0%','4%','8%','12%','16%']),JSON.stringify(cpu?.ys))
+    check('旧网络速率/字节单位保留',network.ys.every(s=>s.endsWith('/s'))&&memory.ys.every(s=>s.endsWith('B'))&&disk.ys.every(s=>s.endsWith('B')))
+    check('旧字段空采样仍为断点',charts.every(c=>c.breaks.some(n=>n===2)))
+    verifySeries('modern',charts,EXTRA)
+    const state=await pageState()
+    verifyMissing('modern',state,[])
+    check('注明采样区间均值和 Hub 取整',!!state.means&&state.means.includes('采样区间均值')&&state.means.includes('Hub 取整'),state.means||'')
+  }
+  const tip=await hover('CPU',20,.5)
+  check('真实鼠标悬停显示 CPU 名称和百分比',!!tip&&tip.text.includes('CPU')&&tip.text.includes('%'),JSON.stringify(tip))
+  const up=await hover('CPU',20,.15), down=await hover('CPU',20,.85)
+  const cpuPlot=chartOf(await inspect(),'CPU')?.plot
+  check('Tooltip 随鼠标上下移动且不越绘图区',!!up&&!!down&&down.y-up.y>20&&up.y>=cpuPlot.y-2&&down.y+down.h<=cpuPlot.bottom+2,JSON.stringify({up,down,plot:cpuPlot}))
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2})
+  await shot('01-modern-desktop')
+  if (!REAL&&!UPSTREAM) {
+    for(const [prefix,expect] of [['Swap','Swap0 B'],['连接数','TCP0'],['进程数','进程0']]) {
+      const zeroTip=await hover(prefix,0)
+      check(`modern/${prefix}: 合法零采样 tooltip 保留`,!!zeroTip&&zeroTip.rows.some(row=>row.replace(/\s/g,'')===expect.replace(/\s/g,'')),JSON.stringify(zeroTip))
+    }
+    const legacy=await caseOpen('legacy',4)
+    verifyMissing('legacy',legacy.state,['Swap','TCP','UDP','进程数'])
+    check('旧 Hub 不显示新增面板/均值注记',legacy.charts.every(c=>!c.series.some(s=>EXTRA.includes(s.key)))&&legacy.state.means===null)
+    await shot('02-legacy-desktop')
+    const partial=await caseOpen('partial',7)
+    verifyMissing('partial',partial.state,['TCP'])
+    check('TCP 全缺时连接数仅绘制 UDP',JSON.stringify(chartOf(partial.charts,'连接数')?.series.map(s=>s.key))===JSON.stringify(['udp']))
+    verifySeries('partial',partial.charts,['swap_used','udp','procs'])
+    const missingTip=await hover('Swap',20)
+    check('局部缺采样 Tooltip 不报零 Swap',missingTip===null,JSON.stringify(missingTip))
+    const connectionsTip=await hover('连接数',20)
+    check('缺 TCP Tooltip 只显示真实 UDP',connectionsTip?.rows.length===1&&connectionsTip.rows[0]==='UDP0',JSON.stringify(connectionsTip))
+    await shot('03-partial-desktop')
+    const one=await caseOpen('tcp-only',5)
+    verifyMissing('tcp-only',one.state,['Swap','UDP','进程数'])
+    check('UDP 全缺时仅绘制 TCP 且旧四图保留',JSON.stringify(chartOf(one.charts,'连接数')?.series.map(s=>s.key))===JSON.stringify(['tcp']))
+    verifySeries('tcp-only',one.charts,['tcp'])
+    const zero=await caseOpen('zero',7)
+    verifyMissing('zero',zero.state,[])
+    verifySeries('zero',zero.charts,EXTRA)
+    check('零值新增四序列沿零基线绘制',zero.charts.flatMap(c=>c.series.filter(s=>EXTRA.includes(s.key)).map(s=>coords(s.d).every(point=>Math.abs(point.y-c.plotLocal.y-c.plotLocal.h)<.11))).every(Boolean))
+    for(const [prefix,expectedRows] of [['Swap',['Swap0 B']],['连接数',['TCP0','UDP0']],['进程数',['进程0']]]) {
+      const value=await hover(prefix,20)
+      check(`zero/${prefix}: 全零 tooltip 准确`,!!value&&JSON.stringify(value.rows)===JSON.stringify(expectedRows),JSON.stringify(value))
+    }
+    const invalid=await caseOpen('invalid',4)
+    verifyMissing('invalid',invalid.state,['Swap','TCP','UDP','进程数'])
+    check('全 null / 非数值 / 负值不会显示伪造新增图',invalid.charts.every(c=>c.series.every(s=>!EXTRA.includes(s.key))))
+    const empty=await caseOpen('empty',0)
+    check('全部无历史时使用全局空态，无新增缺字段误导',empty.state.empty&&empty.state.missing===null&&empty.state.means===null)
+    const disabled=await caseOpen('capacity-off',7)
+    verifySeries('capacity-off',disabled.charts,['swap_used'])
+    check('当前 Swap 容量为零但正历史仍完整显示',chartOf(disabled.charts,'Swap').ys.some(t=>t!=='0 B'))
+    for(const width of [320,390]) for(const dark of [false,true]) {
+      await viewport(width,dark,true)
+      const phone=await caseOpen('modern',7)
+      const name=`mobile-${width}-${dark?'dark':'light'}`
+      check(`${name}: 实际视口与明暗匹配`,phone.state.width===width&&phone.state.dark===dark,JSON.stringify(phone.state))
+      check(`${name}: 图表、刻度无水平裁切/页面溢出`,phone.state.scrollWidth<=width&&phone.charts.every(c=>
+        c.svg.x>=-.5&&c.svg.right<=width+.5&&c.labels.every(t=>t.x>=-.5&&t.right<=width+.5)),JSON.stringify(phone.charts.map(c=>({title:c.title,svgRight:c.svg.right,labelLeft:Math.min(...c.labels.map(t=>t.x)),labelRight:Math.max(...c.labels.map(t=>t.right))}))))
+      check(`${name}: 七图垂直分隔且各为160px`,phone.charts.length===7&&phone.charts.every((c,i)=>c.chartH===160&&(!i||c.panel.y>=phone.charts[i-1].panel.bottom+1)))
+      await sleep(400)
+      const stable=await inspect()
+      check(`${name}: ResizeObserver 后尺寸/路径稳定`,JSON.stringify(stable.map(c=>({w:c.svg.w,h:c.svg.h,series:c.series})))===JSON.stringify(phone.charts.map(c=>({w:c.svg.w,h:c.svg.h,series:c.series}))))
+      await shot(`${name}-resources`)
+    }
+    await viewport(1000,false,false)
+    await caseOpen('modern',7)
+    await js('window.scrollTo(0,0)')
+  }
 // ── 二、延迟页签：拖选缩放（原来 recharts 的 Brush，现在是在图上横向拖一段 + 一枚重置） ──
 if (!REAL) {
   console.log('\n二、延迟页签（拖选缩放 / 重置）:')
-  await js(`(() => { const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim() === '网络延迟'); b && b.click(); return !!b })()`)
+  await js(`(() => { window.scrollTo(0,0); const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim() === '网络延迟'); b && b.click(); return !!b })()`)
   let latency = null
   for (let i = 0; i < 30; i++) {
     await sleep(300)
@@ -356,7 +394,17 @@ if (!REAL) {
   }
 }
 
-console.log(`\n结果: PASS ${passed} / FAIL ${failed}`)
-chrome.kill()
-server?.close()
-process.exit(failed ? 1 : 0)
+
+  check('没有页面 JavaScript 异常',errors.length===0,JSON.stringify(errors))
+  if(!REAL&&!UPSTREAM) check('隔离 CNY 夹具没有第三方请求',external.length===0,JSON.stringify(external))
+} catch(error) {
+  check('浏览器验收执行完成',false,error.stack||String(error))
+} finally {
+  const report={dist:DIST,base:BASE,passed,failed,results,evidence,historyRequests,exceptions:errors,external,screenshots:SHOTS}
+  writeFileSync(join(SHOTS,'report.json'),JSON.stringify(report,null,2)+'\n')
+  console.log(`\n结果: PASS ${passed} / FAIL ${failed}; REPORT ${join(SHOTS,'report.json')}`)
+  ws.close()
+  chrome.kill()
+  server.close()
+}
+process.exit(failed?1:0)

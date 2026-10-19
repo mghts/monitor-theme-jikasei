@@ -2,7 +2,7 @@
   "name": "jikasei",
   "short": "jikasei",
   "description": "自家制の极简探针（Monitor）主题：五种卡片形态、节点地球、分组筛选、明暗双色。",
-  "version": "1.34.4",
+  "version": "1.35.0",
   "author": "akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [
@@ -154,6 +154,13 @@
     {
       "type": "title",
       "label": "外观"
+    },
+    {
+      "type": "boolean",
+      "key": "gruvboxOn",
+      "label": "Gruvbox 配色",
+      "default": false,
+      "help": "默认关闭，需在此手动开启。暖灰与米纸配色，以少量金、绿、青蓝与橙色强调概览读数和选中状态；亮暗继续由下方主题模式与访客明暗偏好决定，关闭恢复原配色。"
     },
     {
       "type": "select",

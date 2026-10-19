@@ -72,7 +72,7 @@ function Block({ title, hint, children }: {
  */
 const BIG_BASE = 24
 const BIG_MIN = 16
-function Big({ children }: { children: ReactNode }) {
+function Big({ children, tone }: { children: ReactNode; tone?: "budget" | "value" | "online" }) {
   const ref = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -117,7 +117,7 @@ function Big({ children }: { children: ReactNode }) {
       document.fonts?.removeEventListener?.("loadingdone", onDone)
     }
   }, [children])
-  return <div ref={ref} className="tnum mt-1 truncate text-2xl font-semibold tracking-tight">{children}</div>
+  return <div ref={ref} data-readout={tone} className="tnum mt-1 truncate text-2xl font-semibold tracking-tight">{children}</div>
 }
 
 /** 一块读数底下那行小字（卡片两端对齐时它落在下沿）。 */
@@ -150,17 +150,18 @@ function Pair({ children }: { children: ReactNode }) {
 }
 
 /**
- * 一枚带方向箭头的读数。颜色随所在那一行（今日那行是前景色，累计那行是弱化灰）。
+ * 一枚带方向箭头的读数。默认跟随所在行的颜色；Gruvbox 仅为上方大读数区分上下行。
  *
  * 箭头 12px、与数字的间距 4px（原为 14 / 6）：概览卡片那两列数字的宽度是按像素抠出来的，
  * 这 4px 直接进文字框（见 Unit 那段注释），观感上分辨不出。
  */
-function Val({ icon: Icon, children }: {
+function Val({ icon: Icon, children, tone }: {
   icon: typeof ArrowDown
   children: ReactNode
+  tone?: "rx" | "tx"
 }) {
   return (
-    <span className="tnum inline-flex min-w-0 items-center gap-1">
+    <span data-transfer={tone} className="tnum inline-flex min-w-0 items-center gap-1">
       <Icon className="size-3 shrink-0" />
       <span className="truncate">{children}</span>
     </span>
@@ -239,7 +240,7 @@ function NodesBlock({ fleet, searching = false }: { fleet: Fleet; searching?: bo
     <Block title="节点">
       {/* 斜杠与总数照参考站降一档（16px / 常规字重 / 弱化灰），只有在线数是那个大数。
           空格照旧留着：抹掉它复制与读屏会得到「3/4」这种黏成一团的写法。 */}
-      <Big>
+      <Big tone={fleet.online > 0 ? "online" : undefined}>
         {fleet.online} <span className="text-base font-normal text-muted-foreground">/ {fleet.total}</span>
       </Big>
       <Foot>
@@ -299,11 +300,11 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
               所以写「≈」；口径与汇率清单放在悬停提示里（见 lib/money.ts）。 */}
           <Pair>
             <Block title="月度预算" hint={`各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。${note}`}>
-              <Big>{budget.monthly === null ? "—" : `≈${cny(budget.monthly)}`}</Big>
+              <Big tone={budget.monthly === null ? undefined : "budget"}>{budget.monthly === null ? "—" : `≈${cny(budget.monthly)}`}</Big>
               <Foot>{budget.monthlyCount ? `${monthlyCoverage} 台计费` : budget.skipped.length ? "缺少汇率" : "未记录价格"}</Foot>
             </Block>
             <Block title="剩余价值" hint={`已经付掉、还没用掉的那一段：价格 × 剩余天数 ÷ 周期天数；没填价格、无到期日与一次性买断的不计入。${note}`}>
-              <Big>{budget.remaining === null ? "—" : `≈${cny(budget.remaining)}`}</Big>
+              <Big tone={budget.remaining === null ? undefined : "value"}>{budget.remaining === null ? "—" : `≈${cny(budget.remaining)}`}</Big>
               <Foot>{budget.remainingCount ? `${remainingCoverage} 台未到期` : budget.skipped.length ? "缺少汇率" : "无预付到期"}</Foot>
             </Block>
           </Pair>
@@ -333,8 +334,8 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
               栅格间距沿用 `gap-x-2`（与 Pair 同一个值）：整行四张卡的第二列因此落在同一条
               竖线上（护栏钉着）。 */}
           <div className="mt-1 grid grid-cols-2 gap-x-2 text-2xl font-semibold tracking-tight">
-            <Val icon={ArrowDown}><Unit>{bytes(fleet.dayRx)}</Unit></Val>
-            <Val icon={ArrowUp}><Unit>{bytes(fleet.dayTx)}</Unit></Val>
+            <Val icon={ArrowDown} tone="rx"><Unit>{bytes(fleet.dayRx)}</Unit></Val>
+            <Val icon={ArrowUp} tone="tx"><Unit>{bytes(fleet.dayTx)}</Unit></Val>
           </div>
           <Foot>
             <span className="inline-flex items-center gap-1.5">
@@ -349,8 +350,8 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
       <Tile>
         <Block title="实时网速">
           <div className="mt-1 grid grid-cols-2 gap-x-2 text-2xl font-semibold tracking-tight">
-            <Val icon={ArrowDown}><Unit>{rate(fleet.netRx)}</Unit></Val>
-            <Val icon={ArrowUp}><Unit>{rate(fleet.netTx)}</Unit></Val>
+            <Val icon={ArrowDown} tone="rx"><Unit>{rate(fleet.netRx)}</Unit></Val>
+            <Val icon={ArrowUp} tone="tx"><Unit>{rate(fleet.netTx)}</Unit></Val>
           </div>
           <Sparkline series={series} />
         </Block>

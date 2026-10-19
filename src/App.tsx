@@ -144,7 +144,7 @@ const DARK_MEDIA = matchMedia("(prefers-color-scheme: dark)")
  * landing between the first render and the effect that would have attached the
  * listener is otherwise never heard, and the next one is a day away.
  */
-function useTheme(siteMode: ThemeMode) {
+function useTheme(siteMode: ThemeMode, gruvboxOn: boolean) {
   const [saved, setSaved] = useState(readThemePreference)
   const system = useSyncExternalStore(
     (notify) => {
@@ -168,6 +168,7 @@ function useTheme(siteMode: ThemeMode) {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
+    document.documentElement.dataset.palette = gruvboxOn ? "gruvbox" : "default"
     /**
      * 手机浏览器那一圈（地址栏 / 状态栏）的配色（`theme-color`）跟着**页面实际用的**明暗走。
      *
@@ -179,7 +180,7 @@ function useTheme(siteMode: ThemeMode) {
     for (const old of head.querySelectorAll('meta[name="theme-color"]')) old.remove()
     const meta = document.createElement("meta")
     meta.name = "theme-color"
-    let color = dark ? "#0d0c0a" : "#fafafa"
+    let color = gruvboxOn ? (dark ? "#1d2021" : "#f2e5bc") : (dark ? "#0d0c0a" : "#fafafa")
     const probe = document.createElement("canvas")
     probe.width = probe.height = 1
     const ctx = probe.getContext("2d")
@@ -193,7 +194,7 @@ function useTheme(siteMode: ThemeMode) {
     }
     meta.content = color
     head.append(meta)
-  }, [dark])
+  }, [dark, gruvboxOn])
 
   return [
     dark,
@@ -226,7 +227,7 @@ export default function App() {
     onChange: chooseLatencyStyle,
   }), [latencyStyle, config.latencyStyle, chooseLatencyStyle])
   // 明暗：站长那一档（`themeMode`）当默认，访客点过顶栏那枚图标就以他的为准。
-  const [dark, toggleTheme] = useTheme(config.themeMode)
+  const [dark, toggleTheme] = useTheme(config.themeMode, config.gruvboxOn)
   // 顶栏那枚入口图标（1.25.0 起没有设置项）：挂载即探一次本站约定的 `/chicken/`，
   // 装了那座小鸡农场才出现、没装不占位（判据是内容而不是状态码，见 useLocalFarm）。
   const farmUrl = useLocalFarm()
@@ -673,7 +674,7 @@ function NodeList({ view, group, onGroup, onOpen, onWarm, latencyLines, cardStyl
               aria-pressed={current === value}
               size="sm"
               variant={current === value ? "secondary" : "ghost"}
-              className="shrink-0"
+              className="group-tab shrink-0"
               onClick={() => onGroup(value)}
             >
               {label}

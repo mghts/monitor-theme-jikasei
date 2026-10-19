@@ -134,6 +134,106 @@
      the green. */
 }
 
+/* 可选 Gruvbox：暖灰与米纸底适度拉开层次，进度条仍跟随中性前景色。
+   概览重点读数、选中状态与图表使用少量彩色；不改布局、线形或数据口径。
+   色板来源：https://github.com/morhetz/gruvbox/blob/master/colors/gruvbox.vim */
+:root[data-palette="gruvbox"] {
+  --background: #f2e5bc;
+  --foreground: #282828;
+  --card: #f9f5d7;
+  --card-foreground: #282828;
+  --popover: #f9f5d7;
+  --popover-foreground: #282828;
+  --primary: #d79921;
+  --primary-foreground: #282828;
+  --secondary: #ebdbb2;
+  --secondary-foreground: #282828;
+  --muted: #ebdbb2;
+  --muted-foreground: #504945;
+  --accent: #ebdbb2;
+  --accent-foreground: #282828;
+  --destructive: #9d0006;
+  --border: #a89984;
+  --input: #a89984;
+  --ring: #7c6f64;
+  --chart-1: #076678;
+  --chart-2: #af3a03;
+  --chart-3: #427b58;
+  --chart-4: #8f3f71;
+  --chart-5: #9d0006;
+  --chart-6: #79740e;
+  --chart-7: #458588;
+  --chart-8: #b57614;
+  --chart-9: #b16286;
+  --ok: #79740e;
+  --warn: #b57614;
+  --globe-ocean: rgba(69, 133, 136, 0.1);
+  --globe-land: rgba(124, 111, 100, 0.32);
+  --globe-rim: rgba(60, 56, 54, 0.2);
+  --globe-pin-online: #79740e;
+  --globe-pin-offline: #9d0006;
+  --globe-pin-detail: #fbf1c7;
+  /* 亮底上的金色额外混入暖墨，兼顾小字号的选中标签。 */
+  --gruvbox-budget: color-mix(in srgb, #b57614 65%, #282828);
+  --gruvbox-value: #427b58;
+  --gruvbox-online: #427b58;
+  --gruvbox-rx: #076678;
+  --gruvbox-tx: #af3a03;
+}
+
+:root[data-palette="gruvbox"].dark {
+  --background: #1d2021;
+  --foreground: #f2e5bc;
+  --card: #32302f;
+  --card-foreground: #f2e5bc;
+  --popover: #32302f;
+  --popover-foreground: #f2e5bc;
+  --primary: #d79921;
+  --primary-foreground: #282828;
+  --secondary: #3c3836;
+  --secondary-foreground: #f2e5bc;
+  --muted: #3c3836;
+  --muted-foreground: #d5c4a1;
+  --accent: #3c3836;
+  --accent-foreground: #f2e5bc;
+  --destructive: #fb4934;
+  --border: #665c54;
+  --input: #665c54;
+  --ring: #a89984;
+  --chart-1: #83a598;
+  --chart-2: #fe8019;
+  --chart-3: #8ec07c;
+  --chart-4: #d3869b;
+  --chart-5: #fb4934;
+  --chart-6: #b8bb26;
+  --chart-7: #458588;
+  --chart-8: #fabd2f;
+  --chart-9: #b16286;
+  --ok: #b8bb26;
+  --warn: #fabd2f;
+  --globe-ocean: rgba(131, 165, 152, 0.1);
+  --globe-land: rgba(189, 174, 147, 0.3);
+  --globe-rim: rgba(29, 32, 33, 0.36);
+  --globe-pin-online: #b8bb26;
+  --globe-pin-offline: #fb4934;
+  --globe-pin-detail: #fbf1c7;
+  --gruvbox-budget: #fabd2f;
+  --gruvbox-value: #8ec07c;
+  --gruvbox-online: #b8bb26;
+  --gruvbox-rx: #83a598;
+  --gruvbox-tx: #fe8019;
+}
+
+:root[data-palette="gruvbox"] [data-readout="budget"] { color: var(--gruvbox-budget); }
+:root[data-palette="gruvbox"] [data-readout="value"] { color: var(--gruvbox-value); }
+:root[data-palette="gruvbox"] [data-readout="online"] { color: var(--gruvbox-online); }
+:root[data-palette="gruvbox"] [data-transfer="rx"] { color: var(--gruvbox-rx); }
+:root[data-palette="gruvbox"] [data-transfer="tx"] { color: var(--gruvbox-tx); }
+:root[data-palette="gruvbox"] .group-tab[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--gruvbox-budget) 12%, var(--card));
+  color: var(--gruvbox-budget);
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

@@ -41,6 +41,8 @@ export type ThemeConfig = {
   globeOn: boolean
   /** 站点用哪一档明暗：随系统 / 随北京时间自动 / 固定亮 / 固定暗（访客自己的开关优先）。 */
   themeMode: ThemeMode
+  /** 可选 Gruvbox 配色；只存 Hub，与明暗模式独立，旧站默认关闭。 */
+  gruvboxOn: boolean
   /** 每行 CODE=人民币汇率，补充或覆盖自动报价；空串完全使用自动报价。 */
   exchangeRates: string
 }
@@ -127,6 +129,7 @@ export const DEFAULTS: ThemeConfig = {
   globeOn: true,
   // 明暗默认「随系统」：与 1.25.0 之前的行为一致（那时没有这一项，就是跟着系统走）。
   themeMode: "system",
+  gruvboxOn: false,
   exchangeRates: "",
 }
 
@@ -241,6 +244,7 @@ export function normalizeConfig(saved: unknown): ThemeConfig {
     globeOn: typeof s.globeOn === "boolean" ? s.globeOn : DEFAULTS.globeOn,
     // 四档明暗：认不出来的取值（旧版本、手改）回落默认，别让页面卡在一个不存在的档上。
     themeMode: THEME_MODES.includes(s.themeMode as ThemeMode) ? (s.themeMode as ThemeMode) : DEFAULTS.themeMode,
+    gruvboxOn: typeof s.gruvboxOn === "boolean" ? s.gruvboxOn : DEFAULTS.gruvboxOn,
     // 不在这里截断行：过长或无效输入由汇率解析器整项拒绝，避免截出错误金额。
     exchangeRates: typeof s.exchangeRates === "string" ? s.exchangeRates : DEFAULTS.exchangeRates,
   }

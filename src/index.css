@@ -249,7 +249,7 @@
 .globe-mode-button[aria-pressed="true"] { background: var(--accent); color: var(--accent-foreground); }
 .globe-controls {
   display: flex;
-  flex: 0 1 292px;
+  flex: 0 1 260px;
   min-width: 0;
   align-items: center;
   justify-content: flex-end;
@@ -257,13 +257,23 @@
   color: var(--muted-foreground);
 }
 .globe-controls input {
-  width: 128px;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 96px;
   min-width: 48px;
   min-height: 32px;
-  flex: 0 1 128px;
-  accent-color: var(--foreground);
+  flex: 0 1 96px;
+  margin: 0;
+  background: transparent;
+  --zoom-thumb: color-mix(in srgb, var(--muted-foreground) 65%, var(--card));
   cursor: ew-resize;
 }
+/* 视觉上收细，输入区域仍保留桌面 32px / 窄屏 40px 的操作高度。 */
+.globe-controls input::-webkit-slider-runnable-track { height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--muted-foreground) 24%, transparent); }
+.globe-controls input::-moz-range-track { height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--muted-foreground) 24%, transparent); }
+.globe-controls input::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 10px; height: 10px; margin-top: -4px; border: 0; border-radius: 50%; background: var(--zoom-thumb); }
+.globe-controls input::-moz-range-thumb { width: 10px; height: 10px; border: 0; border-radius: 50%; background: var(--zoom-thumb); }
+.globe-controls input:hover, .globe-controls input:focus-visible { --zoom-thumb: var(--muted-foreground); }
 .globe-controls input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
 .globe-controls output { min-width: 40px; font-size: 12px; text-align: right; }
 .globe-zoom-reset { padding-inline: 8px; font-size: 12px; }
@@ -294,7 +304,6 @@
 .globe-land { fill: var(--globe-land); stroke: none; stroke-linejoin: round; stroke-linecap: round; }
 .globe-coast { fill: none; stroke: var(--foreground); stroke-width: 0.55; stroke-opacity: 0.36; }
 .globe-disk { fill: url(#globe-shade); stroke: var(--foreground); stroke-width: 1.05; stroke-opacity: 0.42; }
-.globe-map-frame { fill: none; stroke: var(--foreground); stroke-width: 1.05; stroke-opacity: 0.42; }
 .globe-wire { fill: none; stroke: var(--foreground); stroke-opacity: 0.1; }
 .globe-sweep { fill: none; stroke: var(--foreground); }
 .globe-base { stroke: var(--foreground); stroke-opacity: 0.4; stroke-width: 1; }

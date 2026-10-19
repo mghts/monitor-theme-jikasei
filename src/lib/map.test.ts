@@ -24,14 +24,15 @@ const area = (ring: Point[]) => Math.abs(ring.reduce((sum, p, i) => {
 
 // 方向与坐标独立给出预期：东西分别是两边，北在上，默认世界完整可见。
 const camera = flatCamera()
-// 宽屏按高度铺开，手机按宽度铺开；底部说明独立保留，地理投影仍然是完整的 2:1 世界。
-assert.deepEqual(mapViewport(830, 320), { w: 830, h: 320, bounds: { x: 135, y: 8, w: 560, h: 280 } })
-assert.deepEqual(mapViewport(358, 250), { w: 358, h: 250, bounds: { x: 12, y: 29.5, w: 334, h: 167 } })
+// 宽屏按高度铺开，手机按宽度铺开；取消底注留白后上下居中，仍是完整的 2:1 世界。
+assert.deepEqual(mapViewport(830, 320), { w: 830, h: 320, bounds: { x: 119, y: 12, w: 592, h: 296 } })
+assert.deepEqual(mapViewport(358, 250), { w: 358, h: 250, bounds: { x: 12, y: 41.5, w: 334, h: 167 } })
 for (const [width, height] of [[286, 250], [326, 250], [734, 320], [830, 400], [1200, 320], [350, 600]]) {
   const { w, h, bounds: b } = mapViewport(width, height)
   close(b.w / b.h, 2, "地图宽高比")
-  assert.ok(b.x >= 12 && b.y >= 8 && w - b.x - b.w >= 12 && h - b.y - b.h >= 32)
-  assert.ok(Math.abs(b.x - 12) < 1e-8 || Math.abs(b.y - 8) < 1e-8, "至少一个方向铺到可用区域边缘")
+  assert.ok(b.x >= 12 && b.y >= 12 && w - b.x - b.w >= 12 && h - b.y - b.h >= 12)
+  close(b.y, h - b.y - b.h, "上下留白相等")
+  assert.ok(Math.abs(b.x - 12) < 1e-8 || Math.abs(b.y - 12) < 1e-8, "至少一个方向铺到可用区域边缘")
   const full = flatCamera(0, 0, 100, b)
   close(full.at(-180, 90)!.x, b.x)
   close(full.at(-180, 90)!.y, b.y)

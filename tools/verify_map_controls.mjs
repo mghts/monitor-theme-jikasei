@@ -223,8 +223,15 @@ function inspect() {
   const pinBoxes = [...svg.querySelectorAll('[data-node]')].map((el) => ({ text: `node:${el.dataset.node}`, ...rect(el) }))
   const ink = [...labels, ...pinBoxes, ...(caption ? [{ text: 'caption', ...rect(caption) }] : [])]
   const controlObscures = controls.filter((control) => control.visible).flatMap((control) => ink.filter((item) => intersects(control, item)).map((item) => `${control.name}:${item.text}`))
-  const projection = svg.querySelector('.globe-disk,.globe-map-frame')
-  const bodyInk = [...(projection ? [rect(projection)] : []), ...labels]
+  const projection = svg.querySelector('.globe-disk,.globe-map-frame') || svg.querySelector('[data-map-bounds]')
+  // 2D 的边界只用于裁切，不再绘制矩形；把 clipPath 的几何映射到屏幕坐标。
+  const projectionBox = projection ? (() => {
+    const bounds = projection.getBBox(), matrix = svg.getScreenCTM()
+    const start = new DOMPoint(bounds.x, bounds.y).matrixTransform(matrix)
+    const end = new DOMPoint(bounds.x + bounds.width, bounds.y + bounds.height).matrixTransform(matrix)
+    return { x: start.x, y: start.y, w: end.x - start.x, h: end.y - start.y, right: end.x, bottom: end.y }
+  })() : null
+  const bodyInk = [...(projectionBox ? [projectionBox] : []), ...labels]
   const bodyTop = bodyInk.length ? Math.min(...bodyInk.map((item) => item.y)) : null
   const bodyBottom = bodyInk.length ? Math.max(...bodyInk.map((item) => item.bottom)) : null
   const colorContext = document.createElement('canvas').getContext('2d')
@@ -302,12 +309,13 @@ function inspect() {
     stems: svg.querySelectorAll('.globe-stem').length, links: svg.querySelectorAll('.globe-link').length,
     selected: !!svg.querySelector('.globe-selected'), markersAboveSelection: !svg.querySelector('.globe-selected') || [...svg.querySelectorAll('.globe-pin')].every((marker) => !!(svg.querySelector('.globe-selected').compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING)),
     mapFrame: !!svg.querySelector('.globe-map-frame'), globeDisk: !!svg.querySelector('.globe-disk'),
+    mapDecorations: svg.querySelectorAll('.globe-map-frame,.globe-ocean,.globe-wire,.globe-sweep,.globe-base,.globe-caption').length,
     rows: [...panel.querySelectorAll('.globe-reg')].map((el) => ({ text: el.querySelector('span')?.textContent.trim(), code: el.querySelector('img')?.getAttribute('src')?.match(/\/([^/]+)\.svg$/)?.[1], count: Number(el.querySelector('b')?.textContent), pressed: el.getAttribute('aria-pressed'), title: el.title, offline: !!el.querySelector('.globe-reg-dot') })),
     cards: [...document.querySelectorAll('[data-slot="card"] h3')].map((el) => el.textContent.trim()),
     dark: document.documentElement.classList.contains('dark'), overflow: document.documentElement.scrollWidth > innerWidth + 1,
     colors: { land: getComputedStyle(svg.querySelector('.globe-land')).fill, coast: getComputedStyle(svg.querySelector('.globe-coast')).stroke },
-    clipped, overlaps, captionOverlap: caption ? labels.filter((r) => r.bottom > rect(caption).y + 1).map((r) => r.text) : ['missing caption'],
-    labels: labels.length, controls, controlObscures, projection: projection ? rect(projection) : null,
+    clipped, overlaps, captionOverlap: caption ? labels.filter((r) => r.bottom > rect(caption).y + 1).map((r) => r.text) : panel.dataset.mapMode === '2d' ? [] : ['missing caption'],
+    labels: labels.length, controls, controlObscures, projection: projectionBox,
     bodyTop, bodyBottom, captionBox: caption ? rect(caption) : null,
     viewportWidth: innerWidth, svg: svgBox, viewBox: svg.getAttribute('viewBox'), resizeObserverErrors: window.__mapResizeErrors || [], host: rect(panel.querySelector('.globe-atlas')),
     main: rect(panel.querySelector('.globe-main')), toolbar: rect(panel.querySelector('.globe-toolbar')),
@@ -347,7 +355,8 @@ async function mouseDrag(dx, dy = 0) {
     const svg = document.querySelector('.globe-atlas svg')
     const point = svg.createSVGPoint()
     // 在圆盘/地图边缘的空处起手，避免按到针后把拖动误当成导航。
-    const frame = svg.querySelector('.globe-map-frame')
+    const frame = document.querySelector('.globe-panel').dataset.mapMode === '2d'
+      ? svg.querySelector('.globe-map-frame,[data-map-bounds]') : null
     point.x = frame ? Number(frame.getAttribute('x')) + 12 : Number(svg.querySelector('.globe-disk').getAttribute('cx'))
     point.y = frame ? Number(frame.getAttribute('y')) + 12 : Number(svg.querySelector('.globe-disk').getAttribute('cy')) - Number(svg.querySelector('.globe-disk').getAttribute('r')) + 14
     const p = point.matrixTransform(svg.getScreenCTM())
@@ -526,16 +535,17 @@ function growthChecks(tag, snapshot, width, selectedMode) {
 function mobileWhitespaceChecks(tag, previous, snapshot) {
   const gaps = (item) => ({
     top: item.bodyTop - item.host.y,
-    beforeCaption: item.captionBox.y - item.bodyBottom,
-    afterCaption: item.toolbar.y - item.captionBox.bottom,
+    beforeCaption: item.captionBox ? item.captionBox.y - item.bodyBottom : 0,
+    afterCaption: item.toolbar.y - (item.captionBox?.bottom ?? item.bodyBottom),
   })
-  const measurable = [previous, snapshot].every((item) => item.projection && item.captionBox && Number.isFinite(item.bodyTop) && Number.isFinite(item.bodyBottom))
-  check(`${tag}：上下留白比较确实量到地图、标签与底注`, measurable)
+  const measurable = [previous, snapshot].every((item) => item.projection && (item.mode === '2d' || item.captionBox) && Number.isFinite(item.bodyTop) && Number.isFinite(item.bodyBottom))
+  check(`${tag}：上下留白比较确实量到地图、标签与底部控件`, measurable)
   if (!measurable) return
   const before = gaps(previous), after = gaps(snapshot)
   diagnostics.push({ label: tag, baselineHost: previous.host, host: snapshot.host, baselineGaps: before, gaps: after, baselineProjection: previous.projection, projection: snapshot.projection })
   check(`${tag}：压缩画布留白而不挤小地图`, snapshot.host.h <= previous.host.h - 10 && snapshot.projection.w >= previous.projection.w - 1 && snapshot.projection.h >= previous.projection.h - 1, `${previous.host.h.toFixed(1)}→${snapshot.host.h.toFixed(1)}px；地图 ${previous.projection.w.toFixed(1)}×${previous.projection.h.toFixed(1)}→${snapshot.projection.w.toFixed(1)}×${snapshot.projection.h.toFixed(1)}px`)
-  check(`${tag}：地图上方空白减少且图形未被裁`, after.top >= -1 && after.top <= before.top - 4, `${before.top.toFixed(1)}→${after.top.toFixed(1)}px`)
+  if (snapshot.mode === '2d') check(`${tag}：2D取消底注后上下居中且图形未被裁`, after.top >= -1 && Math.abs(after.top - after.afterCaption) <= 1, `top=${after.top.toFixed(1)}, bottom=${after.afterCaption.toFixed(1)}px`)
+  else check(`${tag}：地图上方空白减少且图形未被裁`, after.top >= -1 && after.top <= before.top - 4, `${before.top.toFixed(1)}→${after.top.toFixed(1)}px`)
   const bottomBefore = before.beforeCaption + before.afterCaption
   const bottomAfter = after.beforeCaption + after.afterCaption
   check(`${tag}：地图到说明及底角控件的空白减少`, after.beforeCaption >= -1 && after.afterCaption >= -1 && bottomAfter <= bottomBefore - 4, `${bottomBefore.toFixed(1)}→${bottomAfter.toFixed(1)}px`)
@@ -549,11 +559,12 @@ function renderingChecks(tag, snapshot) {
   if (snapshot.mode === '2d') {
     check(`${tag}：2D没有节点名称、引线和计数字样`, snapshot.nameLabels === 0 && snapshot.stems === 0 && snapshot.countLabels === 0, `names=${snapshot.nameLabels}, stems=${snapshot.stems}, counts=${snapshot.countLabels}`)
     const { host, projection } = snapshot
-    const worldWidth = Math.min(host.w - 24, 2 * (host.h - 40))
+    const worldWidth = Math.min(host.w - 24, 2 * (host.h - 24))
     const worldHeight = worldWidth / 2
     const expectedX = host.x + (host.w - worldWidth) / 2
-    const expectedY = host.y + 8 + (host.h - 40 - worldHeight) / 2
-    check(`${tag}：矩形地图用满实际可用区且保留底注空间`, projection && Math.abs(projection.w - worldWidth) <= 2 && Math.abs(projection.h - worldHeight) <= 2 && Math.abs(projection.x - expectedX) <= 2 && Math.abs(projection.y - expectedY) <= 2, projection ? `map=${projection.w.toFixed(1)}×${projection.h.toFixed(1)}, usable=${worldWidth.toFixed(1)}×${worldHeight.toFixed(1)}` : 'missing map frame')
+    const expectedY = host.y + (host.h - worldHeight) / 2
+    check(`${tag}：2D只保留大陆和信标，没有网格、边框、底色及底注`, snapshot.mapDecorations === 0 && !snapshot.globeDisk)
+    check(`${tag}：完整世界用满可用区并上下居中`, projection && Math.abs(projection.w - worldWidth) <= 2 && Math.abs(projection.h - worldHeight) <= 2 && Math.abs(projection.x - expectedX) <= 2 && Math.abs(projection.y - expectedY) <= 2, projection ? `map=${projection.w.toFixed(1)}×${projection.h.toFixed(1)}, usable=${worldWidth.toFixed(1)}×${worldHeight.toFixed(1)}` : 'missing map bounds')
   }
 }
 function sharedOriginChecks(tag, snapshot) {
@@ -1293,7 +1304,7 @@ try {
 
   await mode('2d')
   const flat = await state('2d-default')
-  check('2D模式是真平面且无扫掠，保留旋转偏好', flat.mapFrame && !flat.globeDisk && flat.spin === 'true' && flat.spinDisabled && flat.spinning === 'false' && !flat.paths.some((p) => p.kind === 'globe-sweep'))
+  check('2D模式是真平面且无扫掠，保留旋转偏好', flat.projection && !flat.mapFrame && !flat.globeDisk && flat.spin === 'true' && flat.spinDisabled && flat.spinning === 'false' && !flat.paths.some((p) => p.kind === 'globe-sweep'))
   renderingChecks('默认2D', flat)
   check('2D默认完整表示所有可定位成员，不画缺失国家的假针', JSON.stringify(flat.pins.flatMap((p) => expectedMembers(p).map((node) => node.id)).sort((a, b) => a - b)) === JSON.stringify(locatedIds), JSON.stringify(flat.pins.map((p) => ({ id: p.id, count: p.count }))))
   check('2D保留离线成员与地区离线提示', flat.pins.some((p) => p.id === 1 && p.count === 2 && p.offlineCount === 1 && p.markerState === 'mixed') && flat.rows.some((r) => r.code === 'JP' && r.count === 2 && r.offline && r.title.includes('1 台离线')))

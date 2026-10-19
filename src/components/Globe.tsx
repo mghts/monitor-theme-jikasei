@@ -7,7 +7,7 @@ import {
   GLOBE_ZOOM, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
-import { flatCamera, flatNodes, mapGraticule, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
+import { flatCamera, flatNodes, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
 import type { Node } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
@@ -374,7 +374,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
     }
   }, [mode, box, points, measured, frame, narrow])
   const mobileHeight = box
-    ? mode === "2d" ? Math.min(250, (box.w - 24) / 2 + 40)
+    ? mode === "2d" ? Math.min(250, (box.w - 24) / 2 + 24)
       : Math.min(250 * frame.h / VIEW.h, box.w * frame.h / (frame.w + canvas.pad * 2))
     : 180
   // 100% 保留获批信标大小，再按缩放倍率同步核心、光晕和命中区域。
@@ -404,7 +404,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const land = mode === "3d" ? landPaths(cam, prep) : mapPaths(flat, flatPrep)
   const wires = mode === "3d"
     ? graticule(cam, profile, profile.sweepCount ? sweepLonAt(sweepTime) : null)
-    : mapGraticule(flat).map((wire) => ({ ...wire, sweep: -1 }))
+    : []
   // ★ 这里读 ref 是有意的，也是这套排布必须的：那两个字是**跨帧记忆**——
   // 圆心附近 ±18 的机器（正在转到中缝上的那几台）如果每帧重新判左右，标签会在两摞之间
   // 来回跳。读它是幂等的：同一帧算多少次结果都一样，只是把"上一帧选的那一侧"记下来。
@@ -443,7 +443,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
                 <stop offset="100%" stopColor="var(--globe-rim)" stopOpacity="1" />
               </radialGradient>
               <clipPath id={mapClipId}>
-                <rect x={mapBounds.x} y={mapBounds.y} width={mapBounds.w} height={mapBounds.h} />
+                <rect data-map-bounds x={mapBounds.x} y={mapBounds.y} width={mapBounds.w} height={mapBounds.h} />
               </clipPath>
               {(["online", "offline"] as const).map((state) => (
                 <radialGradient key={state} id={`${beaconGlowId}-${state}`}>
@@ -455,12 +455,9 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
               ))}
             </defs>
             <g aria-hidden="true">
-            {mode === "3d" ? <>
+            {mode === "3d" && <>
               <circle className="globe-ocean" cx={frame.cx} cy={frame.cy} r={frame.r} />
               <circle className="globe-disk" cx={frame.cx} cy={frame.cy} r={frame.r} fill="url(#globe-shade)" />
-            </> : <>
-              <rect className="globe-ocean" x={mapBounds.x} y={mapBounds.y} width={mapBounds.w} height={mapBounds.h} />
-              <rect className="globe-map-frame" x={mapBounds.x} y={mapBounds.y} width={mapBounds.w} height={mapBounds.h} />
             </>}
             {land.fill && <path className="globe-land" d={land.fill} />}
             {land.stroke && <path className="globe-coast" d={land.stroke} />}
@@ -473,7 +470,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
                 style={wire.sweep >= 0 ? { strokeOpacity: sweepOpacity(dark, wire.sweep) } : undefined}
               />
             ))}
-            <line className="globe-base" x1={mode === "3d" ? frame.cx - frame.r - 28 : mapBounds.x} y1={frame.h - 20} x2={mode === "3d" ? frame.cx + frame.r + 28 : mapBounds.x + mapBounds.w} y2={frame.h - 20} />
+            {mode === "3d" && <line className="globe-base" x1={frame.cx - frame.r - 28} y1={frame.h - 20} x2={frame.cx + frame.r + 28} y2={frame.h - 20} />}
             </g>
             <g clipPath={mode === "2d" ? `url(#${mapClipId})` : undefined}>
               {marker && (
@@ -486,9 +483,9 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
                 <Pin key={p.key} p={p} hitArea={hitAreas[index]} members={p.nodeIds.flatMap((id) => { const node = nodeById.get(id); return node ? [node] : [] })} markerScale={markerScale} glowId={beaconGlowId} active={hoveredKey === p.key || focusedKey === p.key} tooltipOpen={hoveredKey === p.key && !dragging && !choosing} choiceId={choiceId} choosing={choiceKey === p.key && choosing} onHover={hoverPoint} onFocus={setFocusedKey} onActivate={activatePoint} onWarm={onWarm} />
               ))}
             </g>
-            <text className="globe-caption" aria-hidden="true" x={frame.cx} y={frame.h - 8} textAnchor="middle">
-              {mode === "3d" ? globeCaption(view.lon, view.lat, profile.key) : `EQUIRECTANGULAR · ${zoom}% · ${profile.key.toUpperCase()}`}
-            </text>
+            {mode === "3d" && <text className="globe-caption" aria-hidden="true" x={frame.cx} y={frame.h - 8} textAnchor="middle">
+              {globeCaption(view.lon, view.lat, profile.key)}
+            </text>}
           </svg>
         </div>
         <div ref={controls} className="globe-toolbar">

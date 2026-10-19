@@ -184,17 +184,17 @@
 :root[data-palette="gruvbox"].dark {
   --background: #1d2021;
   --foreground: #f2e5bc;
-  --card: #32302f;
+  --card: #282828;
   --card-foreground: #f2e5bc;
-  --popover: #32302f;
+  --popover: #282828;
   --popover-foreground: #f2e5bc;
   --primary: #d79921;
   --primary-foreground: #282828;
-  --secondary: #3c3836;
+  --secondary: #32302f;
   --secondary-foreground: #f2e5bc;
-  --muted: #3c3836;
+  --muted: #32302f;
   --muted-foreground: #d5c4a1;
-  --accent: #3c3836;
+  --accent: #32302f;
   --accent-foreground: #f2e5bc;
   --destructive: #fb4934;
   --border: #665c54;

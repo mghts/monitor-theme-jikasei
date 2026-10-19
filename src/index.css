@@ -238,6 +238,7 @@
   gap: 16px;
   height: 52px;
   padding: 10px 12px;
+  color: var(--muted-foreground);
 }
 .globe-map-controls {
   display: flex;
@@ -246,7 +247,7 @@
   gap: 4px;
 }
 .globe-mode-button, .globe-spin-button { font-size: 12px; padding-inline: 8px; white-space: nowrap; }
-.globe-mode-button[aria-pressed="true"] { background: var(--accent); color: var(--accent-foreground); }
+.globe-mode-button[aria-pressed="true"] { background: var(--accent); }
 .globe-controls {
   display: flex;
   flex: 0 1 260px;
@@ -254,7 +255,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  color: var(--muted-foreground);
 }
 .globe-controls input {
   appearance: none;

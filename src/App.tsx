@@ -180,7 +180,7 @@ function useTheme(siteMode: ThemeMode, gruvboxOn: boolean) {
     for (const old of head.querySelectorAll('meta[name="theme-color"]')) old.remove()
     const meta = document.createElement("meta")
     meta.name = "theme-color"
-    let color = gruvboxOn ? (dark ? "#1d2021" : "#f2e5bc") : (dark ? "#0d0c0a" : "#fafafa")
+    let color = gruvboxOn ? (dark ? "#1d2021" : "#f6edca") : (dark ? "#0d0c0a" : "#fafafa")
     const probe = document.createElement("canvas")
     probe.width = probe.height = 1
     const ctx = probe.getContext("2d")

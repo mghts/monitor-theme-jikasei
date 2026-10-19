@@ -138,11 +138,11 @@
    概览重点读数、选中状态与图表使用少量彩色；不改布局、线形或数据口径。
    色板来源：https://github.com/morhetz/gruvbox/blob/master/colors/gruvbox.vim */
 :root[data-palette="gruvbox"] {
-  --background: #f2e5bc;
+  --background: #f6edca;
   --foreground: #282828;
-  --card: #f9f5d7;
+  --card: #f6edca;
   --card-foreground: #282828;
-  --popover: #f9f5d7;
+  --popover: #f6edca;
   --popover-foreground: #282828;
   --primary: #d79921;
   --primary-foreground: #282828;
@@ -153,8 +153,8 @@
   --accent: #ebdbb2;
   --accent-foreground: #282828;
   --destructive: #9d0006;
-  --border: #a89984;
-  --input: #a89984;
+  --border: #d5c4a1;
+  --input: #d5c4a1;
   --ring: #7c6f64;
   --chart-1: #076678;
   --chart-2: #af3a03;
@@ -173,10 +173,10 @@
   --globe-pin-online: #79740e;
   --globe-pin-offline: #9d0006;
   --globe-pin-detail: #fbf1c7;
-  /* 亮底上的金色额外混入暖墨，兼顾小字号的选中标签。 */
-  --gruvbox-budget: color-mix(in srgb, #b57614 65%, #282828);
-  --gruvbox-value: #427b58;
-  --gruvbox-online: #427b58;
+  /* 金、绿色略混入暖墨，兼顾米纸底上的读数与小字号选中标签。 */
+  --gruvbox-budget: color-mix(in srgb, #b57614 55%, #282828);
+  --gruvbox-value: color-mix(in srgb, #427b58 85%, #282828);
+  --gruvbox-online: color-mix(in srgb, #427b58 85%, #282828);
   --gruvbox-rx: #076678;
   --gruvbox-tx: #af3a03;
 }

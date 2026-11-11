@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { flatCamera, flatNodes, MAP_BOUNDS, MAP_VIEW, mapGraticule, mapHitAreas, mapLabelCamera, mapPaths, mapViewport, prepareMapRings } from "./map.ts"
-import { flowMapBounds, mapFlowPaths } from "./map-flow.ts"
-import type { GlobeNode } from "./globe.ts"
+import { flowMapBounds, globeFlowPaths, globeFlowPoint, globeFlowView, mapFlowPaths, prepareGlobeFlows } from "./map-flow.ts"
+import { camera as globeCamera, zoomView, type GlobeNode } from "./globe.ts"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES, type Ring } from "./world.ts"
 
 type Point = [number, number]
@@ -276,20 +276,45 @@ const flowPoint = (id: number, lon: number, offlineCount = 0) => {
 const flowCenter = flowPoint(30, 170)
 const seamSource = flowPoint(31, -170)
 const offlineSource = flowPoint(32, 90, 1)
-const flow = mapFlowPaths([flowCenter, seamSource, offlineSource], flowCenter, true, 1, { flat })
+const flow = mapFlowPaths([flowCenter, seamSource, offlineSource], flowCenter, true, 1, flat)
 assert.deepEqual(flow.map(({ key, active }) => [key, active]), [["31:0", true], ["31:-1", true], ["32:0", false]])
 for (const route of flow.slice(0, 2)) {
   const [start, , end] = paths(route.d)[0]
   close(end[0] - start[0], -23.34, "接缝两边的路径均从源点向中心走短弧")
 }
-assert.ok(mapFlowPaths([seamSource], flowCenter, false, 1, { flat }).every(({ active }) => !active))
+assert.ok(mapFlowPaths([seamSource], flowCenter, false, 1, flat).every(({ active }) => !active))
 const zoomedOutBounds = flowMapBounds(flatCamera(0, 0, 50))
 assert.deepEqual(zoomedOutBounds, { x: 125, y: 62.5, w: 210, h: 105 }, "缩小后连线不超出实际地图边界")
-const frame = { w: 100, h: 100, cx: 50, cy: 50, r: 40 }
-const globeCenter = { ...flowCenter, px: 26, py: 22 }
-const globeSource = { ...seamSource, px: 74, py: 22 }
-const globeFlow = mapFlowPaths([globeCenter, globeSource], globeCenter, true, 1, { globe: frame })
-assert.equal(globeFlow.length, 1)
-assert.ok(paths(globeFlow[0].d)[0].every(([x, y]) => Math.hypot(x - frame.cx, y - frame.cy) <= frame.r), "地球弧线留在球面圆盘内")
+const spatialCenter = node(50, [120, 0])
+const spatialSource = node(51, [0, 0])
+const spatialFlows = prepareGlobeFlows([spatialCenter, spatialSource], spatialCenter, true)
+assert.equal(spatialFlows.length, 1, "中心地点不画自环")
+for (const sample of spatialFlows[0].samples) {
+  assert.ok(Math.hypot(...sample) >= 1 - 1e-12 && Math.hypot(...sample) <= 1.34, "空间弧位于球面及其上方")
+}
+const frontCamera = globeCamera(0, 0, globeFlowView(zoomView(100)))
+assert.equal(frontCamera.at(...spatialCenter.ll), null, "用例中心位于背面")
+const raised = globeFlowPaths(spatialFlows, frontCamera, 1)[0]
+assert.ok(raised.front && raised.back, "背面中心仍有前方实线及背面虚线")
+const raisedPoints = paths(raised.d)[0]
+assert.ok(raisedPoints.some(([x, y]) => Math.hypot(x - frontCamera.view.cx, y - frontCamera.view.cy) > frontCamera.view.r * 1.05), "空间弧真实伸出地球轮廓")
+const projectedCenter = globeFlowPoint(frontCamera, spatialCenter.ll)
+assert.ok(Math.hypot(raisedPoints.at(-1)![0] - projectedCenter.x, raisedPoints.at(-1)![1] - projectedCenter.y) < 0.01, "路线终点跟随真实背面中心")
+const fullyBehind = prepareGlobeFlows([node(52, [-150, 0])], node(53, [150, 0]), false)
+const behindRoute = globeFlowPaths(fullyBehind, frontCamera, 1)[0]
+assert.equal(behindRoute.front, "")
+assert.ok(behindRoute.back && behindRoute.arrowBack && !behindRoute.active, "整条背面离线路线保留淡虚线及方向箭头")
+for (const location of [[180, 0], [179.9999999, 0], [0, 90], [0, -90]] as [number, number][]) {
+  const singular = prepareGlobeFlows([spatialSource], node(54, location), true)
+  assert.ok(globeFlowPaths(singular, frontCamera, 1).every((route) => !/NaN|Infinity/.test(route.d + route.arrow)), "对跖点及两极路径坐标有限")
+}
+const unchangedFlows = structuredClone(spatialFlows)
+for (const zoom of [50, 100, 150]) for (const lon of [-180, -90, 0, 90, 180]) for (const lat of [-60, 30, 60]) {
+  const view = globeFlowView(zoomView(zoom))
+  const rotated = globeFlowPaths(spatialFlows, globeCamera(lon, lat, view), 1)
+  assert.equal(rotated.length, 1, "旋转及缩放不丢失背面路线")
+  assert.ok(paths(rotated[0].d)[0].every(([x, y]) => x > 0 && x < view.w && y > 0 && y < view.h - 20), "空间弧不被画布或底注裁切")
+}
+assert.deepEqual(spatialFlows, unchangedFlows, "投影不修改预计算空间弧")
 
 console.log("平面地图：等距投影、日期线拆分、填充/岸线裁切、南极、缩放平移、节点与输入不变全部通过")

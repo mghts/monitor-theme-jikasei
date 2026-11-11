@@ -1226,9 +1226,12 @@ async function flowChecks() {
     return {
       name: panel.querySelector('.globe-flow-legend span')?.textContent,
       center: ring && [Number(ring.getAttribute('cx')), Number(ring.getAttribute('cy'))],
+      centerBack: ring?.dataset.back,
       routes: [...panel.querySelectorAll('[data-map-flow-route]')].map((route) => ({
-        end: route.querySelector('.globe-flow-track').getAttribute('d').split(' ').slice(-2).map(Number),
+        end: [...route.querySelectorAll('.globe-flow-track')].at(-1).getAttribute('d').split(' ').slice(-2).map(Number),
         arrow: !!route.querySelector('.globe-flow-arrow')?.getAttribute('d'),
+        active: route.dataset.active === 'true',
+        back: !!route.querySelector('.globe-flow-back')?.getAttribute('d'),
       })),
       animation: [...panel.querySelectorAll('.globe-flow-pulse')].map((pulse) => {
         const style = getComputedStyle(pulse)
@@ -1250,8 +1253,55 @@ async function flowChecks() {
   await preferences('3d', '0')
   await waitFor(() => !!document.querySelector('[data-map-flow-center]'))
   const globe = await snapshot()
-  check('3D 仅绘制正面线路，中心可选同地点的非首个成员', globe.name?.includes('Frankfurt 中心') && globe.routes.length === 1 && globe.animation.length === 1 && globe.routes[0].arrow)
+  check('3D 空间弧包含全部地点，中心可选同地点的非首个成员', globe.name?.includes('Frankfurt 中心') && globe.routes.length === 3 && globe.routes.filter((route) => route.active).length === 2 && globe.routes.every((route) => route.arrow))
+  const spatialGeometry = () => evaluate(() => {
+    const svg = document.querySelector('svg[data-map-canvas]')
+    const frame = svg.viewBox.baseVal
+    const cx = Number(svg.dataset.cameraCx), cy = Number(svg.dataset.cameraCy), r = Number(svg.dataset.cameraR)
+    const paths = [...svg.querySelectorAll('.globe-flow-track,.globe-flow-arrow')].filter((path) => path.getAttribute('d'))
+    return {
+      raised: paths.some((path) => Array.from({ length: 21 }, (_, i) => path.getPointAtLength(path.getTotalLength() * i / 20)).some((p) => Math.hypot(p.x - cx, p.y - cy) > r + 1)),
+      inside: paths.every((path) => {
+        if (!path.getAttribute('d')) return true
+        const box = path.getBBox()
+        return box.x >= frame.x && box.x + box.width <= frame.x + frame.width && box.y >= frame.y && box.y + box.height < frame.y + frame.height - 12
+      }),
+      data: paths.map((path) => path.getAttribute('d')).join('|'),
+    }
+  })
+  check('3D 弧线抬出地球轮廓并在画布留白内', (await spatialGeometry()).raised && (await spatialGeometry()).inside)
   await screenshot('flow-3d-dark')
+  flowCenterId = '205'
+  await navigate()
+  await waitFor(() => document.querySelector('[data-map-flow-center]')?.dataset.back === 'true')
+  const rear = await snapshot()
+  check('中心位于背面仍保留全部路线，金圈与文字标明背面', rear.routes.length === 3 && rear.routes.some((route) => route.back) && rear.name?.includes('背面') && await evaluate(() => !document.querySelector('.hit[data-node="205"]')))
+  await screenshot('flow-3d-center-behind')
+  const frozenGeometry = (await spatialGeometry()).data
+  await motion(true)
+  await waitFor((before) => [...document.querySelectorAll('.globe-flow-track,.globe-flow-arrow')].map((path) => path.getAttribute('d')).join('|') !== before, frozenGeometry)
+  check('自转重投影空间弧时保留所有线路', (await snapshot()).routes.length === 3)
+  await motion(false)
+  for (const width of [1440, 320]) {
+    await viewport(width, width === 320 ? 720 : 1000)
+    for (const dark of [false, true]) {
+      await media(dark)
+      for (const zoom of [50, 100, 150]) {
+        await evaluate((value) => {
+          const input = document.querySelector('.globe-controls input')
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, String(value))
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        }, zoom)
+        await waitFor((value) => Number(document.querySelector('svg[data-map-canvas]')?.dataset.cameraR) === 92 * value / 100, zoom)
+        check(`空间弧/${width}/${dark ? '暗' : '亮'}/${zoom}%：背面中心线路可见且未裁切`, (await snapshot()).routes.length === 3 && (await spatialGeometry()).inside && !(await state()).overflow)
+      }
+    }
+    await screenshot(`flow-3d-behind-${width}`)
+  }
+  await viewport(1440, 1000)
+  await media(true)
+  flowCenterId = '202'
+  await preferences('3d', '0')
   await mode('2d')
   const flat = await snapshot()
   const nearCenter = ([x, y]) => Math.hypot(x - flat.center[0], y - flat.center[1]) < 0.02

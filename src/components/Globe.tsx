@@ -8,7 +8,7 @@ import {
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
 import { flatCamera, flatNodes, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
-import { flowMapBounds, mapFlowPaths } from "@/lib/map-flow"
+import { flowMapBounds, globeFlowPaths, globeFlowPoint, globeFlowView, mapFlowPaths, prepareGlobeFlows } from "@/lib/map-flow"
 import type { Node } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
@@ -109,6 +109,9 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const labelCount = points.reduce((count, point) => count + point.nodeIds.length, 0)
   const pointByKey = useMemo(() => new Map(points.map((point) => [point.key, point])), [points])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
+  const flowNode = flowCenterId === null ? undefined : nodeById.get(flowCenterId)
+  const flowPoint = flowNode && points.find((point) => point.nodeIds.includes(flowNode.id))
+  const globeFlows = useMemo(() => flowNode && flowPoint ? prepareGlobeFlows(points, flowPoint, flowNode.online) : [], [points, flowPoint, flowNode])
   const rows = useMemo(() => regionRows(nodes), [nodes])
   // 「全部」那一行的悬停说明：合计里有多少台认不出国家（不上地球与地区列表）——
   // 「全部 N」与地区分项合计对不上这件事，就在那里有一句明面上的说法。
@@ -136,6 +139,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const zoomId = useId()
   const mapClipId = useId()
   const flowClipId = useId()
+  const flowMaskId = useId()
   const beaconGlowId = useId()
   const choiceId = useId()
   // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
@@ -143,7 +147,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
   const frame = useMemo(() => mode === "2d"
     ? { w: viewport.w, h: viewport.h, cx: viewport.w / 2, cy: viewport.bounds.y + viewport.bounds.h / 2, r: viewport.bounds.w / 2 }
-    : zoomView(zoom, labelCount), [mode, zoom, labelCount, viewport])
+    : globeFlows.length ? globeFlowView(zoomView(zoom, labelCount)) : zoomView(zoom, labelCount), [mode, zoom, labelCount, viewport, globeFlows.length])
   const mapBounds = viewport.bounds
   const reduced = useReducedMotion()
   const pageVisible = useSyncExternalStore(subscribeVisibility, () => !document.hidden)
@@ -417,13 +421,14 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   // eslint-disable-next-line react/refs -- 跨帧记忆，见上
   const placed = mode === "3d" ? layoutLabels(cam, points, sides.current, labelMax, frame.cx, measured)
     : flatPoints.filter((point) => point.visible)
-  const flowNode = flowCenterId === null ? undefined : nodeById.get(flowCenterId)
-  const flowPoint = flowNode && points.find((point) => point.nodeIds.includes(flowNode.id))
-  const flowPoints = mode === "3d" ? placed : flatPoints
-  const flowCenter = flowPoint && flowPoints.find((point) => point.key === flowPoint.key)
-  const flowPaths = flowNode && flowCenter
-    ? mapFlowPaths(flowPoints, flowCenter, flowNode.online, markerScale, mode === "3d" ? { globe: frame } : { flat })
-    : []
+  const globeCenter = mode === "3d" && flowPoint ? globeFlowPoint(cam, flowPoint.ll) : null
+  const flatFlowCenter = flowPoint && flatPoints.find((point) => point.key === flowPoint.key)
+  const flowCenter = globeCenter
+    ? { px: globeCenter.x, py: globeCenter.y }
+    : flatFlowCenter
+  const flowCenterBack = globeCenter !== null && globeCenter.k <= 0.02
+  const flowPaths = mode === "3d" ? globeFlowPaths(globeFlows, cam, markerScale)
+    : flowNode && flatFlowCenter ? mapFlowPaths(flatPoints, flatFlowCenter, flowNode.online, markerScale, flat) : []
   const flowBounds = mode === "2d" && flowPaths.length ? flowMapBounds(flat) : null
   // 不同城市的信标仍保留真实位置；重叠点击区按最近中心分开，不再被上层的针盖住。
   const hitAreas = mapHitAreas(placed, 9 * markerScale)
@@ -491,18 +496,27 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
             </g>
             {flowPaths.length > 0 && (
               <g aria-hidden="true" clipPath={flowBounds ? `url(#${flowClipId})` : undefined}>
-                {flowPaths.map((path) => (
+                {flowPaths.map((path, index) => (
                   <g key={path.key} className="globe-flow-route" data-map-flow-route={path.key} data-active={path.active}>
-                    <path className="globe-flow-track" d={path.d} />
-                    <path className="globe-flow-arrow" d={path.arrow} />
-                    {path.active && <path className="globe-flow-pulse" d={path.d} pathLength={100} style={{ animationDelay: `${path.delay}s` }} />}
+                    {path.front !== undefined && <defs>
+                      <mask id={`${flowMaskId}-${index}`} maskUnits="userSpaceOnUse" x={0} y={0} width={frame.w} height={frame.h}>
+                        <path d={path.front} fill="none" stroke="white" strokeWidth={6 * pixelScale} strokeLinecap="round" strokeLinejoin="round" />
+                      </mask>
+                    </defs>}
+                    {path.back && <path className="globe-flow-track globe-flow-back" d={path.back} />}
+                    <path className="globe-flow-track" d={path.front ?? path.d} />
+                    <path className="globe-flow-arrow" data-back={path.arrowBack} d={path.arrow} />
+                    {path.active && <>
+                      {path.back && <path className="globe-flow-pulse globe-flow-pulse-back" d={path.d} pathLength={100} style={{ animationDelay: `${path.delay}s` }} />}
+                      <path className="globe-flow-pulse" d={path.d} pathLength={100} mask={path.front !== undefined ? `url(#${flowMaskId}-${index})` : undefined} style={{ animationDelay: `${path.delay}s` }} />
+                    </>}
                   </g>
                 ))}
               </g>
             )}
             <g clipPath={mode === "2d" ? `url(#${mapClipId})` : undefined}>
               {flowCenter && (
-                <circle className="globe-flow-center" data-map-flow-center cx={flowCenter.px} cy={flowCenter.py} r={8.7 * markerScale} aria-hidden="true" />
+                <circle className="globe-flow-center" data-map-flow-center data-back={flowCenterBack} cx={flowCenter.px} cy={flowCenter.py} r={8.7 * markerScale} aria-hidden="true" />
               )}
               {marker && (
               <g className="globe-selected" aria-hidden="true">
@@ -617,7 +631,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
           ))}
           {flowNode && flowPoint && (
             <div className="globe-flow-legend">
-              <span>流向示意 · 中心 {flowNode.name}</span>
+              <span>流向示意 · 中心 {flowNode.name}{flowCenterBack ? " · 背面" : ""}</span>
               <Button variant="ghost" size="icon-sm" disabled={reduced} aria-label={flowPaused ? "播放流向动效" : "暂停流向动效"} title={reduced ? "系统已开启减弱动态效果" : flowPaused ? "播放流向动效" : "暂停流向动效"} data-map-control="flow" onClick={() => setFlowPaused((paused) => !paused)}>
                 {flowPaused ? <Play /> : <Pause />}
               </Button>

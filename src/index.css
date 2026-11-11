@@ -421,6 +421,8 @@
 .globe-flow-track, .globe-flow-arrow { stroke: var(--globe-flow); }
 .globe-flow-track { stroke-width: 1.05px; opacity: 0.68; }
 .globe-flow-arrow { stroke-width: 1.2px; opacity: 0.9; }
+.globe-flow-back { stroke-dasharray: 3 4; opacity: 0.32; }
+.globe-flow-arrow[data-back="true"] { opacity: 0.4; }
 .globe-flow-route[data-active="false"] { opacity: 0.48; }
 .globe-flow-pulse {
   stroke: var(--globe-flow-pulse);
@@ -429,8 +431,10 @@
   animation: globe-flow-travel 3.4s linear infinite paused;
 }
 .globe-panel[data-map-flow-playing="true"] .globe-flow-pulse { animation-play-state: running; }
+.globe-flow-pulse-back { opacity: 0.28; }
 @keyframes globe-flow-travel { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
 .globe-flow-center { stroke: var(--globe-flow-center); stroke-width: 1.3px; }
+.globe-flow-center[data-back="true"] { stroke-dasharray: 2.5 3; opacity: 0.65; }
 @media (prefers-reduced-motion: reduce) {
   .globe-flow-pulse { display: none; }
 }

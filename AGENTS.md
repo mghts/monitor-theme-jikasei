@@ -23,7 +23,7 @@
 |---|---|
 | 页面、筛选与详情入口 | `src/App.tsx`；`src/components/DetailLoader.tsx`；`src/lib/search.ts` |
 | 公开接口、实时更新与降级 | `src/lib/api.ts`；`src/lib/transport.ts` |
-| 3D / 2D 地图、信标与地区 | `src/components/Globe.tsx`；`src/lib/globe.ts`；`src/lib/map.ts`；`src/lib/world.ts` |
+| 3D / 2D 地图、流向、信标与地区 | `src/components/Globe.tsx`；`src/lib/globe.ts`；`src/lib/map.ts`；`src/lib/map-flow.ts`；`src/lib/world.ts` |
 | 首页节点卡片与延迟图 | `src/components/NodeCard.tsx`；`src/components/Latency.tsx` |
 | 详情图表、路径与历史请求 | `src/components/NodeDetail.tsx`；`src/components/Chart.tsx`；`src/components/ChartTooltip.tsx`；`src/lib/chart-path.ts`；`src/lib/resource-history.ts`；`src/lib/history.ts`；`src/lib/ranges.ts` |
 | 概览、预算与读数宽度 | `src/components/Summary.tsx`；`src/lib/summary.ts`；`src/lib/money.ts`；`src/lib/speed-history.ts` |
@@ -37,6 +37,7 @@
   同地点合并为一个信标，悬停展示全部成员，点击多成员信标先选择节点；信标与命中区随缩放变化。
   3D 保留每个成员的名称引线但信标旁不显示台数；2D 不显示两侧名称引线。
   仅在配置有效中心节点 ID 后画流向示意。同地点共用线路，光点不表示实测流量。
+  3D 使用抬离球面的空间弧线；球体遮挡部分用淡虚线，中心位于背面时线路仍保留并提示背面。
   未确认城市时展示国家或地区全名，不能把国家坐标当作已确认城市。
 - 延迟线形由同一主题设置同步控制首页、浮层、紧凑展开及详情；连接断点和平滑只改变显示，
   不补造延迟值、不抹去丢包与无响应。削峰是独立选项。

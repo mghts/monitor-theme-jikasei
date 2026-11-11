@@ -152,6 +152,9 @@ eq(searchNodes([en[2]], "ty").hit, 0, "认不出城市的机器：三字码前�
 // 一个字母总会被「原样子串」那枚命中（这里是 2 台）。规则留着是为了别把 `t` 扩成一串城市，
 // 说明写在 `isCityPrefix` 的注释里，不假装有断言罩着它。
 eq(searchText(en[0]).includes("东京") && searchText(en[0]).includes("東京"), true, "可搜文本含城市的中文写法（含繁体）")
+const andalusia = node(31, "Andalusia-01, ES (JCloud)", { country: "ES", group: "Europe" })
+eq(searchNodes([andalusia], "安达卢西亚").shown.map((n) => n.id), [31], "安达卢西亚中文搜索与地图地区识别同步")
+eq(searchNodes([andalusia], "安達盧西亞").shown.map((n) => n.id), [31], "安达卢西亚繁体搜索与地图地区识别同步")
 
 if (failed) {
   console.error(`\n${failed} 处不符`)

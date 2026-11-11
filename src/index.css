@@ -410,17 +410,15 @@
 .globe-wire { fill: none; stroke: var(--foreground); stroke-opacity: 0.1; }
 .globe-stem { fill: none; stroke: var(--foreground); stroke-width: 0.75; }
 
-.globe-flow-track, .globe-flow-arrow, .globe-flow-pulse, .globe-flow-center {
+.globe-flow-track, .globe-flow-pulse, .globe-flow-center {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
-.globe-flow-track, .globe-flow-arrow { stroke: var(--globe-flow); }
+.globe-flow-track { stroke: var(--globe-flow); }
 .globe-flow-track { stroke-width: 1.05px; opacity: 0.68; }
-.globe-flow-arrow { stroke-width: 1.2px; opacity: 0.9; }
 .globe-flow-back { stroke-dasharray: 3 4; opacity: 0.32; }
-.globe-flow-arrow[data-back="true"] { opacity: 0.4; }
 .globe-flow-route[data-active="false"] { opacity: 0.48; }
 .globe-flow-pulse {
   stroke: var(--globe-flow-pulse);

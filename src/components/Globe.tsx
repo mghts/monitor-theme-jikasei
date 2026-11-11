@@ -415,7 +415,7 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
     ? { px: globeCenter.x, py: globeCenter.y }
     : flatFlowCenter
   const flowCenterBack = globeCenter !== null && globeCenter.k <= 0.02
-  const flowPaths = mode === "3d" ? globeFlowPaths(globeFlows, cam, markerScale)
+  const flowPaths = mode === "3d" ? globeFlowPaths(globeFlows, cam)
     : flowNode && flatFlowCenter ? mapFlowPaths(flatPoints, flatFlowCenter, flowNode.online, markerScale, flat) : []
   const flowBounds = mode === "2d" && flowPaths.length ? flowMapBounds(flat) : null
   // 不同城市的信标仍保留真实位置；重叠点击区按最近中心分开，不再被上层的针盖住。
@@ -491,7 +491,6 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
                     </defs>}
                     {path.back && <path className="globe-flow-track globe-flow-back" d={path.back} />}
                     <path className="globe-flow-track" d={path.front ?? path.d} />
-                    <path className="globe-flow-arrow" data-back={path.arrowBack} d={path.arrow} />
                     {path.active && <>
                       {path.back && <path className="globe-flow-pulse globe-flow-pulse-back" d={path.d} pathLength={100} style={{ animationDelay: `${path.delay}s` }} />}
                       <path className="globe-flow-pulse" d={path.d} pathLength={100} mask={path.front !== undefined ? `url(#${flowMaskId}-${index})` : undefined} style={{ animationDelay: `${path.delay}s` }} />

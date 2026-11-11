@@ -7,22 +7,14 @@ type Vector = [number, number, number]
 type FlowPath = {
   key: string
   d: string
-  arrow: string
   active: boolean
   delay: number
   front?: string
   back?: string
-  arrowBack?: boolean
 }
 type PreparedGlobeFlow = Pick<FlowPath, "key" | "active" | "delay"> & { samples: Vector[] }
 const GLOBE_FLOW_LIFT = 0.34
 const xy = ({ x, y }: Point) => `${x.toFixed(2)} ${y.toFixed(2)}`
-
-function arrow(tip: Point, angle: number, size: number): string {
-  const back = { x: tip.x - Math.cos(angle) * size, y: tip.y - Math.sin(angle) * size }
-  const cross = { x: -Math.sin(angle) * size * 0.58, y: Math.cos(angle) * size * 0.58 }
-  return `M ${xy({ x: back.x + cross.x, y: back.y + cross.y })} L ${xy(tip)} L ${xy({ x: back.x - cross.x, y: back.y - cross.y })}`
-}
 
 /** 给最高空间弧预留上下留白；球体半径与缩放口径仍由 zoomView 决定。 */
 export function globeFlowView(view: GlobeView): GlobeView {
@@ -94,20 +86,13 @@ function splitDepth(samples: Pt[], view: GlobeView) {
 }
 
 /** 包含背面端点的完整路线；按球体遮挡切分实线与透视虚线。 */
-export function globeFlowPaths(flows: PreparedGlobeFlow[], cam: Camera, scale: number): FlowPath[] {
+export function globeFlowPaths(flows: PreparedGlobeFlow[], cam: Camera): FlowPath[] {
   return flows.map(({ samples, ...flow }) => {
     const projected = samples.map((point) => cam.flat(...point))
-    const tipIndex = Math.floor((projected.length - 1) * 0.68)
-    const tip = projected[tipIndex]
-    const before = projected[tipIndex - 1]
-    const after = projected[tipIndex + 1]
-    const angle = Math.atan2(after.y - before.y, after.x - before.x)
     return {
       ...flow,
       d: projected.map((point, i) => `${i ? "L" : "M"} ${xy(point)}`).join(" "),
       ...splitDepth(projected, cam.view),
-      arrow: arrow(tip, angle, 4 * scale),
-      arrowBack: occluded(tip, cam.view),
     }
   })
 }
@@ -130,15 +115,8 @@ function arc(start: Point, end: Point, scale: number, bounds: MapBounds) {
   }
   control.y = Math.max(bounds.y, control.y)
 
-  // 把箭头画在曲线切线上；箭头在光点停下时仍可辨认流向。
-  const t = 0.68
-  const u = 1 - t
-  const tip = { x: u * u * start.x + 2 * u * t * control.x + t * t * end.x, y: u * u * start.y + 2 * u * t * control.y + t * t * end.y }
-  const angle = Math.atan2(u * (control.y - start.y) + t * (end.y - control.y), u * (control.x - start.x) + t * (end.x - control.x))
-  const size = Math.min(4 * scale, length * 0.18)
   return {
     d: `M ${xy(start)} Q ${xy(control)} ${xy(end)}`,
-    arrow: arrow(tip, angle, size),
   }
 }
 

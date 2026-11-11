@@ -208,7 +208,7 @@ for (const code of Object.keys(COUNTRY_LL)) {
   ok(Boolean(region?.label && region.label !== code && region.label.length > 2), `${code} 兜底显示全名而非裸 ISO 码`)
 }
 
-// 公开 /api/nodes 中原本只显示国家码的 8 个节点；Johor 只确认州，不能虚构为 Johor Bahru。
+// 公开 /api/nodes 中未识别的地点；Johor、Andalusia 只确认行政区，不能虚构具体城市。
 const namedRegions: [string, string, string, [number, number]][] = [
   ["Chisinau-01", "MD", "Chisinau", [28.8333, 47.0167]],
   ["Dobrich-01", "BG", "Dobrich", [27.8419, 43.5795]],
@@ -218,6 +218,7 @@ const namedRegions: [string, string, string, [number, number]][] = [
   ["Sandefjord-01", "NO", "Sandefjord", [10.2167, 59.1167]],
   ["Valdivia-01", "CL", "Valdivia", [-73.2333, -39.8]],
   ["Xi’an-01", "CN", "Xi'an", [108.9398, 34.3416]],
+  ["Andalusia-01, ES (JCloud)", "ES", "Andalusia", [-4.5756, 37.4634]],
 ]
 for (const [name, code, city, base] of namedRegions) {
   eq(regionOf(node(32, name, code)), { key: `${code} · ${city}`, code, city, label: city, base }, `${name} 按真实名称与所属国家识别`)
@@ -230,8 +231,9 @@ for (const [name, code, city] of [
   ["ZAL-01", "CL", "Valdivia"], ["LOS-01", "NG", "Lagos"], ["拉各斯一号", "NG", "Lagos"], ["柔佛一号", "MY", "Johor"],
   ["Kuala_Lumpur_01", "MY", "Kuala Lumpur"], ["Kuala-Lumpur-01", "MY", "Kuala Lumpur"], ["Kuala.Lumpur-01", "MY", "Kuala Lumpur"],
   ["Kuala   Lumpur-01", "MY", "Kuala Lumpur"], ["KUL-01", "MY", "Kuala Lumpur"], ["XIY-01", "CN", "Xi'an"], ["西安一号", "CN", "Xi'an"],
+  ["Andalucía_01", "ES", "Andalusia"], ["安达卢西亚一号", "ES", "Andalusia"], ["安達盧西亞一號", "ES", "Andalusia"],
 ]) eq(cityHint(node(33, name, code))?.name, city, `${name} 的中文/英文/机场码别名可识别`)
-for (const [name, code] of [["Sandefjordian", "NO"], ["Chisinau01", "MD"], ["KULTURE", "MY"], ["LOS1", "NG"], ["TRF123", "NO"], ["VALDIVIANA", "CL"]]) {
+for (const [name, code] of [["Sandefjordian", "NO"], ["Chisinau01", "MD"], ["KULTURE", "MY"], ["LOS1", "NG"], ["TRF123", "NO"], ["VALDIVIANA", "CL"], ["Andalusians", "ES"]]) {
   eq(cityHint(node(34, name, code)), null, `${name} 不从长词或编号中截出城市/机场码`)
 }
 eq(regionOf(node(34, "Seattle-01", "CN"))?.label, "China", "Seattle 名字不能将 CN 节点误放到美国")
@@ -239,6 +241,13 @@ eq(regionOf(node(34, "Xi’an-01", "HK"))?.key, "HK · Hong Kong", "实际 count
 eq(regionOf(node(34, "Borchin-01", "BG"))?.label, "Bulgaria", "未确认的名称不猜城市，显示国家全名")
 eq(regionView([node(34, "未知城", "NO")], "NO").shown.length, 1, "国家全名显示不改变旧 ISO 地区筛选键")
 eq(regionView(namedRegions.map(([name, code], i) => node(40 + i, name, code)), "MY · Johor").shown.map((n) => n.name), ["Johor-01"], "新增州级地区也可按现有地区键筛选")
+const spainNodes = [node(60, "Andalusia-01, ES (JCloud)", "ES", { group: "Europe" }), node(61, "Madrid-01", "ES")]
+eq(regionRows(spainNodes).map((row) => row.region.label).sort(), ["Andalusia", "Madrid"], "安达卢西亚地区与马德里城市保持独立")
+eq(globeNodes(spainNodes).map((point) => point.region.label).sort(), ["Andalusia", "Madrid"], "安达卢西亚代表点不再落在西班牙国家兜底的马德里坐标")
+eq(regionView(spainNodes, "ES · Andalusia").shown.map((n) => n.id), [60], "安达卢西亚筛选准确命中实际节点")
+eq(cityHint(node(62, "ES-01", "ES", { group: "Andalucía" }))?.name, "Andalusia", "分组名也可识别安达卢西亚")
+eq(cityHint(node(62, "Madrid-01", "ES", { group: "Andalusia" }))?.name, "Madrid", "节点名中的具体城市优先于分组中的行政区")
+eq(regionOf(node(63, "ES-unknown", "ES"))?.label, "Spain", "只有西班牙国家码时仍显示国家全名，不推断城市")
 
 // ★ 2026-10 数据扩展：国家表 12 → 80+、城市线索 24 → ~100（第三方的大机群以前大半
 //   认不出城市、全堆在国家码下；表外国家的机器干脆整个地区功能里看不见）。

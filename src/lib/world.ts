@@ -284,6 +284,8 @@ export const CITY_HINTS: { country: string; match: RegExp; ll: [number, number];
   { country: 'AT', match: /\b(VIENNA|VIE)\b|维也纳|維也納/i, ll: [16.3738, 48.2082], name: 'Vienna' },
   { country: 'BE', match: /\b(BRUSSELS|BRU)\b|布鲁塞尔|布魯塞爾/i, ll: [4.3517, 50.8503], name: 'Brussels' },
   { country: 'ES', match: /\b(MADRID|MAD)\b|马德里|馬德里/i, ll: [-3.7038, 40.4168], name: 'Madrid' },
+  // Eurostat/GISCO NUTS 2024 ES61 地区标签点（非城市或机房定位）：https://gisco-services.ec.europa.eu/distribution/v2/nuts/geojson/NUTS_LB_2024_4326_LEVL_2.geojson
+  { country: 'ES', match: /\b(ANDALUSIA|ANDALUCIA)\b|安达卢西亚|安達盧西亞/i, ll: [-4.5756, 37.4634], name: 'Andalusia' },
   { country: 'PT', match: /\b(LISBON|LIS)\b|里斯本/i, ll: [-9.1393, 38.7223], name: 'Lisbon' },
   { country: 'IT', match: /\b(MILAN|MILANO|MXP)\b|米兰|米蘭/i, ll: [9.19, 45.4642], name: 'Milan' },
   { country: 'GR', match: /\b(ATHENS|ATH)\b|雅典/i, ll: [23.7275, 37.9838], name: 'Athens' },

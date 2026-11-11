@@ -1253,12 +1253,12 @@ async function flowChecks() {
   await preferences('3d', '0')
   await waitFor(() => !!document.querySelector('[data-map-flow-center]'))
   const globe = await snapshot()
-  check('3D 空间弧包含全部地点并移除说明与装饰', globe.clean && globe.routes.length === 3 && globe.routes.filter((route) => route.active).length === 2 && globe.routes.every((route) => route.arrow))
+  check('3D 空间弧包含全部地点且不显示箭头', globe.clean && globe.routes.length === 3 && globe.routes.filter((route) => route.active).length === 2 && globe.routes.every((route) => !route.arrow))
   const spatialGeometry = () => evaluate(() => {
     const svg = document.querySelector('svg[data-map-canvas]')
     const frame = svg.viewBox.baseVal
     const cx = Number(svg.dataset.cameraCx), cy = Number(svg.dataset.cameraCy), r = Number(svg.dataset.cameraR)
-    const paths = [...svg.querySelectorAll('.globe-flow-track,.globe-flow-arrow')].filter((path) => path.getAttribute('d'))
+    const paths = [...svg.querySelectorAll('.globe-flow-track')].filter((path) => path.getAttribute('d'))
     return {
       raised: paths.some((path) => Array.from({ length: 21 }, (_, i) => path.getPointAtLength(path.getTotalLength() * i / 20)).some((p) => Math.hypot(p.x - cx, p.y - cy) > r + 1)),
       inside: paths.every((path) => {
@@ -1275,11 +1275,11 @@ async function flowChecks() {
   await navigate()
   await waitFor(() => document.querySelector('[data-map-flow-center]')?.dataset.back === 'true')
   const rear = await snapshot()
-  check('中心位于背面仍保留全部路线及虚线金圈', rear.clean && rear.routes.length === 3 && rear.routes.some((route) => route.back) && rear.centerBack === 'true' && await evaluate(() => !document.querySelector('.hit[data-node="205"]')))
+  check('背面中心保留路线及虚线金圈且不显示箭头', rear.clean && rear.routes.length === 3 && rear.routes.every((route) => !route.arrow) && rear.routes.some((route) => route.back) && rear.centerBack === 'true' && await evaluate(() => !document.querySelector('.hit[data-node="205"]')))
   await screenshot('flow-3d-center-behind')
   const frozenGeometry = (await spatialGeometry()).data
   await motion(true)
-  await waitFor((before) => [...document.querySelectorAll('.globe-flow-track,.globe-flow-arrow')].map((path) => path.getAttribute('d')).join('|') !== before, frozenGeometry)
+  await waitFor((before) => [...document.querySelectorAll('.globe-flow-track')].map((path) => path.getAttribute('d')).join('|') !== before, frozenGeometry)
   check('自转重投影空间弧时保留所有线路', (await snapshot()).routes.length === 3)
   await motion(false)
   for (const width of [1440, 320]) {
@@ -1305,7 +1305,7 @@ async function flowChecks() {
   await mode('2d')
   const flat = await snapshot()
   const nearCenter = ([x, y]) => Math.hypot(x - flat.center[0], y - flat.center[1]) < 0.02
-  check('2D 同地点共享线路，未定位不画，离线线路只显示箭头', flat.routes.length === 3 && flat.animation.length === 2 && flat.routes.every((route) => route.arrow && nearCenter(route.end)))
+  check('2D 同地点共享线路且无箭头，离线仅保留静态线', flat.routes.length === 3 && flat.animation.length === 2 && flat.routes.every((route) => !route.arrow && nearCenter(route.end)))
   await waitFor((offset) => {
     const pulse = document.querySelector('.globe-flow-pulse')
     return parseFloat(getComputedStyle(pulse).strokeDashoffset) < offset - 0.2
@@ -1315,7 +1315,7 @@ async function flowChecks() {
   check('2D 移除中心说明与流向暂停按钮', flat.clean)
   await media(false, true)
   const reduced = await snapshot()
-  check('减弱动态效果保留箭头并隐藏光点', reduced.routes.length === 3 && reduced.animation.every((item) => item.display === 'none'))
+  check('减弱动态效果保留线路并隐藏光点', reduced.routes.length === 3 && reduced.routes.every((route) => !route.arrow) && reduced.animation.every((item) => item.display === 'none'))
   await media(false)
   await viewport(320, 720)
   check('320px 可见流向且页面不横向溢出', (await snapshot()).routes.length === 3 && !(await state()).overflow)
@@ -1331,6 +1331,33 @@ async function flowChecks() {
   flowCenterId = '999'
   await navigate()
   check('无匹配 ID 时回到普通地图', (await snapshot()).routes.length === 0 && (await snapshot()).center === null)
+  nodes = [
+    makeNode(31, 'Andalusia-01, ES (JCloud)', 'ES', 'Europe'),
+    makeNode(32, 'ES-unknown', 'ES', 'Europe'), makeNode(33, 'Singapore 中心', 'SG', 'Asia'),
+  ]
+  flowCenterId = '33'
+  await preferences('3d', '0')
+  check('实际西班牙节点识别为 Andalusia，未知城市仍显示 Spain', await evaluate(() => {
+    const labels = [...document.querySelectorAll('.globe-reg span')].map((item) => item.textContent.trim())
+    return labels.includes('Andalusia') && labels.includes('Spain')
+  }))
+  for (const width of [1440, 320]) {
+    await viewport(width, width === 320 ? 844 : 1000)
+    for (const selectedMode of ['3d', '2d']) {
+      await mode(selectedMode)
+      await allRegions()
+      await evaluate(() => [...document.querySelectorAll('.globe-reg')].find((button) => button.querySelector('span')?.textContent.trim() === 'Andalusia')?.click())
+      await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 1 && !!document.querySelector('.hit[data-node="31"]'))
+      await sleep(250)
+      const tag = `Andalusia/${selectedMode}/${width}`
+      const location = await state(tag)
+      const flow = await snapshot()
+      check(`${tag}：筛选定位到实际节点，保留完整名称`, JSON.stringify(location.cards) === JSON.stringify(['Andalusia-01, ES (JCloud)']) && location.pins.some((pin) => pin.id === 31) && !location.overflow)
+      if (selectedMode === '3d') check(`${tag}：侧标签显示 ES 与行政区名`, location.memberLabels.some((label) => label.id === 31 && (label.text === 'ES · Andalusia' || label.text.endsWith('…') && 'ES · Andalusia'.startsWith(label.text.slice(0, -1)))))
+      check(`${tag}：地区筛选不缩减地图线路且没有箭头`, flow.routes.length === 2 && flow.routes.every((route) => !route.arrow))
+      await screenshot(`flow-andalusia-${selectedMode}-${width}`)
+    }
+  }
   flowCenterId = undefined
   nodes = ordinaryNodes
   await preferences(null, null)

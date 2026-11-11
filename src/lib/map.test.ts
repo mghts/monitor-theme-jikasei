@@ -294,19 +294,19 @@ for (const sample of spatialFlows[0].samples) {
 }
 const frontCamera = globeCamera(0, 0, globeFlowView(zoomView(100)))
 assert.equal(frontCamera.at(...spatialCenter.ll), null, "用例中心位于背面")
-const raised = globeFlowPaths(spatialFlows, frontCamera, 1)[0]
+const raised = globeFlowPaths(spatialFlows, frontCamera)[0]
 assert.ok(raised.front && raised.back, "背面中心仍有前方实线及背面虚线")
 const raisedPoints = paths(raised.d)[0]
 assert.ok(raisedPoints.some(([x, y]) => Math.hypot(x - frontCamera.view.cx, y - frontCamera.view.cy) > frontCamera.view.r * 1.05), "空间弧真实伸出地球轮廓")
 const projectedCenter = globeFlowPoint(frontCamera, spatialCenter.ll)
 assert.ok(Math.hypot(raisedPoints.at(-1)![0] - projectedCenter.x, raisedPoints.at(-1)![1] - projectedCenter.y) < 0.01, "路线终点跟随真实背面中心")
 const fullyBehind = prepareGlobeFlows([node(52, [-150, 0])], node(53, [150, 0]), false)
-const behindRoute = globeFlowPaths(fullyBehind, frontCamera, 1)[0]
+const behindRoute = globeFlowPaths(fullyBehind, frontCamera)[0]
 assert.equal(behindRoute.front, "")
-assert.ok(behindRoute.back && behindRoute.arrowBack && !behindRoute.active, "整条背面离线路线保留淡虚线及方向箭头")
+assert.ok(behindRoute.back && !behindRoute.active, "整条背面离线路线保留淡虚线")
 for (const location of [[180, 0], [179.9999999, 0], [0, 90], [0, -90]] as [number, number][]) {
   const singular = prepareGlobeFlows([spatialSource], node(54, location), true)
-  assert.ok(globeFlowPaths(singular, frontCamera, 1).every((route) => !/NaN|Infinity/.test(route.d + route.arrow)), "对跖点及两极路径坐标有限")
+  assert.ok(globeFlowPaths(singular, frontCamera).every((route) => !/NaN|Infinity/.test(route.d)), "对跖点及两极路径坐标有限")
 }
 const routeLocations: [number, number][][] = [
   [[0, 60], [180, 60]],
@@ -328,7 +328,7 @@ close(Math.abs(Math.atan2(dateLineMiddle[0], dateLineMiddle[2]) * 180 / Math.PI)
 const unchangedFlows = structuredClone(spatialFlows)
 for (const zoom of [50, 100, 150]) for (const lon of [-180, -90, 0, 90, 180]) for (const lat of [-60, 30, 60]) {
   const view = globeFlowView(zoomView(zoom))
-  const rotated = globeFlowPaths(spatialFlows, globeCamera(lon, lat, view), 1)
+  const rotated = globeFlowPaths(spatialFlows, globeCamera(lon, lat, view))
   assert.equal(rotated.length, 1, "旋转及缩放不丢失背面路线")
   assert.ok(paths(rotated[0].d)[0].every(([x, y]) => x > 0 && x < view.w && y > 0 && y < view.h), "空间弧不被画布裁切")
 }

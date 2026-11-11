@@ -330,7 +330,7 @@ for (const zoom of [50, 100, 150]) for (const lon of [-180, -90, 0, 90, 180]) fo
   const view = globeFlowView(zoomView(zoom))
   const rotated = globeFlowPaths(spatialFlows, globeCamera(lon, lat, view), 1)
   assert.equal(rotated.length, 1, "旋转及缩放不丢失背面路线")
-  assert.ok(paths(rotated[0].d)[0].every(([x, y]) => x > 0 && x < view.w && y > 0 && y < view.h - 20), "空间弧不被画布或底注裁切")
+  assert.ok(paths(rotated[0].d)[0].every(([x, y]) => x > 0 && x < view.w && y > 0 && y < view.h), "空间弧不被画布裁切")
 }
 assert.deepEqual(spatialFlows, unchangedFlows, "投影不修改预计算空间弧")
 

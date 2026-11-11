@@ -391,17 +391,17 @@ const sides = new Map<string, "L" | "R">()
 const laid = layoutLabels(cam, placed, sides)
 const laidLabels = laid.flatMap((point) => point.labels)
 eq(laid.length, 5, "5 枚信标各返回一条 Placed，不重复信标命中区域")
-eq(laidLabels.length, 9, "9 个真实成员各有一条独立标签与引线落点")
+eq(laidLabels.length, 5, "5 个地点各有一条标签与引线")
 eq(laid.map((p) => [p.id, p.nodeIds]), placed.map((p) => [p.id, p.nodeIds]), "球面标签布局保留信标代表 ID 与完整成员")
-eq(laidLabels.map((label) => [label.id, label.name, label.code, label.index]).sort((a, b) => Number(a[3]) - Number(b[3])), fleet.slice(0, 9).map((n, index) => [n.id, n.name, n.country, index]), "布局不以地区名称替换真实成员名字")
+eq(laidLabels.map((label) => label.label).sort(), placed.map((point) => `${point.code} · ${point.region.label}`).sort(), "标签显示代码和已确认城市，未知城市使用国家全名")
 eq(laid.map((p) => p.memberLabels), placed.map((p) => p.memberLabels), "球面投影完整保留成员标签源数据")
 for (const point of laid) {
-  eq(point.labels.map((label) => label.key), point.nodeIds.map((id) => `${point.key}:${id}`), "标签键由信标键和真实成员 ID 组成")
+  eq(point.labels.map((label) => label.key), [point.key], "地点标签使用稳定信标键")
   ok(point.labels.every((label) => label.px === point.px && label.py === point.py), "同信标成员共用同一个真实地理落点")
   eq([point.lx, point.ly, point.end, point.label, point.left, point.right, point.width], [point.labels[0].lx, point.labels[0].ly, point.labels[0].end, point.labels[0].label, point.labels[0].left, point.labels[0].right, point.labels[0].width], "兼容布局字段准确取第一成员，不覆盖信标字段")
 }
 ok(laidLabels.every((p) => Math.abs(p.lx - VIEW.cx) > VIEW.r), "所有成员标签都在圆盘之外")
-ok(laidLabels.every((p) => p.ly >= 12 && p.ly <= 204), "成员标签不出画布上下边")
+ok(laidLabels.every((p) => p.ly >= 12 && p.ly <= VIEW.h - 12), "地点标签不出画布上下边")
 ok(laidLabels.every((p) => p.end === (p.lx < VIEW.cx)), "左侧标签右对齐、右侧标签左对齐")
 for (const side of ["L", "R"] as const) {
   const ys = laidLabels.filter((p) => (side === "L") === p.end).map((p) => p.ly)
@@ -409,12 +409,11 @@ for (const side of ["L", "R"] as const) {
 }
 const counts = [laidLabels.filter((p) => p.end).length, laidLabels.filter((p) => !p.end).length]
 ok(Math.abs(counts[0] - counts[1]) <= 2, `左右两摞数量均衡（${counts[0]} / ${counts[1]}）`)
-eq(sides.size, 9, "每个成员的左右侧都独立记忆")
-// 左侧写「名字 · 国家」，右侧写「国家 · 名字」—— 上游如此，两侧都从外侧往内读。
+eq(sides.size, 5, "每个地点的左右侧独立记忆")
 const left = laidLabels.find((p) => p.end)
 const right = laidLabels.find((p) => !p.end)
-eq(left?.label, `${left?.name} · ${left?.code}`, "左侧标签是「名字 · 国家」")
-eq(right?.label, `${right?.code} · ${right?.name}`, "右侧标签是「国家 · 名字」")
+eq(left?.label, `${left?.code} · ${left?.name}`, "左侧标签是「代码 · 地点」")
+eq(right?.label, `${right?.code} · ${right?.name}`, "右侧标签是「代码 · 地点」")
 const laidRef = laid
 
 // 缩放保持地理位置、可见节点和逆投影；标签留在圆盘外，岸线仍正确裁在新半径上。
@@ -426,12 +425,13 @@ for (const size of [52, 120, 200]) {
   const crowd = globeNodes(Array.from({ length: size }, (_, i) => node(1000 + i, `Tokyo-${i}`, "JP")))
   eq(crowd.length, 1, `${size} 个同地点节点仅保留一枚信标`)
   for (const percent of [50, 100, 150]) {
-    const frame = zoomView(percent, size)
+    const frame = zoomView(percent, crowd.length)
     const beacons = layoutLabels(camera(139.7, 35.7, frame), crowd, new Map())
     const labels = beacons.flatMap((point) => point.labels)
     eq(beacons.length, 1, `${percent}% / ${size} 成员布局不重复信标`)
-    eq(labels.map((label) => label.id), crowd[0].nodeIds, `${percent}% / ${size} 成员标签全部保留且顺序确定`)
-    ok(labels.every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% / ${size} 密集标签留在画布和底部说明之间`)
+    eq(labels.map((label) => label.label), ["JP · Tokyo"], `${percent}% / ${size} 成员共用一组城市标签`)
+    eq(beacons[0].nodeIds, crowd[0].nodeIds, `${percent}% / ${size} 完整成员保留在信标中`)
+    ok(labels.every((p) => p.ly >= 12 && p.ly <= frame.h - 12), `${percent}% / ${size} 地点标签留在画布内`)
     const counts = [labels.filter((label) => label.end).length, labels.filter((label) => !label.end).length]
     ok(Math.abs(counts[0] - counts[1]) <= 2, `${percent}% / ${size} 按全部成员重平衡两侧`)
     for (const end of [false, true]) {
@@ -441,14 +441,14 @@ for (const size of [52, 120, 200]) {
   }
 }
 const cramped = layoutLabels(camera(139.7, 35.7), globeNodes(Array.from({ length: 120 }, (_, i) => node(2000 + i, `Tokyo-${i}`, "JP"))), new Map())
-ok(cramped.flatMap((point) => point.labels).every((label) => label.ly >= 12 && label.ly <= VIEW.h - 36), "调用方高度不足时仍保守夹在画布内，不裁切尾部成员")
+ok(cramped.flatMap((point) => point.labels).every((label) => label.ly >= 12 && label.ly <= VIEW.h - 12), "地点标签夹在画布内")
 for (const percent of [50, 150]) {
   const frame = zoomView(percent)
   const scaled = camera(80, 30, frame)
   const pins = layoutLabels(scaled, placed, new Map())
   eq(pins.map((p) => p.id), laid.map((p) => p.id), `${percent}% 缩放不改变可见节点`)
   ok(pins.flatMap((p) => p.labels).every((p) => Math.abs(p.lx - frame.cx) > frame.r), `${percent}% 所有成员标签留在圆盘外`)
-  ok(pins.flatMap((p) => p.labels).every((p) => p.ly >= 12 && p.ly <= frame.h - 36), `${percent}% 所有成员标签留在画布内`)
+  ok(pins.flatMap((p) => p.labels).every((p) => p.ly >= 12 && p.ly <= frame.h - 12), `${percent}% 所有地点标签留在画布内`)
   for (const p of pins) {
     const normal = laid.find((item) => item.id === p.id)!
     const ratio = Math.hypot(p.px - frame.cx, p.py - frame.cy) / Math.hypot(normal.px - VIEW.cx, normal.py - VIEW.cy)

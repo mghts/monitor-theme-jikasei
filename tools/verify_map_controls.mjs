@@ -2,9 +2,10 @@
 // 用法：node tools/verify_map_controls.mjs [输出目录]；可指定 CHROME_PATH / MAP_DIST。
 // MAP_BASELINE_DIST 可指向保留的旧 dist，实测同夹具的地图尺寸作为前后对照。
 // MAP_CHECK_GROUP=interactions 仅运行节点悬停、选择与实时更新，便于失败后定向复验。
-// MAP_CHECK_GROUP=locations 仅运行小队同地点合并、逐成员引线、缩放与准确详情。
+// MAP_CHECK_GROUP=locations 仅运行小队同地点合并、地点引线、缩放与准确详情。
 // MAP_CHECK_GROUP=mobile-layout 对比保留旧版的手机上下留白，并检查标签、控件与节点交互。
 // MAP_CHECK_GROUP=flow 仅验收中心节点、流向动效、离线与分组。
+// MAP_CHECK_GROUP=appearance 验收简化界面、地点标签及放大的球体布局。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -14,6 +15,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { globeNodes, VIEW } from '../src/lib/globe.ts'
 
 const parentOutput = process.argv[2] ? resolve(process.argv[2]) : tmpdir()
 mkdirSync(parentOutput, { recursive: true })
@@ -25,7 +27,8 @@ const LOCATIONS_ONLY = process.env.MAP_CHECK_GROUP === 'locations'
 const MOBILE_LAYOUT_ONLY = process.env.MAP_CHECK_GROUP === 'mobile-layout'
 const NEIGHBORS_ONLY = LOCATIONS_ONLY && process.env.MAP_LOCATION_NEIGHBORS_ONLY === '1'
 const FLOW_ONLY = process.env.MAP_CHECK_GROUP === 'flow'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY
+const APPEARANCE_ONLY = process.env.MAP_CHECK_GROUP === 'appearance'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
 let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
@@ -303,8 +306,6 @@ function inspect() {
       const d = el.getAttribute('d') || '', origin = d.match(/^M\s*(-?[\d.]+)[,\s]+(-?[\d.]+)/)
       return { id: Number(el.dataset.labelNode), key: el.dataset.pinKey, d, x: origin ? Number(origin[1]) : null, y: origin ? Number(origin[2]) : null }
     }),
-    sweepTime: svg.hasAttribute('data-sweep-time') ? Number(svg.dataset.sweepTime) : null,
-    sweepLongitude: svg.hasAttribute('data-sweep-longitude') ? Number(svg.dataset.sweepLongitude) : null,
     cameraLongitude: svg.hasAttribute('data-camera-longitude') ? Number(svg.dataset.cameraLongitude) : null,
     cameraLatitude: svg.hasAttribute('data-camera-latitude') ? Number(svg.dataset.cameraLatitude) : null,
     cameraView: { w: 460, h: svg.viewBox.baseVal.height, cx: Number(svg.dataset.cameraCx), cy: Number(svg.dataset.cameraCy), r: Number(svg.dataset.cameraR) },
@@ -317,7 +318,7 @@ function inspect() {
     cards: [...document.querySelectorAll('[data-slot="card"] h3')].map((el) => el.textContent.trim()),
     dark: document.documentElement.classList.contains('dark'), overflow: document.documentElement.scrollWidth > innerWidth + 1,
     colors: { land: getComputedStyle(svg.querySelector('.globe-land')).fill, coast: getComputedStyle(svg.querySelector('.globe-coast')).stroke },
-    clipped, overlaps, captionOverlap: caption ? labels.filter((r) => r.bottom > rect(caption).y + 1).map((r) => r.text) : panel.dataset.mapMode === '2d' ? [] : ['missing caption'],
+    clipped, overlaps, captionOverlap: caption ? labels.filter((r) => r.bottom > rect(caption).y + 1).map((r) => r.text) : [],
     labels: labels.length, controls, controlObscures, projection: projectionBox,
     bodyTop, bodyBottom, captionBox: caption ? rect(caption) : null,
     viewportWidth: innerWidth, svg: svgBox, viewBox: svg.getAttribute('viewBox'), resizeObserverErrors: window.__mapResizeErrors || [], host: rect(panel.querySelector('.globe-atlas')),
@@ -541,7 +542,7 @@ function mobileWhitespaceChecks(tag, previous, snapshot) {
     beforeCaption: item.captionBox ? item.captionBox.y - item.bodyBottom : 0,
     afterCaption: item.toolbar.y - (item.captionBox?.bottom ?? item.bodyBottom),
   })
-  const measurable = [previous, snapshot].every((item) => item.projection && (item.mode === '2d' || item.captionBox) && Number.isFinite(item.bodyTop) && Number.isFinite(item.bodyBottom))
+  const measurable = [previous, snapshot].every((item) => item.projection && Number.isFinite(item.bodyTop) && Number.isFinite(item.bodyBottom))
   check(`${tag}：上下留白比较确实量到地图、标签与底部控件`, measurable)
   if (!measurable) return
   const before = gaps(previous), after = gaps(snapshot)
@@ -572,10 +573,11 @@ function renderingChecks(tag, snapshot) {
 }
 function sharedOriginChecks(tag, snapshot) {
   if (snapshot.mode !== '3d') return
-  const expected = snapshot.pins.flatMap((pin) => expectedMembers(pin).map((node) => ({ id: node.id, key: pin.key, x: Number(pin.x), y: Number(pin.y) })))
+  const locations = new Map(globeNodes(nodes).map((point) => [point.key, point]))
+  const expected = snapshot.pins.map((pin) => ({ id: pin.id, key: pin.key, x: Number(pin.x), y: Number(pin.y), label: `${locations.get(pin.key)?.code} · ${locations.get(pin.key)?.region.label}` }))
   const labels = snapshot.memberLabels, stems = snapshot.memberStems
-  check(`${tag}：每个可见地点一枚信标，每成员各一标签与引线`, expected.length > 0 && labels.length === expected.length && stems.length === expected.length && new Set(labels.map((label) => label.id)).size === expected.length && new Set(stems.map((stem) => stem.id)).size === expected.length && expected.every((member) => labels.some((label) => label.id === member.id && label.key === member.key) && stems.some((stem) => stem.id === member.id && stem.key === member.key)), `pins=${snapshot.pins.length}, members=${expected.length}, labels=${labels.length}, stems=${stems.length}`)
-  check(`${tag}：同地点全部成员引线从唯一信标中心出发`, expected.every((member) => {
+  check(`${tag}：每个地点一组代码与城市标签及引线`, expected.length > 0 && labels.length === expected.length && stems.length === expected.length && expected.every((point) => labels.some((label) => label.id === point.id && label.key === point.key && (label.text === point.label || label.text.endsWith('…') && point.label.startsWith(label.text.slice(0, -1)))) && stems.some((stem) => stem.id === point.id && stem.key === point.key)), `pins=${snapshot.pins.length}, labels=${labels.length}, stems=${stems.length}`)
+  check(`${tag}：地点引线从唯一信标中心出发`, expected.every((member) => {
     const stem = stems.find((candidate) => candidate.id === member.id && candidate.key === member.key)
     return stem && Number.isFinite(stem.x) && Number.isFinite(stem.y) && Math.abs(stem.x - member.x) <= 0.15 && Math.abs(stem.y - member.y) <= 0.15 && !/NaN|Infinity/.test(stem.d)
   }), stems.map((stem) => `${stem.id}@${stem.x},${stem.y}`).join(' | '))
@@ -1092,13 +1094,11 @@ function installRafGate() {
     return { at, callbacks: frame.length }
   } }
 }
-async function sweepPathCheck(tag, snapshot) {
-  const { camera, globeProfile, graticule, sweepLonAt } = await import('../src/lib/globe.ts')
-  const expectedLongitude = sweepLonAt(snapshot.sweepTime)
-  check(`${tag}：扫掠逻辑时间与实际角度对应`, Number.isFinite(snapshot.sweepTime) && Number.isFinite(snapshot.sweepLongitude) && Math.abs(expectedLongitude - snapshot.sweepLongitude) < 1e-6, `time=${snapshot.sweepTime}, longitude=${snapshot.sweepLongitude}`)
-  const expected = graticule(camera(snapshot.cameraLongitude, snapshot.cameraLatitude, snapshot.cameraView), globeProfile('medium'), expectedLongitude).filter((wire) => wire.sweep >= 0).map((wire) => wire.d)
-  const actual = snapshot.paths.filter((wire) => wire.kind === 'globe-sweep').map((wire) => wire.d)
-  check(`${tag}：真实SVG扫掠路径匹配同一相机与逻辑角度`, Number.isFinite(snapshot.cameraLongitude) && Number.isFinite(snapshot.cameraLatitude) && expected.length > 0 && JSON.stringify(actual) === JSON.stringify(expected), `paths=${actual.length}/${expected.length}`)
+async function rotationPathCheck(tag, snapshot) {
+  const { camera, globeProfile, graticule } = await import('../src/lib/globe.ts')
+  const expected = graticule(camera(snapshot.cameraLongitude, snapshot.cameraLatitude, snapshot.cameraView), globeProfile('medium'), null).map((wire) => wire.d)
+  const actual = snapshot.paths.filter((wire) => wire.kind === 'globe-wire').map((wire) => wire.d)
+  check(`${tag}：静态经纬网匹配旋转相机且没有扫掠`, Number.isFinite(snapshot.cameraLongitude) && expected.length > 0 && !snapshot.paths.some((wire) => wire.kind === 'globe-sweep') && JSON.stringify(actual) === JSON.stringify(expected), `paths=${actual.length}/${expected.length}`)
 }
 async function continuityCase(name, pause, resume) {
   await pause()
@@ -1107,19 +1107,19 @@ async function continuityCase(name, pause, resume) {
   await sleep(4000)
   const frozen = await state(`${name}:after-4s`)
   const wallElapsed = await evaluate(() => Date.now()) - wallStart
-  check(`${name}：暂停4秒逻辑时间和真实路径均冻结`, wallElapsed >= 3900 && before.spinning === 'false' && frozen.spinning === 'false' && frozen.sweepTime === before.sweepTime && geometry(frozen) === geometry(before), `wall=${wallElapsed}ms, logical=${frozen.sweepTime - before.sweepTime}ms`)
+  check(`${name}：暂停4秒相机和真实路径均冻结`, wallElapsed >= 3900 && before.spinning === 'false' && frozen.spinning === 'false' && frozen.cameraLongitude === before.cameraLongitude && geometry(frozen) === geometry(before), `wall=${wallElapsed}ms`)
   await resume()
   await waitFor(() => document.querySelector('.globe-panel')?.dataset.mapSpinning === 'true')
   const resumed = await state(`${name}:before-first-frame`)
-  check(`${name}：恢复前不补暂停时间`, resumed.sweepTime === frozen.sweepTime, `logical=${resumed.sweepTime - frozen.sweepTime}ms`)
+  check(`${name}：恢复前不追赶暂停角度`, resumed.cameraLongitude === frozen.cameraLongitude)
   const frame = await evaluate(() => window.__mapRafGate.frame(80))
-  await waitFor((time) => Number(document.querySelector('svg[data-map-canvas]')?.dataset.sweepTime) > time, frozen.sweepTime)
+  await waitFor((longitude) => Number(document.querySelector('svg[data-map-canvas]')?.dataset.cameraLongitude) !== longitude, frozen.cameraLongitude)
   const after = await state(`${name}:first-frame`)
-  const delta = after.sweepTime - frozen.sweepTime
-  check(`${name}：恢复首个短帧连续，不追赶4秒墙上时间`, frame.callbacks > 0 && delta > 0 && delta < 500, `firstFrame=${delta.toFixed(2)}ms, wallPause=${wallElapsed}ms`)
-  await sweepPathCheck(name, after)
+  const delta = (after.cameraLongitude - frozen.cameraLongitude + 360) % 360
+  check(`${name}：恢复首个短帧连续，不追赶4秒墙上时间`, frame.callbacks > 0 && delta > 0 && delta < 3.75, `firstFrame=${delta.toFixed(2)}°, wallPause=${wallElapsed}ms`)
+  await rotationPathCheck(name, after)
 }
-async function sweepContinuity() {
+async function rotationContinuity() {
   await navigate() // 重新载入正常存储上下文，移除前面故意拒绝Storage的当前文档。
   const gate = await send('Page.addScriptToEvaluateOnNewDocument', { source: `(${installRafGate.toString()})()` })
   await viewport(1440, 1000)
@@ -1127,7 +1127,7 @@ async function sweepContinuity() {
   await preferences('3d', '1')
   await evaluate(() => window.__mapRafGate.frame(80))
   await sleep(100)
-  await sweepPathCheck('连续性基准', await state('sweep-controlled-baseline'))
+  await rotationPathCheck('连续性基准', await state('rotation-controlled-baseline'))
   await continuityCase('手动暂停恢复', () => control('spin'), () => control('spin'))
   await continuityCase('2D返回3D', () => mode('2d'), () => mode('3d'))
   let held
@@ -1224,7 +1224,7 @@ async function flowChecks() {
     const panel = document.querySelector('.globe-panel')
     const ring = panel.querySelector('[data-map-flow-center]')
     return {
-      name: panel.querySelector('.globe-flow-legend span')?.textContent,
+      clean: !panel.querySelector('.globe-flow-legend,[data-map-control="flow"],.globe-sweep,.globe-base,.globe-caption'),
       center: ring && [Number(ring.getAttribute('cx')), Number(ring.getAttribute('cy'))],
       centerBack: ring?.dataset.back,
       routes: [...panel.querySelectorAll('[data-map-flow-route]')].map((route) => ({
@@ -1253,7 +1253,7 @@ async function flowChecks() {
   await preferences('3d', '0')
   await waitFor(() => !!document.querySelector('[data-map-flow-center]'))
   const globe = await snapshot()
-  check('3D 空间弧包含全部地点，中心可选同地点的非首个成员', globe.name?.includes('Frankfurt 中心') && globe.routes.length === 3 && globe.routes.filter((route) => route.active).length === 2 && globe.routes.every((route) => route.arrow))
+  check('3D 空间弧包含全部地点并移除说明与装饰', globe.clean && globe.routes.length === 3 && globe.routes.filter((route) => route.active).length === 2 && globe.routes.every((route) => route.arrow))
   const spatialGeometry = () => evaluate(() => {
     const svg = document.querySelector('svg[data-map-canvas]')
     const frame = svg.viewBox.baseVal
@@ -1275,7 +1275,7 @@ async function flowChecks() {
   await navigate()
   await waitFor(() => document.querySelector('[data-map-flow-center]')?.dataset.back === 'true')
   const rear = await snapshot()
-  check('中心位于背面仍保留全部路线，金圈与文字标明背面', rear.routes.length === 3 && rear.routes.some((route) => route.back) && rear.name?.includes('背面') && await evaluate(() => !document.querySelector('.hit[data-node="205"]')))
+  check('中心位于背面仍保留全部路线及虚线金圈', rear.clean && rear.routes.length === 3 && rear.routes.some((route) => route.back) && rear.centerBack === 'true' && await evaluate(() => !document.querySelector('.hit[data-node="205"]')))
   await screenshot('flow-3d-center-behind')
   const frozenGeometry = (await spatialGeometry()).data
   await motion(true)
@@ -1292,7 +1292,7 @@ async function flowChecks() {
           Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, String(value))
           input.dispatchEvent(new Event('input', { bubbles: true }))
         }, zoom)
-        await waitFor((value) => Number(document.querySelector('svg[data-map-canvas]')?.dataset.cameraR) === 92 * value / 100, zoom)
+        await waitFor((value, radius) => Number(document.querySelector('svg[data-map-canvas]')?.dataset.cameraR) === radius * value / 100, zoom, VIEW.r)
         check(`空间弧/${width}/${dark ? '暗' : '亮'}/${zoom}%：背面中心线路可见且未裁切`, (await snapshot()).routes.length === 3 && (await spatialGeometry()).inside && !(await state()).overflow)
       }
     }
@@ -1312,21 +1312,17 @@ async function flowChecks() {
   }, flat.animation[0].offset)
   check('2D 光点沿 SVG 路径从源点向中心推进', flat.animation.every((item) => item.state === 'running'))
   await screenshot('flow-2d-dark')
-  await control('flow')
-  const paused = await snapshot()
-  await sleep(220)
-  check('暂停光点后线路与箭头保留且进度冻结', paused.routes.length === 3 && paused.animation.every((item) => item.state === 'paused') && JSON.stringify(paused.animation) === JSON.stringify((await snapshot()).animation))
-  await control('flow')
+  check('2D 移除中心说明与流向暂停按钮', flat.clean)
   await media(false, true)
   const reduced = await snapshot()
   check('减弱动态效果保留箭头并隐藏光点', reduced.routes.length === 3 && reduced.animation.every((item) => item.display === 'none'))
   await media(false)
   await viewport(320, 720)
-  check('320px 可见流向，流向说明不使页面横向溢出', (await snapshot()).routes.length === 3 && !(await state()).overflow)
+  check('320px 可见流向且页面不横向溢出', (await snapshot()).routes.length === 3 && !(await state()).overflow)
   await screenshot('flow-2d-light-mobile')
   await viewport(1440, 1000)
   await evaluate(() => [...document.querySelectorAll('.group-tab')].find((button) => button.firstChild?.textContent.trim() === '亚太')?.click())
-  await waitFor(() => !document.querySelector('.globe-flow-legend'))
+  await waitFor(() => !document.querySelector('[data-map-flow-center]'))
   check('当前分组不含中心时不画线路', (await snapshot()).routes.length === 0 && (await snapshot()).center === null)
   nodes = nodes.map((node) => node.id === 202 ? { ...node, online: false } : node)
   await navigate()
@@ -1338,6 +1334,34 @@ async function flowChecks() {
   flowCenterId = undefined
   nodes = ordinaryNodes
   await preferences(null, null)
+}
+
+async function appearanceChecks() {
+  await preferences('3d', '0')
+  for (const width of [1440, 768, 390, 320]) {
+    await viewport(width, width <= 390 ? 844 : 1000)
+    for (const selectedMode of ['3d', '2d']) {
+      await mode(selectedMode)
+      for (const dark of [false, true]) {
+        await media(dark)
+        for (const percent of [50, 100, 150]) {
+          await evaluate((value) => {
+            const input = document.querySelector('.globe-controls input')
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, String(value))
+            input.dispatchEvent(new Event('input', { bubbles: true }))
+          }, percent)
+          await waitFor((value) => document.querySelector('.globe-controls output')?.textContent === `${value}%`, percent)
+          await sleep(250) // 等待缩放触发的 ResizeObserver 和标签留白重新计算。
+          const tag = `简化地图/${selectedMode}/${width}/${dark ? '暗' : '亮'}/${percent}%`
+          const snapshot = await state(tag)
+          layoutChecks(tag, snapshot)
+          check(`${tag}：移除流向说明、独立暂停、扫掠和底注`, await evaluate(() => !document.querySelector('.globe-flow-legend,[data-map-control="flow"],.globe-sweep,.globe-base,.globe-caption')))
+          if (selectedMode === '3d') check(`${tag}：放大的球体遵循缩放倍率`, snapshot.cameraView.r === VIEW.r * percent / 100 && VIEW.r > 100)
+          if (percent === 100) await screenshot(`appearance-${selectedMode}-${width}-${dark ? 'dark' : 'light'}`)
+        }
+      }
+    }
+  }
 }
 
 function layoutChecks(tag, snapshot) {
@@ -1402,6 +1426,7 @@ try {
   await navigate()
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
   if (FLOW_ONLY) await flowChecks()
+  if (APPEARANCE_ONLY) await appearanceChecks()
   if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
@@ -1594,11 +1619,11 @@ try {
   // 移除启动脚本只影响下次加载，先恢复未覆写 localStorage 的 document。
   await navigate()
   await beaconGateChecks()
-  await sweepContinuity()
+  await rotationContinuity()
   await aggregateMarkerChecks()
   await flowChecks()
   }
-  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY) {
+  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY) {
     if (!LOCATIONS_ONLY) await nodeInteractionChecks()
     if (!TOUCH_ONLY) await smallLocationChecks()
   }
@@ -1606,7 +1631,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

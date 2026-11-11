@@ -408,8 +408,6 @@
 .globe-coast { fill: none; stroke: var(--foreground); stroke-width: 0.55; stroke-opacity: 0.32; }
 .globe-disk { fill: url(#globe-shade); stroke: var(--foreground); stroke-width: 0.85; stroke-opacity: 0.34; }
 .globe-wire { fill: none; stroke: var(--foreground); stroke-opacity: 0.1; }
-.globe-sweep { fill: none; stroke: var(--foreground); }
-.globe-base { stroke: var(--foreground); stroke-opacity: 0.4; stroke-width: 1; }
 .globe-stem { fill: none; stroke: var(--foreground); stroke-width: 0.75; }
 
 .globe-flow-track, .globe-flow-arrow, .globe-flow-pulse, .globe-flow-center {
@@ -515,13 +513,6 @@
   paint-order: stroke;
   stroke-linejoin: round;
 }
-.globe-caption {
-  fill: var(--muted-foreground);
-  font-family: ui-monospace, SFMono-Regular, "IBM Plex Mono", monospace;
-  font-size: 8.8px;
-  letter-spacing: 1.4px;
-  opacity: 0.55;
-}
 
 .globe-side {
   min-width: 0;
@@ -539,15 +530,6 @@
   .globe-side { border-top: 0; border-left: 1px solid var(--border); }
 }
 .globe-side-title { grid-column: 1 / -1; color: var(--muted-foreground); }
-.globe-flow-legend {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-foreground);
-}
-.globe-flow-legend span { min-width: 0; overflow-wrap: anywhere; }
-.globe-flow-legend button { flex: none; }
 .globe-reg {
   display: flex;
   align-items: center;

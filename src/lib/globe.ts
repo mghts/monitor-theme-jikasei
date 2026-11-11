@@ -1,10 +1,9 @@
 /**
  * 节点地球的全部几何：正射投影、海岸线取点、经纬网、节点落点与标签排布。
  *
- * 这是从上游（它的 `js/app.js` 里 atlas/globe 那一段）移植过来的，**输出与它逐点一致**：
- * 同一个视角、同样的 viewBox 460×240、同样的圆盘圆心 (230,112) 半径 92、同样的抽样步长与
- * 曲线步长、标签堆叠与左右分流的规则也照搬。
- * 差别只有两处，都是实现手段而不是结果：
+ * 投影与岸线裁边来自上游 `js/app.js` 的 atlas/globe。当前默认构图为 460×240，
+ * 圆心 (230,120)、半径 104；每个地点共用一组代码与城市标签。
+ * 投影计算使用以下优化：
  *
  *   ① 上游每个点每帧都要现算 `sin/cos`（`cosc = sinφ₀sinφ + cosφ₀cosφ·cos(λ−λ₀)`
  *      那一套，一个点四五次三角函数）；这里把每个点**先落成单位球面上的向量**
@@ -21,7 +20,7 @@ import { CITY_HINTS, COUNTRY_CITY_FALLBACK, COUNTRY_LL, COUNTRY_NAMES, type Ring
 import type { Node } from "@/lib/api"
 
 /** 画布与圆盘。上游 SVG 的 `viewBox="0 0 460 240"` 就是这几个数，改它们等于换一套构图。 */
-export const VIEW = { w: 460, h: 240, cx: 230, cy: 112, r: 92 } as const
+export const VIEW = { w: 460, h: 240, cx: 230, cy: 120, r: 104 } as const
 export type GlobeView = Readonly<{ w: number; h: number; cx: number; cy: number; r: number }>
 export const GLOBE_ZOOM = { min: 50, max: 150, step: 5, default: 100 } as const
 
@@ -32,8 +31,8 @@ export function zoomView(percent: number, labelCount = 0): GlobeView {
   // 左右数量差最多 2；用全部落点预留空间，避免自转过程中可见数量变化导致高度跳动。
   const rows = Math.ceil(Math.max(0, Number.isFinite(labelCount) ? labelCount : 0) / 2) + 1
   const gap = rows > 14 ? 11 : 13
-  const h = Math.max(VIEW.h, r * 2 + 56, 12 + (rows - 1) * gap + 36)
-  return { w: VIEW.w, h, cx: VIEW.cx, cy: (h - 16) / 2, r }
+  const h = Math.max(VIEW.h, r * 2 + 32, 24 + (rows - 1) * gap)
+  return { w: VIEW.w, h, cx: VIEW.cx, cy: h / 2, r }
 }
 
 /** 极角余弦的可见阈值：`cos c > 0.02` 才画（≈ 中心 88.9° 以内，多留一点余量好裁边）。 */
@@ -819,7 +818,7 @@ export type PlacedLabel = {
   end: boolean
   /** 最终显示的那一行（按落到的左右侧从下面两个里取）。 */
   label: string
-  /** 两个方向各自的那一行（左侧写「名字 · 国家」、右侧写「国家 · 名字」）。 */
+  /** 两侧都使用「国家/地区代码 · 城市或已确认的地区名」。 */
   left: string
   right: string
   width: number
@@ -840,16 +839,16 @@ export type Placed = GlobeNode & {
 }
 
 /**
- * 标签排布：每枚针的每个成员各连到左右两摞里的一行字上，信标与命中区域仍只出一份。
+ * 标签排布：每个地点一行代码与城市名，完整成员名称仍保存在信标数据中。
  *
  * 步骤（除③外都是上游的原样）：
  *   ① 投影，投影不到的（在背面）直接不要；
  *   ② 左右分流：以圆心为界，中心附近 ±18 的按上一帧的选择留在原侧（否则在这个角度上会左右闪烁）；
  *   ③ 两侧数量差超过 2 就把**离中心最近**的那几个挪到对面（地理位置仍然主导）；
  *   ④ 每摞按 y 排序、等距铺开（间距 13，超过 14 行时压到 11），整摞居中于它们的平均高度，
- *      再夹在画布上下边界之间（默认 12~204）—— 避开底部说明。
+ *      再夹在画布上下边界之间（各留 12）。
  *
- * `sides` 是跨帧记忆（信标键 + 成员 ID → 左/右），由调用方持有（React 里放 ref）。
+ * `sides` 是跨帧记忆（信标键 → 左/右），由调用方持有（React 里放 ref）。
  *
  * `maxWidth` 是"一行标签最宽能有多宽"（用户单位，见组件的画布留白那段）：宽屏上它很大
  * （两侧的空白也算进去），窄屏上就只剩两摞标签到画布边缘的那点地方 —— 超出的字用 `…` 截掉，
@@ -860,15 +859,13 @@ export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode
   for (const point of points) {
     const p = cam.at(point.ll[0], point.ll[1])
     if (!p) continue
-    const labels = point.memberLabels.map((member) => {
-      const left = trimLabel(`${member.name} · ${member.code}`, maxWidth, measure)
-      const right = trimLabel(`${member.code} · ${member.name}`, maxWidth, measure)
-      return {
-        ...member, key: `${point.key}:${member.id}`, px: p.x, py: p.y, lx: 0, ly: 0, end: false, label: right,
-        width: Math.max(inkWidthWith(measure, left), inkWidthWith(measure, right)), left, right,
-      }
-    })
-    if (labels.length) visible.push({ point, px: p.x, py: p.y, labels })
+    const label = trimLabel(`${point.code} · ${point.region.label}`, maxWidth, measure)
+    const labels = [{
+      id: point.id, name: point.region.label, code: point.code, index: point.index,
+      key: point.key, px: p.x, py: p.y, lx: 0, ly: 0, end: false, label,
+      width: inkWidthWith(measure, label), left: label, right: label,
+    }]
+    visible.push({ point, px: p.x, py: p.y, labels })
   }
   const items = visible.flatMap((item) => item.labels)
   const left: PlacedLabel[] = []
@@ -896,8 +893,8 @@ export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode
     if (!list.length) return
     list.sort((a, b) => a.py - b.py || a.index - b.index)
     const top = 12
-    const bottom = cam.view.h - 36
-    // zoomView 按全部成员计高度，通常保留 11/13 行距；错误传入过小画布时仍不越界。
+    const bottom = cam.view.h - 12
+    // zoomView 按地点数计高度，通常保留 11/13 行距；错误传入过小画布时仍不越界。
     const gap = Math.min(list.length > 14 ? 11 : 13, Math.max(0, bottom - top) / Math.max(1, list.length - 1))
     const mean = list.reduce((sum, item) => sum + item.py, 0) / list.length
     let y0 = mean - ((list.length - 1) * gap) / 2
@@ -913,7 +910,7 @@ export function layoutLabels(cam: Pick<Camera, "view" | "at">, points: GlobeNode
       sides.set(item.key, end ? "L" : "R")
     })
   }
-  // 两摞与圆盘保持 15 个用户单位间距；100% 时仍是上游的 123 / 337。
+  // 两摞与圆盘保持 15 个用户单位间距。
   const offset = cam.view.r + 15
   stack(left, cx - offset, true)
   stack(right, cx + offset, false)

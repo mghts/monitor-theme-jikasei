@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { extname, join, normalize } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { globeNodes, VIEW } from '../src/lib/globe.ts'
 
 const PORT = Number(process.env.LAYOUT_PORT || 5201)
 const DIST = process.env.LAYOUT_DIST || process.env.MAP_DIST || 'dist'
@@ -177,10 +178,10 @@ const PROBE = `(() => {
   const unnecessaryTruncation = []
   for (const text of svg.querySelectorAll('text.globe-label')) {
     if (!(text.textContent || '').includes('…')) continue
-    const node = ${JSON.stringify(NODES.nodes.map(({id, name, country}) => ({id, name, country})))}.find((item) => item.id === Number(text.getAttribute('data-label-node')))
+    const node = ${JSON.stringify(globeNodes(NODES.nodes).map((point) => ({ id: point.id, name: point.region.label, country: point.code })))}.find((item) => item.id === Number(text.getAttribute('data-label-node')))
     if (!node) continue
     const end = text.getAttribute('text-anchor') === 'end'
-    const full = end ? node.name + ' · ' + node.country : node.country + ' · ' + node.name
+    const full = node.country + ' · ' + node.name
     const matrix = text.getScreenCTM()
     const anchor = new DOMPoint(Number(text.getAttribute('x')), Number(text.getAttribute('y'))).matrixTransform(matrix)
     const available = end ? anchor.x - svgBox.left : svgBox.right - anchor.x
@@ -193,8 +194,7 @@ const PROBE = `(() => {
     if (fullWidth + margin < available - 1) unnecessaryTruncation.push(full + ' ' + fullWidth.toFixed(1) + 'px / 可用 ' + available.toFixed(1) + 'px')
   }
   const caption = svg.querySelector('.globe-caption')?.getBoundingClientRect()
-  const captionOverlap = caption ? labels.filter((b) => b.screen.b > caption.top + 0.5).map((b) => b.full) : ['找不到底部经纬度文案']
-  const captionClipped = !caption || caption.left < svgBox.left - 0.5 || caption.right > svgBox.right + 0.5 || caption.top < svgBox.top - 0.5 || caption.bottom > svgBox.bottom + 0.5
+  const unwantedDecorations = svg.querySelectorAll('.globe-caption,.globe-base,.globe-sweep').length
   const toolbar = document.querySelector('.globe-toolbar')?.getBoundingClientRect()
   const dockOverlap = toolbar ? labels.filter((b) => b.screen.b > toolbar.top + 0.5).map((b) => b.full) : ['找不到底角控件']
   if (toolbar && caption && caption.bottom > toolbar.top + 0.5) dockOverlap.push('底部经纬度文案')
@@ -207,8 +207,7 @@ const PROBE = `(() => {
   const hits = [...svg.querySelectorAll('.hit[data-node]')]
   const memberLabels = [...svg.querySelectorAll('text.globe-label')]
   const memberStems = [...svg.querySelectorAll('path.globe-stem')]
-  const groups = [[1, 2, 3, 11], [8, 12]]
-  const expected = hits.flatMap((hit) => (groups.find((group) => group.includes(Number(hit.dataset.node))) || [Number(hit.dataset.node)]).map((id) => ({ id, key: hit.dataset.pinKey, x: Number(hit.getAttribute('cx')), y: Number(hit.getAttribute('cy')) })))
+  const expected = hits.map((hit) => ({ id: Number(hit.dataset.node), key: hit.dataset.pinKey, x: Number(hit.getAttribute('cx')), y: Number(hit.getAttribute('cy')) }))
   const memberIssues = []
   if (memberLabels.length !== expected.length || memberStems.length !== expected.length) memberIssues.push('数量 ' + memberLabels.length + '/' + memberStems.length + '/' + expected.length)
   for (const item of expected) {
@@ -217,7 +216,7 @@ const PROBE = `(() => {
     const origin = stems.length === 1 ? num(stems[0].getAttribute('d')).slice(0, 2) : []
     if (names.length !== 1 || stems.length !== 1 || origin.length !== 2 || Math.abs(origin[0] - item.x) > 0.15 || Math.abs(origin[1] - item.y) > 0.15) memberIssues.push('成员 ' + item.id + ' 标签/引线或起点不符')
   }
-  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, countLabels: svg.querySelectorAll('.globe-count').length, memberIssues, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, captionOverlap, captionClipped, dockOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
+  return { radius: R, zoom: slider ? Number(slider.value) : null, landPaths, maxStep, maxStepAt, maxChord, maxChordAt, segCount, ptCount, pins: pins.length, lineCount, lineWorst, outside, labels: labels.map((b) => ({ text: b.text, w: +b.w.toFixed(1) })), labelCount: labels.length, countLabels: svg.querySelectorAll('.globe-count').length, memberIssues, overlaps, spill, outOfBox, clipped, truncated, unnecessaryTruncation, unwantedDecorations, dockOverlap, hostW: +hostBox.width.toFixed(0), viewBox: vb.join(' ') }
 })()`
 
 let pass = 0, fail = 0
@@ -263,18 +262,18 @@ for (const [w, h, tag] of SIZES) {
     if (process.env.DEBUG) console.log('      标签宽：' + d.labels.map((l) => l.text + '=' + l.w.toFixed(0)).join(' | '))
     // ★ 先钉住「探针确实看到了东西」——否则下面几条会在空集上假 PASS
     check(`${tag}·${label} 探针确实量到了陆地/定位点/标签`, d.landPaths > 0 && d.pins > 0 && d.labelCount > 0, `land=${d.landPaths} pins=${d.pins} labels=${d.labelCount}`)
-    check(`${tag}·${label} 圆盘半径与当前滑条倍率一致`, d.zoom === zoom && d.radius === 92 * zoom / 100, `倍率 ${d.zoom}% / r=${d.radius}`)
+    check(`${tag}·${label} 圆盘半径与当前滑条倍率一致`, d.zoom === zoom && d.radius === VIEW.r * zoom / 100, `倍率 ${d.zoom}% / r=${d.radius}`)
     const scale = d.radius / 92
     check(`${tag}·${label} 陆地路径没有「一步跨过半个圆盘」的直线`, d.maxStep <= 40 * scale + 0.1, `最大 ${d.maxStep.toFixed(1)} / 上限 ${(40 * scale).toFixed(1)} @ ${d.maxStepAt}`)
     // ★ 收口那刀：两头都贴地平线时，闭合弦必须短（旧版这里是 99.9 单位的横跨弦 → 丢一牙陆地）。
     check(`${tag}·${label} 贴地平线的收口没有横跨圆盘的长弦`, d.maxChord <= 16 * scale + 0.1, `最长 ${d.maxChord.toFixed(1)} / 上限 ${(16 * scale).toFixed(1)} @ ${d.maxChordAt}`)
     check(`${tag}·${label} 定位点/连线都在圆盘内`, d.outside.length === 0, d.outside.slice(0, 4).join(' | '))
-    check(`${tag}·${label} 同地点每成员保留独立标签与同起点引线`, d.memberIssues.length === 0, d.memberIssues.slice(0, 4).join(' | '))
+    check(`${tag}·${label} 每个地点一组标签与同起点引线`, d.memberIssues.length === 0, d.memberIssues.slice(0, 4).join(' | '))
     check(`${tag}·${label} 信标旁没有台数文本`, d.countLabels === 0, 'globe-count=' + d.countLabels)
     check(`${tag}·${label} 地区标签互不重叠`, d.overlaps.length === 0, d.overlaps.slice(0, 3).join(' | '))
     check(`${tag}·${label} 地区标签都落在 SVG 盒里（没有半个字被视口裁掉）`, d.clipped.length === 0, `盒宽 ${d.hostW}｜${d.clipped.slice(0, 3).join(' | ')}`)
-    check(`${tag}·${label} 底部经纬度文案在所有标签下方`, d.captionOverlap.length === 0, d.captionOverlap.slice(0, 3).join(' | '))
-    check(`${tag}·${label} 底部经纬度文案完整，标签与说明不覆盖底角控件`, !d.captionClipped && d.dockOverlap.length === 0, d.dockOverlap.slice(0, 3).join(' | '))
+    check(`${tag}·${label} 没有扫掠经线、底部投影文案与横线`, d.unwantedDecorations === 0)
+    check(`${tag}·${label} 标签不覆盖底角控件`, d.dockOverlap.length === 0, d.dockOverlap.slice(0, 3).join(' | '))
     if (d.truncated.length) console.log(`      截断 ${d.truncated.length} 条：${d.truncated.slice(0, 3).join(' | ')}`)
     // 宽屏地图变大后，长名称可能需要省略；有实际余量却省略仍然属于回归。
     if (tag.startsWith('桌面 1440') && zoom === 100) check(`${tag}·${label} 全文有实际余量时不截字`, d.unnecessaryTruncation.length === 0, d.unnecessaryTruncation.slice(0, 3).join(' | '))
@@ -283,7 +282,7 @@ for (const [w, h, tag] of SIZES) {
   await js(`document.querySelector('.globe-controls button[aria-label="重置地球缩放"]')?.click()`)
   await sleep(150)
   const restored = await js(PROBE)
-  check(`${tag}：极值验收之后恢复默认倍率`, restored?.zoom === 100 && restored?.radius === 92)
+  check(`${tag}：极值验收之后恢复默认倍率`, restored?.zoom === 100 && restored?.radius === VIEW.r)
 }
 
 console.log(`\n结果: PASS ${pass} / FAIL ${fail}`)

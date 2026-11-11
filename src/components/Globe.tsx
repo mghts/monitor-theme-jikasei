@@ -3,8 +3,8 @@ import { ChevronRight, Minus, Pause, Play, Plus, X } from "lucide-react"
 import { Dialog, Tooltip } from "radix-ui"
 
 import {
-  camera, clampLat, globeCaption, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
-  GLOBE_ZOOM, prepareRings, regionRows, sweepLonAt, sweepOpacity, VIEW, wrapLon, zoomView, type Placed, type Quality,
+  camera, clampLat, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
+  GLOBE_ZOOM, prepareRings, regionRows, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
 import { flatCamera, flatNodes, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
@@ -13,8 +13,8 @@ import type { Node } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
 /**
- * 列表页顶部的「节点地球」：正射投影的一颗地球，每台机器一枚针、一条引线连到左右两摞
- * 标签上，旁边一条一条列着地区。2D 只显示可点击的节点标记，地图按可用区域铺开。
+ * 列表页顶部的「节点地球」：正射投影的一颗地球，每个地点一枚信标、一条引线连到左右两摞
+ * 地点标签上，旁边列出地区。2D 只显示可点击的节点标记，地图按可用区域铺开。
  * 几何与排布在 `@/lib/globe` 与 `@/lib/map` 里。
  *
  * 这一层负责 3D/2D 切换、重画、旋转、缩放、节点点击与地区筛选。
@@ -24,8 +24,7 @@ import { Button } from "@/components/ui/button"
  *   · 空闲时按档位的 `idleMs` 重画（medium 64ms ≈ 15fps，low 90ms ≈ 11fps），
  *     每帧只把经纬度往前推一点点，看起来是匀速自转，实际画的是 11~15 张/秒；
  *   · 拖拽时跟着指针事件走（指针多快就多快，一次事件一张）；
- *   · 钉住某个地区（点过侧栏）就**不再自转**，也不再重画 —— 扫掠经线随之停住，
- *     与上游一致（上游钉住后连空闲定时器都不重画）。
+ *   · 钉住某个地区（点过侧栏）就不再自转，也不再重画。
  *   · 手动暂停、2D 模式、滚出视口、标签页在后台、系统开了「减弱动态效果」，都停。
  *
  * 拖动只接管**横向**（`touch-action: pan-y`）：竖着划是滚页面。上游把整个地球的
@@ -76,11 +75,9 @@ function measureLabel(text: string): number | null {
   return labelCtx.measureText(text).width
 }
 
-export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onWarm }: {
+export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }: {
   /** 当前分组里的节点（与概览卡片、下面的列表同一批）。 */
   nodes: Node[]
-  /** 深色模式：只影响扫掠经线的透明度。 */
-  dark: boolean
   flowCenterId: number | null
   /** 选中的地区键（null = 全部）。 */
   region: string | null
@@ -94,7 +91,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
    * ★ 窄屏（≤720px）**不再降档**。2026-10-07 站长看过手机上的 low 档之后说「地球太简陋了」——
    * 那一档只有 104 个点的粗岸线（一格 60° 的网、不画扫掠、不画引线），确实就是一张草图。
    * 现在跟桌面同档：detailed 岸线（79 环 / 1483 点，但每帧只投影**正面那一半**，约 500 点）、
-   * 30° 经纬网、1 条扫掠、引线。代价是手机上每帧多做约 4 倍的点与路径字符串 ——
+   * 30° 经纬网与地点引线。代价是手机上每帧多做约 4 倍的点与路径字符串 ——
    * **真机若发烫或掉帧，回退就是下面那个开关改回 `true`（一行）**，别犹豫。
    */
   const NARROW_LOW_TIER = false
@@ -106,7 +103,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   )
   const flatPrep = useMemo(() => prepareMapRings(WORLD_OUTLINES), [])
   const points = useMemo(() => globeNodes(nodes), [nodes])
-  const labelCount = points.reduce((count, point) => count + point.nodeIds.length, 0)
+  const labelCount = points.length
   const pointByKey = useMemo(() => new Map(points.map((point) => [point.key, point])), [points])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const flowNode = flowCenterId === null ? undefined : nodeById.get(flowCenterId)
@@ -122,8 +119,6 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const [flatView, setFlatView] = useState({ lon: 0, lat: 0 })
   const [mode, setMode] = useState<MapMode>(savedMode)
   const [rotating, setRotating] = useState(savedRotation)
-  const [flowPaused, setFlowPaused] = useState(false)
-  const [sweepTime, setSweepTime] = useState(() => Date.now())
   // 点过侧栏的地区就钉住：不再自转（否则刚飞过去又转走了）。
   const [pinned, setPinned] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -212,7 +207,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const located = pinned && region !== null
   const rotationOn = rotating && !located
   const spinning = mode === "3d" && rotating && inView && pageVisible && !dragging && !located && !reduced && !hoveredPoint && !focusedPoint && !choosing
-  const flowPlaying = inView && pageVisible && !reduced && !dragging && !choosing && !flowPaused
+  const flowPlaying = inView && pageVisible && !reduced && !dragging && !choosing
 
   useEffect(() => {
     if (!spinning) return
@@ -226,8 +221,6 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
       const dt = Math.min(1000, now - last)
       last = now
       setView((v) => ({ ...v, lon: wrapLon(v.lon + dt * 0.0075) }))
-      // 扫掠仅累计实际播放时间；暂停、切换模式和后台时不追赶墙上时间。
-      setSweepTime((time) => time + dt)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
@@ -363,10 +356,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const canvas = useMemo(() => {
     const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${frame.w} ${frame.h}` }
     if (mode === "2d" || !box || !points.length) return plain
-    const ink = Math.max(0, ...points.flatMap((p) => p.memberLabels.map((member) => Math.max(
-      inkWidthWith(measured, `${member.name} · ${member.code}`),
-      inkWidthWith(measured, `${member.code} · ${member.name}`),
-    ))))
+    const ink = Math.max(0, ...points.map((point) => inkWidthWith(measured, `${point.code} · ${point.region.label}`)))
     const scale = Math.min(box.w / frame.w, box.h / frame.h)
     // 一侧还剩多少余量（用户单位）：宽屏是"容器比画布宽"留下的空白，窄屏约等于 0。
     // 手机按最终 viewBox 宽度决定高度，左右余量只由 pad 提供，避免高度与 pad 相互反馈。
@@ -411,9 +401,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
   const cam = camera(view.lon, view.lat, frame)
   const flat = flatCamera(flatView.lon, flatLat, zoom, mapBounds)
   const land = mode === "3d" ? landPaths(cam, prep) : mapPaths(flat, flatPrep)
-  const wires = mode === "3d"
-    ? graticule(cam, profile, profile.sweepCount ? sweepLonAt(sweepTime) : null)
-    : []
+  const wires = mode === "3d" ? graticule(cam, profile, null) : []
   const flatPoints = mode === "2d" ? flatNodes(points, flat) : []
   // ★ 这里读 ref 是有意的，也是这套排布必须的：那两个字是**跨帧记忆**——
   // 圆心附近 ±18 的机器（正在转到中缝上的那几台）如果每帧重新判左右，标签会在两摞之间
@@ -453,7 +441,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
           onLostPointerCapture={(e) => endDrag(e, false)}
         >
           {/* 装饰层单独隐藏，信标提供有名称的键盘入口与多节点选择。 */}
-          <svg data-map-canvas data-sweep-time={sweepTime} data-sweep-longitude={sweepLonAt(sweepTime)} data-camera-longitude={view.lon} data-camera-latitude={view.lat} data-camera-cx={frame.cx} data-camera-cy={frame.cy} data-camera-r={frame.r} viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" role="group" aria-label="地图节点" focusable="false">
+          <svg data-map-canvas data-camera-longitude={view.lon} data-camera-latitude={view.lat} data-camera-cx={frame.cx} data-camera-cy={frame.cy} data-camera-r={frame.r} viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" role="group" aria-label="地图节点" focusable="false">
             <defs>
               {/* 圆盘里那层明暗：中心几乎透明、边上压到 `--globe-rim`（上游同一套停点）。 */}
               <radialGradient id="globe-shade" cx="38%" cy="36%" r="68%">
@@ -486,13 +474,11 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
             {wires.map((wire, i) => (
               <path
                 key={i}
-                className={wire.sweep >= 0 ? "globe-sweep" : "globe-wire"}
+                className="globe-wire"
                 d={wire.d}
                 strokeWidth={wire.width}
-                style={wire.sweep >= 0 ? { strokeOpacity: sweepOpacity(dark, wire.sweep) } : undefined}
               />
             ))}
-            {mode === "3d" && <line className="globe-base" x1={frame.cx - frame.r - 28} y1={frame.h - 20} x2={frame.cx + frame.r + 28} y2={frame.h - 20} />}
             </g>
             {flowPaths.length > 0 && (
               <g aria-hidden="true" clipPath={flowBounds ? `url(#${flowClipId})` : undefined}>
@@ -528,9 +514,6 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
                 <Pin key={p.key} p={p} hitArea={hitAreas[index]} members={p.nodeIds.flatMap((id) => { const node = nodeById.get(id); return node ? [node] : [] })} markerScale={markerScale} glowId={beaconGlowId} active={hoveredKey === p.key || focusedKey === p.key} tooltipOpen={hoveredKey === p.key && !dragging && !choosing} choiceId={choiceId} choosing={choiceKey === p.key && choosing} onHover={hoverPoint} onFocus={setFocusedKey} onActivate={activatePoint} onWarm={onWarm} />
               ))}
             </g>
-            {mode === "3d" && <text className="globe-caption" aria-hidden="true" x={frame.cx} y={frame.h - 8} textAnchor="middle">
-              {globeCaption(view.lon, view.lat, profile.key)}
-            </text>}
           </svg>
         </div>
         <div ref={controls} className="globe-toolbar">
@@ -629,14 +612,6 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
               </b>
             </button>
           ))}
-          {flowNode && flowPoint && (
-            <div className="globe-flow-legend">
-              <span>流向示意 · 中心 {flowNode.name}{flowCenterBack ? " · 背面" : ""}</span>
-              <Button variant="ghost" size="icon-sm" disabled={reduced} aria-label={flowPaused ? "播放流向动效" : "暂停流向动效"} title={reduced ? "系统已开启减弱动态效果" : flowPaused ? "播放流向动效" : "暂停流向动效"} data-map-control="flow" onClick={() => setFlowPaused((paused) => !paused)}>
-                {flowPaused ? <Play /> : <Pause />}
-              </Button>
-            </div>
-          )}
         </div>
       </aside>
     </section>
@@ -647,7 +622,7 @@ export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onW
 /**
  * 100% 时的柔光信标：核心 6.4px、外圈 11.52px（含描边）、光晕 15.04px，随缩放同步变化。
  * 在线绿芯绿圈，离线红芯红圈带短横，部分离线绿芯红圈；核心常亮且不描黑边。
- * 3D 每个成员各有引线与标签，2D 仅画标记；每个地点只有一个命中区域。
+ * 3D 每个地点一条引线及标签，2D 仅画标记；每个地点只有一个命中区域。
  */
 function Pin({ p, hitArea, members, markerScale, glowId, active, tooltipOpen, choiceId, choosing, onHover, onFocus, onActivate, onWarm }: {
   p: Placed | FlatNode

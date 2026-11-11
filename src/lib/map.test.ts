@@ -308,6 +308,23 @@ for (const location of [[180, 0], [179.9999999, 0], [0, 90], [0, -90]] as [numbe
   const singular = prepareGlobeFlows([spatialSource], node(54, location), true)
   assert.ok(globeFlowPaths(singular, frontCamera, 1).every((route) => !/NaN|Infinity/.test(route.d + route.arrow)), "对跖点及两极路径坐标有限")
 }
+const routeLocations: [number, number][][] = [
+  [[0, 60], [180, 60]],
+  [[0, -60], [180, -60]],
+  [[-121.9, 37.34], [8.68, 50.11]],
+  [[-70.67, -33.45], [144.96, -37.81]],
+  [[10, 85], [-100, 65]],
+]
+for (const [from, to] of routeLocations) {
+  const route = prepareGlobeFlows([node(60, from)], node(61, to), true)[0]
+  const latitudes = route.samples.map((sample) => Math.asin(sample[1] / Math.hypot(...sample)) * 180 / Math.PI)
+  assert.ok(latitudes.every((latitude) => latitude >= Math.min(from[1], to[1]) - 1e-8 && latitude <= Math.max(from[1], to[1]) + 1e-8), "跨洲及高纬路线不绕向端点纬度之外的极区")
+  close(latitudes[0], from[1], "高纬起点保留真实纬度")
+  close(latitudes.at(-1)!, to[1], "高纬终点保留真实纬度")
+}
+const dateLineRoute = prepareGlobeFlows([node(62, [170, 35])], node(63, [-170, 50]), true)[0]
+const dateLineMiddle = dateLineRoute.samples[32]
+close(Math.abs(Math.atan2(dateLineMiddle[0], dateLineMiddle[2]) * 180 / Math.PI), 180, "日期线两侧按最短经度方向连接")
 const unchangedFlows = structuredClone(spatialFlows)
 for (const zoom of [50, 100, 150]) for (const lon of [-180, -90, 0, 90, 180]) for (const lat of [-60, 30, 60]) {
   const view = globeFlowView(zoomView(zoom))

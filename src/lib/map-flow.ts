@@ -1,4 +1,4 @@
-import type { Camera, GlobeNode, GlobeView, Pt } from "./globe.ts"
+import { wrapLon, type Camera, type GlobeNode, type GlobeView, type Pt } from "./globe.ts"
 import type { FlatCamera, MapBounds } from "./map.ts"
 
 type Point = { x: number; y: number }
@@ -40,7 +40,7 @@ export function globeFlowPoint(cam: Camera, location: [number, number]): Pt {
   return cam.flat(...unit(location))
 }
 
-/** 地点变化时预计算单位球上的大圆与径向抬升，旋转帧只做相机投影。 */
+/** 沿最短经度方向在两端纬度之间连接，再径向抬升；旋转帧只做相机投影。 */
 export function prepareGlobeFlows(points: GlobeNode[], center: GlobeNode, centerOnline: boolean): PreparedGlobeFlow[] {
   const end = unit(center.ll)
   return points.flatMap((point) => {
@@ -49,19 +49,14 @@ export function prepareGlobeFlows(points: GlobeNode[], center: GlobeNode, center
     const dot = Math.max(-1, Math.min(1, start.reduce((sum, value, i) => sum + value * end[i], 0)))
     const angle = Math.acos(dot)
     if (angle < 1e-8) return []
-    let tangent = end.map((value, i) => value - dot * start[i])
-    let length = Math.hypot(...tangent)
-    if (length < 1e-8) {
-      // 对跖点的大圆不唯一；选稳定的垂直方向，避免除以零及随相机翻转。
-      tangent = Math.abs(start[1]) < 0.9 ? [-start[2], 0, start[0]] : [0, start[2], -start[1]]
-      length = Math.hypot(...tangent)
-    }
-    const direction = tangent.map((value) => value / length)
+    const longitude = wrapLon(center.ll[0] - point.ll[0])
+    const latitude = center.ll[1] - point.ll[1]
     const lift = 0.12 + (GLOBE_FLOW_LIFT - 0.12) * angle / Math.PI
     const samples = Array.from({ length: 65 }, (_, index): Vector => {
       const t = index / 64
       const radius = 1 + lift * Math.sin(Math.PI * t)
-      return start.map((value, i) => radius * (value * Math.cos(angle * t) + direction[i] * Math.sin(angle * t))) as Vector
+      const position = unit([point.ll[0] + longitude * t, point.ll[1] + latitude * t])
+      return position.map((value) => radius * value) as Vector
     })
     return [{ key: point.key, active: centerOnline && point.offlineCount < point.count, delay: -(point.id % 13) * 0.24, samples }]
   })

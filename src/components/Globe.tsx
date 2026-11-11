@@ -443,10 +443,10 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
           {/* 装饰层单独隐藏，信标提供有名称的键盘入口与多节点选择。 */}
           <svg data-map-canvas data-camera-longitude={view.lon} data-camera-latitude={view.lat} data-camera-cx={frame.cx} data-camera-cy={frame.cy} data-camera-r={frame.r} viewBox={canvas.viewBox} preserveAspectRatio="xMidYMid meet" role="group" aria-label="地图节点" focusable="false">
             <defs>
-              {/* 圆盘里那层明暗：中心几乎透明、边上压到 `--globe-rim`（上游同一套停点）。 */}
+              {/* 中央保留与 2D 相同的底色，只在球缘叠加柔和暗影。 */}
               <radialGradient id="globe-shade" cx="38%" cy="36%" r="68%">
-                <stop offset="0%" stopColor="currentColor" stopOpacity="0.06" />
-                <stop offset="70%" stopColor="currentColor" stopOpacity="0" />
+                <stop offset="0%" stopColor="var(--globe-rim)" stopOpacity="0" />
+                <stop offset="70%" stopColor="var(--globe-rim)" stopOpacity="0" />
                 <stop offset="100%" stopColor="var(--globe-rim)" stopOpacity="1" />
               </radialGradient>
               <clipPath id={mapClipId}>
@@ -467,7 +467,6 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
             <g aria-hidden="true">
             {mode === "3d" && <>
               <circle className="globe-ocean" cx={frame.cx} cy={frame.cy} r={frame.r} />
-              <circle className="globe-disk" cx={frame.cx} cy={frame.cy} r={frame.r} fill="url(#globe-shade)" />
             </>}
             {land.fill && <path className="globe-land" d={land.fill} />}
             {land.stroke && <path className="globe-coast" d={land.stroke} />}
@@ -479,6 +478,7 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
                 strokeWidth={wire.width}
               />
             ))}
+            {mode === "3d" && <circle className="globe-disk" cx={frame.cx} cy={frame.cy} r={frame.r} />}
             </g>
             {flowPaths.length > 0 && (
               <g aria-hidden="true" clipPath={flowBounds ? `url(#${flowClipId})` : undefined}>

@@ -50,13 +50,16 @@
   /* 进度条按"越满越危险"上色，所以这里有真正的绿与琥珀：单色阶表达不了严重度。 */
   --ok: oklch(0.6 0.15 155);
   --warn: oklch(0.62 0.15 70);
-  /* 两种地图共用陆地颜色；海面接近卡片底，仍保留可辨认的陆海明度差。 */
-  --globe-ocean: rgba(96, 113, 121, 0.09);
-  --globe-land: rgba(94, 91, 82, 0.25);
-  --globe-rim: rgba(42, 40, 35, 0.13);
-  --globe-flow: #387378;
-  --globe-flow-pulse: #075c63;
-  --globe-flow-center: #98651f;
+  /* 两种地图共用不透明陆地与岸线，避免 3D 海面叠色使陆地比 2D 更亮。 */
+  --globe-ocean: #f0f0ed;
+  --globe-land: #c1bdb2;
+  --globe-coast: #979184;
+  --globe-outline: #aaa497;
+  --globe-grid: #d2cfc6;
+  --globe-rim: rgba(61, 55, 42, 0.12);
+  --globe-flow: #3d5352;
+  --globe-flow-pulse: #234743;
+  --globe-flow-center: #785722;
   --globe-pin-online: #26794f;
   --globe-pin-offline: #b94e4f;
   --globe-pin-detail: #fff0ec;
@@ -117,13 +120,16 @@
   --chart-9: oklch(0.72 0.16 335);
   --ok: oklch(0.74 0.14 155);
   --warn: oklch(0.8 0.13 75);
-  /* 暗色用略亮的暖灰陆地，青灰海面融入暗底。 */
-  --globe-ocean: rgba(101, 140, 140, 0.1);
-  --globe-land: rgba(179, 171, 151, 0.22);
-  --globe-rim: rgba(8, 8, 8, 0.27);
-  --globe-flow: #85b4b7;
-  --globe-flow-pulse: #d0efed;
-  --globe-flow-center: #e0ba77;
+  /* 暗色用深暖灰陆地与近黑海面，岸线和流动线各留一档明度。 */
+  --globe-ocean: #1e201f;
+  --globe-land: #38362f;
+  --globe-coast: #6d685d;
+  --globe-outline: #716b5e;
+  --globe-grid: #343833;
+  --globe-rim: rgba(8, 9, 8, 0.22);
+  --globe-flow: #8aa09a;
+  --globe-flow-pulse: #bdcbb8;
+  --globe-flow-center: #c3a270;
   --globe-pin-online: #7dd49e;
   --globe-pin-offline: #e98b84;
   --globe-pin-detail: #fff0ec;
@@ -164,12 +170,15 @@
   --chart-9: #b16286;
   --ok: #79740e;
   --warn: #b57614;
-  --globe-ocean: rgba(69, 133, 136, 0.08);
-  --globe-land: rgba(124, 111, 100, 0.29);
-  --globe-rim: rgba(60, 56, 54, 0.15);
-  --globe-flow: #427678;
-  --globe-flow-pulse: #076678;
-  --globe-flow-center: #956211;
+  --globe-ocean: #eee4c4;
+  --globe-land: #beb497;
+  --globe-coast: #938367;
+  --globe-outline: #a18f70;
+  --globe-grid: #cfc3a4;
+  --globe-rim: rgba(60, 56, 54, 0.13);
+  --globe-flow: #3c5238;
+  --globe-flow-pulse: #2d4935;
+  --globe-flow-center: #76551f;
   --globe-pin-online: #79740e;
   --globe-pin-offline: #9d0006;
   --globe-pin-detail: #fbf1c7;
@@ -211,12 +220,15 @@
   --chart-9: #b16286;
   --ok: #b8bb26;
   --warn: #fabd2f;
-  --globe-ocean: rgba(131, 165, 152, 0.08);
-  --globe-land: rgba(189, 174, 147, 0.23);
-  --globe-rim: rgba(29, 32, 33, 0.28);
-  --globe-flow: #83a598;
-  --globe-flow-pulse: #b8ded1;
-  --globe-flow-center: #e0ba77;
+  --globe-ocean: #222522;
+  --globe-land: #423d32;
+  --globe-coast: #7a6d55;
+  --globe-outline: #7a6d55;
+  --globe-grid: #3c4037;
+  --globe-rim: rgba(12, 14, 12, 0.24);
+  --globe-flow: #9da987;
+  --globe-flow-pulse: #c8ca9e;
+  --globe-flow-center: #c6a56a;
   --globe-pin-online: #b8bb26;
   --globe-pin-offline: #fb4934;
   --globe-pin-detail: #fbf1c7;
@@ -405,10 +417,10 @@
 
 .globe-ocean { fill: var(--globe-ocean); }
 .globe-land { fill: var(--globe-land); stroke: none; stroke-linejoin: round; stroke-linecap: round; }
-.globe-coast { fill: none; stroke: var(--foreground); stroke-width: 0.55; stroke-opacity: 0.32; }
-.globe-disk { fill: url(#globe-shade); stroke: var(--foreground); stroke-width: 0.85; stroke-opacity: 0.34; }
-.globe-wire { fill: none; stroke: var(--foreground); stroke-opacity: 0.1; }
-.globe-stem { fill: none; stroke: var(--foreground); stroke-width: 0.75; }
+.globe-coast { fill: none; stroke: var(--globe-coast); stroke-width: 0.55; }
+.globe-disk { fill: url(#globe-shade); stroke: var(--globe-outline); stroke-width: 0.85; }
+.globe-wire { fill: none; stroke: var(--globe-grid); }
+.globe-stem { fill: none; stroke: var(--muted-foreground); stroke-width: 0.75; stroke-opacity: 0.65; }
 
 .globe-flow-track, .globe-flow-pulse, .globe-flow-center {
   fill: none;
@@ -416,9 +428,8 @@
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
-.globe-flow-track { stroke: var(--globe-flow); }
-.globe-flow-track { stroke-width: 1.05px; opacity: 0.68; }
-.globe-flow-back { stroke-dasharray: 3 4; opacity: 0.32; }
+.globe-flow-track { stroke: var(--globe-flow); stroke-width: 1.05px; opacity: 0.84; }
+.globe-flow-back { stroke-dasharray: 3 4; opacity: 0.4; }
 .globe-flow-route[data-active="false"] { opacity: 0.48; }
 .globe-flow-pulse {
   stroke: var(--globe-flow-pulse);

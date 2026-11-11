@@ -6,6 +6,7 @@
 // MAP_CHECK_GROUP=mobile-layout 对比保留旧版的手机上下留白，并检查标签、控件与节点交互。
 // MAP_CHECK_GROUP=flow 仅验收中心节点、流向动效、离线与分组。
 // MAP_CHECK_GROUP=appearance 验收简化界面、地点标签及放大的球体布局。
+// MAP_CHECK_GROUP=colors 验收四套主题下的地图配色、陆海层次与流动线对比度。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -28,7 +29,8 @@ const MOBILE_LAYOUT_ONLY = process.env.MAP_CHECK_GROUP === 'mobile-layout'
 const NEIGHBORS_ONLY = LOCATIONS_ONLY && process.env.MAP_LOCATION_NEIGHBORS_ONLY === '1'
 const FLOW_ONLY = process.env.MAP_CHECK_GROUP === 'flow'
 const APPEARANCE_ONLY = process.env.MAP_CHECK_GROUP === 'appearance'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY
+const COLORS_ONLY = process.env.MAP_CHECK_GROUP === 'colors'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
 let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
@@ -105,6 +107,7 @@ const diagnostics = []
 const exceptions = []
 let base = 'http://127.0.0.1'
 let flowCenterId
+let gruvboxOn = false
 let chrome, chromeError, ws
 let commandId = 0
 const pending = new Map()
@@ -118,7 +121,7 @@ const server = createServer((req, res) => {
     requests.push({ path: url.pathname + url.search, at: Date.now(), dist: servingDist })
     const body = url.pathname === '/api/me' ? { authed: false, github: false, public_page: true, site_name: '地图控件验收', history_days: 30 }
       : url.pathname === '/api/nodes' ? { nodes }
-        : url.pathname.endsWith('/config') ? { globeOn: true, cardStyle: 'detailed', listTop: 'groups', themeMode: 'system', mapFlowCenterId: flowCenterId }
+        : url.pathname.endsWith('/config') ? { globeOn: true, cardStyle: 'detailed', listTop: 'groups', themeMode: 'system', mapFlowCenterId: flowCenterId, gruvboxOn }
           : url.pathname === '/api/version' ? { version: '1.4.0' }
             : { metrics: [], ping: [], probes: {}, loss: {}, step: 60 }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
@@ -1391,6 +1394,126 @@ async function appearanceChecks() {
   }
 }
 
+async function colorChecks() {
+  const sample = () => evaluate(async () => {
+    const svg = document.querySelector('svg[data-map-canvas]')
+    const panel = document.querySelector('.globe-panel')
+    const model = svg.querySelector('g[aria-hidden="true"]')
+    const clone = svg.cloneNode(true)
+    const copy = (source, target) => {
+      const style = getComputedStyle(source)
+      for (const key of ['fill', 'stroke', 'stroke-width', 'stroke-opacity', 'fill-opacity', 'opacity', 'stop-color', 'stop-opacity']) {
+        target.style.setProperty(key, style.getPropertyValue(key).replace(/url\(["']?[^)]*#([^)"']+)["']?\)/g, 'url(#$1)'))
+      }
+      for (let i = 0; i < source.children.length; i++) copy(source.children[i], target.children[i])
+    }
+    copy(svg, clone)
+    const cloneModel = clone.querySelector('g[aria-hidden="true"]')
+    for (const child of [...clone.children]) if (child.tagName !== 'defs' && child !== cloneModel) child.remove()
+    for (const path of cloneModel.querySelectorAll('.globe-coast,.globe-wire')) path.remove()
+    const bounds = svg.viewBox.baseVal
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    clone.setAttribute('width', bounds.width)
+    clone.setAttribute('height', bounds.height)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.ceil(bounds.width * 3)
+    canvas.height = Math.ceil(bounds.height * 3)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = getComputedStyle(panel).backgroundColor
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    const card = [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3)
+    const image = new Image()
+    image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone))
+    await image.decode()
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const land = [], sea = []
+    const globe = panel.dataset.mapMode === '3d'
+    const cx = Number(svg.dataset.cameraCx), cy = Number(svg.dataset.cameraCy), radius = Number(svg.dataset.cameraR)
+    const map = svg.querySelector('[data-map-bounds]')
+    const box = globe ? { x: cx - radius * 0.65, y: cy - radius * 0.65, width: radius * 1.3, height: radius * 1.3 } : map.getBBox()
+    const fill = model.querySelector('.globe-land')
+    for (let row = 1; row < 25; row++) for (let column = 1; column < 25; column++) {
+      const x = box.x + box.width * column / 25, y = box.y + box.height * row / 25
+      if (globe && Math.hypot(x - cx, y - cy) > radius * 0.65) continue
+      const pixel = [...ctx.getImageData(Math.floor((x - bounds.x) * 3), Math.floor((y - bounds.y) * 3), 1, 1).data].slice(0, 3)
+      ;(fill.isPointInFill(new DOMPoint(x, y)) ? land : sea).push(pixel)
+    }
+    const rgb = (value) => {
+      ctx.clearRect(0, 0, 1, 1)
+      ctx.fillStyle = value
+      ctx.fillRect(0, 0, 1, 1)
+      return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3)
+    }
+    const paint = (selector, key = 'stroke') => rgb(getComputedStyle(svg.querySelector(selector))[key])
+    return {
+      land, sea, card, landFill: paint('.globe-land', 'fill'), coast: paint('.globe-coast'),
+      track: paint('.globe-flow-route[data-active="true"] .globe-flow-track:not(.globe-flow-back)'),
+      trackOpacity: Number(getComputedStyle(svg.querySelector('.globe-flow-track:not(.globe-flow-back)')).opacity),
+      pulse: paint('.globe-flow-pulse'), center: paint('.globe-flow-center'),
+      actualLabel: globe ? paint('.globe-label', 'fill') : null,
+    }
+  })
+  const light = (rgb) => rgb.reduce((sum, channel, index) => {
+    const value = channel / 255
+    return sum + (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4) * [0.2126, 0.7152, 0.0722][index]
+  }, 0)
+  const contrast = (a, b) => (Math.max(light(a), light(b)) + 0.05) / (Math.min(light(a), light(b)) + 0.05)
+  const brightness = (rgb) => rgb.reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0)
+  const mean = (pixels) => [0, 1, 2].map((i) => pixels.reduce((sum, pixel) => sum + pixel[i], 0) / pixels.length)
+  const over = (color, alpha, background) => color.map((value, i) => value * alpha + background[i] * (1 - alpha))
+  const captures = new Map()
+  flowCenterId = '5'
+  for (const before of BASELINE_DIST ? [true, false] : [false]) {
+    servingDist = before ? BASELINE_DIST : DIST
+    for (const palette of ['default', 'gruvbox']) {
+      gruvboxOn = palette === 'gruvbox'
+      for (const dark of [false, true]) {
+        await viewport(1440, 1000)
+        await media(dark)
+        await preferences('3d', '0')
+        await waitFor((value) => document.documentElement.dataset.palette === value, palette)
+        for (const selectedMode of ['3d', '2d']) {
+          await mode(selectedMode)
+          const tag = [palette, dark ? 'dark' : 'light', selectedMode].join('/')
+          const colors = await sample()
+          captures.set((before ? 'before/' : '') + tag, colors)
+          diagnostics.push({ colors: tag, before, ...colors })
+          if (before) continue
+          const land = mean(colors.land), sea = mean(colors.sea)
+          const gap = dark ? brightness(land) - brightness(sea) : brightness(sea) - brightness(land)
+          check(tag + '：真实填充陆海分明', colors.land.length > 20 && colors.sea.length > 20 && gap >= 18, 'land=' + land.map(Math.round) + ', sea=' + sea.map(Math.round) + ', gap=' + gap.toFixed(1))
+          const backgrounds = [land, sea, colors.card]
+          const track = Math.min(...backgrounds.map((bg) => contrast(over(colors.track, colors.trackOpacity, bg), bg)))
+          const pulse = Math.min(...backgrounds.map((bg) => contrast(colors.pulse, bg)))
+          const center = Math.min(...backgrounds.map((bg) => contrast(colors.center, bg)))
+          check(tag + '：主线路合成色对比度至少 3:1', track >= 3, track.toFixed(2))
+          check(tag + '：移动光点对比度至少 4.5:1', pulse >= 4.5, pulse.toFixed(2))
+          check(tag + '：中心标记对比度至少 3:1', center >= 3, center.toFixed(2))
+          if (colors.actualLabel) check(tag + '：地点标签对比度至少 4.5:1', contrast(colors.actualLabel, colors.card) >= 4.5)
+          const previous = captures.get('before/' + tag)
+          if (previous) check(tag + '：陆地明度低于旧版', brightness(land) < brightness(mean(previous.land)), brightness(land).toFixed(1) + ' / ' + brightness(mean(previous.land)).toFixed(1))
+          await screenshot('colors-' + tag.replaceAll('/', '-'))
+          await viewport(320, 844)
+          await sleep(250)
+          const small = await state('colors-mobile-' + tag)
+          check(tag + '：手机无裁切、溢出或新增装饰', !small.overflow && small.clipped.length === 0 && await evaluate(() => !document.querySelector('.globe-flow-arrow,.globe-caption,.globe-sweep')))
+          await screenshot('colors-mobile-' + tag.replaceAll('/', '-'))
+          await viewport(1440, 1000)
+        }
+        if (!before) {
+          const key = [palette, dark ? 'dark' : 'light'].join('/')
+          const globe = captures.get(key + '/3d'), flat = captures.get(key + '/2d')
+          check(key + '：两种地图共用陆地、岸线与流动线色值', ['landFill', 'coast', 'track', 'pulse', 'center'].every((name) => JSON.stringify(globe[name]) === JSON.stringify(flat[name])))
+          check(key + '：3D 中部陆地与 2D 的明度差不超过 8', Math.abs(brightness(mean(globe.land)) - brightness(mean(flat.land))) <= 8)
+        }
+      }
+    }
+  }
+  flowCenterId = undefined
+  gruvboxOn = false
+  servingDist = DIST
+}
+
 function layoutChecks(tag, snapshot) {
   check(`${tag}：实际绘出陆地与定位点，3D名称仍保留`, snapshot.paths?.some((p) => p.kind === 'globe-land' && p.d.length > 100) && snapshot.pins.length > 0 && (snapshot.mode === '2d' || snapshot.nameLabels > 0))
   check(`${tag}：路径与命中坐标有限`, snapshot.paths.every((p) => !/NaN|Infinity/.test(p.d)) && snapshot.pins.every((p) => Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))))
@@ -1454,6 +1577,7 @@ try {
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
   if (FLOW_ONLY) await flowChecks()
   if (APPEARANCE_ONLY) await appearanceChecks()
+  if (COLORS_ONLY) await colorChecks()
   if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
@@ -1650,7 +1774,7 @@ try {
   await aggregateMarkerChecks()
   await flowChecks()
   }
-  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY) {
+  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY) {
     if (!LOCATIONS_ONLY) await nodeInteractionChecks()
     if (!TOUCH_ONLY) await smallLocationChecks()
   }
@@ -1658,7 +1782,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

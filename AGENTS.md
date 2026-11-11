@@ -42,6 +42,8 @@
   路线沿最短经度方向在两端纬度范围内连接，避免绕极；高纬度端点仍使用真实坐标。
   未确认城市时展示国家或地区全名，不能把国家坐标当作已确认城市。
   仅确认行政区时保留行政区名称与代表点，不推断具体城市。
+  2D/3D 共用较暗的陆地、岸线及流动线色值；3D 仅在球缘叠加暗影，不加泛白高光。
+  默认流动线为灰青色，Gruvbox 为灰绿色，保持明暗模式下的陆海层次与线路对比度。
 - 延迟线形由同一主题设置同步控制首页、浮层、紧凑展开及详情；连接断点和平滑只改变显示，
   不补造延迟值、不抹去丢包与无响应。削峰是独立选项。
 - Monitor 1.4.1 增加 `swap_used`、`tcp`、`udp`、`procs` 历史字段。新增序列是区间均值，
@@ -85,6 +87,9 @@
   预算专项可用 `node tools/verify_summary.mjs 5321 --custom-only`，不能省略前面的端口参数。
   图表工具可用 `SHOT_DIR` 指定新的证据目录；汇率工具的第一个参数可指定证据父目录。
   Summary 的浏览器覆盖变量为 `CHROME`，汇率工具为 `CHROME_PATH`；图表工具自动查找已列出的浏览器路径。
+- 地图配色改动运行 `MAP_CHECK_GROUP=colors node tools/verify_map_controls.mjs`，覆盖四套主题的
+  真实填充、2D/3D 色值一致性、线路与光点对比度及桌面/手机截图；可用 `MAP_BASELINE_DIST` 指向旧构建作明度对比。
+  流动线相关改动还需运行 `MAP_CHECK_GROUP=flow node tools/verify_map_controls.mjs`。
 - 本地夹具不需要登录或修改真实 Hub；汇率验收拦截第三方请求，其通过不能证明公开汇率源当前可用。
   线上只读核查与夹具结果分别记录，不能把浏览器模拟当成真实 Hub 版本验证。
 - 当前 lint 已有 4 条警告：`tools/verify_latency_range.mjs` 的 `no-useless-escape` 一条，

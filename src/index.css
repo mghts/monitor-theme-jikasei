@@ -50,16 +50,13 @@
   /* 进度条按"越满越危险"上色，所以这里有真正的绿与琥珀：单色阶表达不了严重度。 */
   --ok: oklch(0.6 0.15 155);
   --warn: oklch(0.62 0.15 70);
-  /* 节点地球那三块颜色（见 index.css 末尾的 .globe-*）：海面与陆地的淡染、圆盘边缘
-     的暗影。数值取自上游的亮色一套 —— 它是暖纸底，本站是近白底，所以
-     透明度各抬了一点，否则淡到看不见。
-     ★**陆地必须比海面明显暗**：0.16 / 0.18 这两档实测**亮度几乎相同**（228.5 对 228.8），
-     只靠冷暖分开 —— 于是哪一块看起来像「灰块」全看它周围有什么（挨着海岸线的那片海
-     会被深色描边衬成灰、大片陆地内部反倒显得白），站长看到的就是「灰白互换」。
-     现在陆地压到 0.30、海面提到 0.12：亮度差 32（205 对 237），远近都不会再认错。 */
-  --globe-ocean: rgba(72, 118, 136, 0.12);
-  --globe-land: rgba(118, 86, 40, 0.3);
-  --globe-rim: rgba(42, 33, 20, 0.2);
+  /* 两种地图共用陆地颜色；海面接近卡片底，仍保留可辨认的陆海明度差。 */
+  --globe-ocean: rgba(96, 113, 121, 0.09);
+  --globe-land: rgba(94, 91, 82, 0.25);
+  --globe-rim: rgba(42, 40, 35, 0.13);
+  --globe-flow: #387378;
+  --globe-flow-pulse: #075c63;
+  --globe-flow-center: #98651f;
   --globe-pin-online: #26794f;
   --globe-pin-offline: #b94e4f;
   --globe-pin-detail: #fff0ec;
@@ -120,13 +117,13 @@
   --chart-9: oklch(0.72 0.16 335);
   --ok: oklch(0.74 0.14 155);
   --warn: oklch(0.8 0.13 75);
-  /* 深色这一套的底色与上游逐值相同（它的暗底就是 oklch(0.145) 那一档，跟本站几乎同色）。
-     ★透明度同亮色那套的理由调过：0.14 / 0.15 的亮度差只有 2.8（33.9 对 31.1），暗底上
-     更是分不出陆海；现在陆地 0.26、海面 0.12，亮度差 23.5（51.1 对 27.6）。
-     暗色里**陆地比海面亮**（亮色里相反）—— 暗底上的「实心」块本来就该更亮，与亮色同一套直觉。 */
-  --globe-ocean: rgba(86, 138, 160, 0.12);
-  --globe-land: rgba(186, 154, 102, 0.26);
-  --globe-rim: rgba(8, 8, 8, 0.36);
+  /* 暗色用略亮的暖灰陆地，青灰海面融入暗底。 */
+  --globe-ocean: rgba(101, 140, 140, 0.1);
+  --globe-land: rgba(179, 171, 151, 0.22);
+  --globe-rim: rgba(8, 8, 8, 0.27);
+  --globe-flow: #85b4b7;
+  --globe-flow-pulse: #d0efed;
+  --globe-flow-center: #e0ba77;
   --globe-pin-online: #7dd49e;
   --globe-pin-offline: #e98b84;
   --globe-pin-detail: #fff0ec;
@@ -167,9 +164,12 @@
   --chart-9: #b16286;
   --ok: #79740e;
   --warn: #b57614;
-  --globe-ocean: rgba(69, 133, 136, 0.1);
-  --globe-land: rgba(124, 111, 100, 0.32);
-  --globe-rim: rgba(60, 56, 54, 0.2);
+  --globe-ocean: rgba(69, 133, 136, 0.08);
+  --globe-land: rgba(124, 111, 100, 0.29);
+  --globe-rim: rgba(60, 56, 54, 0.15);
+  --globe-flow: #427678;
+  --globe-flow-pulse: #076678;
+  --globe-flow-center: #956211;
   --globe-pin-online: #79740e;
   --globe-pin-offline: #9d0006;
   --globe-pin-detail: #fbf1c7;
@@ -211,9 +211,12 @@
   --chart-9: #b16286;
   --ok: #b8bb26;
   --warn: #fabd2f;
-  --globe-ocean: rgba(131, 165, 152, 0.1);
-  --globe-land: rgba(189, 174, 147, 0.3);
-  --globe-rim: rgba(29, 32, 33, 0.36);
+  --globe-ocean: rgba(131, 165, 152, 0.08);
+  --globe-land: rgba(189, 174, 147, 0.23);
+  --globe-rim: rgba(29, 32, 33, 0.28);
+  --globe-flow: #83a598;
+  --globe-flow-pulse: #b8ded1;
+  --globe-flow-center: #e0ba77;
   --globe-pin-online: #b8bb26;
   --globe-pin-offline: #fb4934;
   --globe-pin-detail: #fbf1c7;
@@ -402,12 +405,35 @@
 
 .globe-ocean { fill: var(--globe-ocean); }
 .globe-land { fill: var(--globe-land); stroke: none; stroke-linejoin: round; stroke-linecap: round; }
-.globe-coast { fill: none; stroke: var(--foreground); stroke-width: 0.55; stroke-opacity: 0.36; }
-.globe-disk { fill: url(#globe-shade); stroke: var(--foreground); stroke-width: 1.05; stroke-opacity: 0.42; }
+.globe-coast { fill: none; stroke: var(--foreground); stroke-width: 0.55; stroke-opacity: 0.32; }
+.globe-disk { fill: url(#globe-shade); stroke: var(--foreground); stroke-width: 0.85; stroke-opacity: 0.34; }
 .globe-wire { fill: none; stroke: var(--foreground); stroke-opacity: 0.1; }
 .globe-sweep { fill: none; stroke: var(--foreground); }
 .globe-base { stroke: var(--foreground); stroke-opacity: 0.4; stroke-width: 1; }
 .globe-stem { fill: none; stroke: var(--foreground); stroke-width: 0.75; }
+
+.globe-flow-track, .globe-flow-arrow, .globe-flow-pulse, .globe-flow-center {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.globe-flow-track, .globe-flow-arrow { stroke: var(--globe-flow); }
+.globe-flow-track { stroke-width: 1.05px; opacity: 0.68; }
+.globe-flow-arrow { stroke-width: 1.2px; opacity: 0.9; }
+.globe-flow-route[data-active="false"] { opacity: 0.48; }
+.globe-flow-pulse {
+  stroke: var(--globe-flow-pulse);
+  stroke-width: 2px;
+  stroke-dasharray: 1.25 110;
+  animation: globe-flow-travel 3.4s linear infinite paused;
+}
+.globe-panel[data-map-flow-playing="true"] .globe-flow-pulse { animation-play-state: running; }
+@keyframes globe-flow-travel { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
+.globe-flow-center { stroke: var(--globe-flow-center); stroke-width: 1.3px; }
+@media (prefers-reduced-motion: reduce) {
+  .globe-flow-pulse { display: none; }
+}
 /* 同一套柔光信标用于 2D/3D；部分离线用绿芯红圈，离线再加短横，核心始终常亮。 */
 .globe-beacon { --beacon-color: var(--globe-pin-offline); }
 .globe-beacon[data-marker-state="online"] { --beacon-color: var(--globe-pin-online); }
@@ -509,6 +535,15 @@
   .globe-side { border-top: 0; border-left: 1px solid var(--border); }
 }
 .globe-side-title { grid-column: 1 / -1; color: var(--muted-foreground); }
+.globe-flow-legend {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+}
+.globe-flow-legend span { min-width: 0; overflow-wrap: anywhere; }
+.globe-flow-legend button { flex: none; }
 .globe-reg {
   display: flex;
   align-items: center;

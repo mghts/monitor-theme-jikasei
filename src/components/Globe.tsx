@@ -8,6 +8,7 @@ import {
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
 import { flatCamera, flatNodes, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
+import { flowMapBounds, mapFlowPaths } from "@/lib/map-flow"
 import type { Node } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
@@ -75,11 +76,12 @@ function measureLabel(text: string): number | null {
   return labelCtx.measureText(text).width
 }
 
-export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
+export function Globe({ nodes, dark, flowCenterId, region, onRegion, onOpen, onWarm }: {
   /** 当前分组里的节点（与概览卡片、下面的列表同一批）。 */
   nodes: Node[]
   /** 深色模式：只影响扫掠经线的透明度。 */
   dark: boolean
+  flowCenterId: number | null
   /** 选中的地区键（null = 全部）。 */
   region: string | null
   onRegion: (key: string | null) => void
@@ -117,6 +119,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const [flatView, setFlatView] = useState({ lon: 0, lat: 0 })
   const [mode, setMode] = useState<MapMode>(savedMode)
   const [rotating, setRotating] = useState(savedRotation)
+  const [flowPaused, setFlowPaused] = useState(false)
   const [sweepTime, setSweepTime] = useState(() => Date.now())
   // 点过侧栏的地区就钉住：不再自转（否则刚飞过去又转走了）。
   const [pinned, setPinned] = useState(false)
@@ -132,6 +135,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const [fitHeight, setFitHeight] = useState(320)
   const zoomId = useId()
   const mapClipId = useId()
+  const flowClipId = useId()
   const beaconGlowId = useId()
   const choiceId = useId()
   // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
@@ -204,6 +208,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const located = pinned && region !== null
   const rotationOn = rotating && !located
   const spinning = mode === "3d" && rotating && inView && pageVisible && !dragging && !located && !reduced && !hoveredPoint && !focusedPoint && !choosing
+  const flowPlaying = inView && pageVisible && !reduced && !dragging && !choosing && !flowPaused
 
   useEffect(() => {
     if (!spinning) return
@@ -405,12 +410,21 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
   const wires = mode === "3d"
     ? graticule(cam, profile, profile.sweepCount ? sweepLonAt(sweepTime) : null)
     : []
+  const flatPoints = mode === "2d" ? flatNodes(points, flat) : []
   // ★ 这里读 ref 是有意的，也是这套排布必须的：那两个字是**跨帧记忆**——
   // 圆心附近 ±18 的机器（正在转到中缝上的那几台）如果每帧重新判左右，标签会在两摞之间
   // 来回跳。读它是幂等的：同一帧算多少次结果都一样，只是把"上一帧选的那一侧"记下来。
   // eslint-disable-next-line react/refs -- 跨帧记忆，见上
   const placed = mode === "3d" ? layoutLabels(cam, points, sides.current, labelMax, frame.cx, measured)
-    : flatNodes(points, flat).filter((point) => point.visible)
+    : flatPoints.filter((point) => point.visible)
+  const flowNode = flowCenterId === null ? undefined : nodeById.get(flowCenterId)
+  const flowPoint = flowNode && points.find((point) => point.nodeIds.includes(flowNode.id))
+  const flowPoints = mode === "3d" ? placed : flatPoints
+  const flowCenter = flowPoint && flowPoints.find((point) => point.key === flowPoint.key)
+  const flowPaths = flowNode && flowCenter
+    ? mapFlowPaths(flowPoints, flowCenter, flowNode.online, markerScale, mode === "3d" ? { globe: frame } : { flat })
+    : []
+  const flowBounds = mode === "2d" && flowPaths.length ? flowMapBounds(flat) : null
   // 不同城市的信标仍保留真实位置；重叠点击区按最近中心分开，不再被上层的针盖住。
   const hitAreas = mapHitAreas(placed, 9 * markerScale)
   const aim = region ? rows.find((row) => row.region.key === region)?.aim : undefined
@@ -421,7 +435,7 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
 
   return (
     <Tooltip.Provider delayDuration={0}>
-    <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"}>
+    <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"} data-map-flow-playing={flowPoint ? flowPlaying : undefined}>
       <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h, "--globe-mobile-height": `${mobileHeight}px` } as CSSProperties}>
         <div
           ref={host}
@@ -445,6 +459,9 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
               <clipPath id={mapClipId}>
                 <rect data-map-bounds x={mapBounds.x} y={mapBounds.y} width={mapBounds.w} height={mapBounds.h} />
               </clipPath>
+              {flowBounds && <clipPath id={flowClipId}>
+                <rect x={flowBounds.x} y={flowBounds.y} width={flowBounds.w} height={flowBounds.h} />
+              </clipPath>}
               {(["online", "offline"] as const).map((state) => (
                 <radialGradient key={state} id={`${beaconGlowId}-${state}`}>
                   <stop offset="0%" stopColor={`var(--globe-pin-${state})`} stopOpacity="0.55" />
@@ -472,7 +489,21 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
             ))}
             {mode === "3d" && <line className="globe-base" x1={frame.cx - frame.r - 28} y1={frame.h - 20} x2={frame.cx + frame.r + 28} y2={frame.h - 20} />}
             </g>
+            {flowPaths.length > 0 && (
+              <g aria-hidden="true" clipPath={flowBounds ? `url(#${flowClipId})` : undefined}>
+                {flowPaths.map((path) => (
+                  <g key={path.key} className="globe-flow-route" data-map-flow-route={path.key} data-active={path.active}>
+                    <path className="globe-flow-track" d={path.d} />
+                    <path className="globe-flow-arrow" d={path.arrow} />
+                    {path.active && <path className="globe-flow-pulse" d={path.d} pathLength={100} style={{ animationDelay: `${path.delay}s` }} />}
+                  </g>
+                ))}
+              </g>
+            )}
             <g clipPath={mode === "2d" ? `url(#${mapClipId})` : undefined}>
+              {flowCenter && (
+                <circle className="globe-flow-center" data-map-flow-center cx={flowCenter.px} cy={flowCenter.py} r={8.7 * markerScale} aria-hidden="true" />
+              )}
               {marker && (
               <g className="globe-selected" aria-hidden="true">
                 <circle className="globe-selected-ring" cx={marker.x} cy={marker.y} r={7} />
@@ -584,6 +615,14 @@ export function Globe({ nodes, dark, region, onRegion, onOpen, onWarm }: {
               </b>
             </button>
           ))}
+          {flowNode && flowPoint && (
+            <div className="globe-flow-legend">
+              <span>流向示意 · 中心 {flowNode.name}</span>
+              <Button variant="ghost" size="icon-sm" disabled={reduced} aria-label={flowPaused ? "播放流向动效" : "暂停流向动效"} title={reduced ? "系统已开启减弱动态效果" : flowPaused ? "播放流向动效" : "暂停流向动效"} data-map-control="flow" onClick={() => setFlowPaused((paused) => !paused)}>
+                {flowPaused ? <Play /> : <Pause />}
+              </Button>
+            </div>
+          )}
         </div>
       </aside>
     </section>

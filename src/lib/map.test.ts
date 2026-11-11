@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { flatCamera, flatNodes, MAP_BOUNDS, MAP_VIEW, mapGraticule, mapHitAreas, mapLabelCamera, mapPaths, mapViewport, prepareMapRings } from "./map.ts"
+import { flowMapBounds, mapFlowPaths } from "./map-flow.ts"
 import type { GlobeNode } from "./globe.ts"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES, type Ring } from "./world.ts"
 
@@ -266,5 +267,29 @@ mapPaths(flatCamera(100, 30, 150), world)
 assert.deepEqual(WORLD_OUTLINES, original)
 assert.deepEqual(crossing, [[170, 10], [-170, 10], [-170, -10], [170, -10]])
 assert.equal(prepareMapRings([[], [[NaN, 0], [0, 1], [1, 0]]]).rings.length, 0)
+
+const flat = flatCamera()
+const flowPoint = (id: number, lon: number, offlineCount = 0) => {
+  const { x, y } = flat.at(lon, 35)!
+  return { key: String(id), id, count: 1, offlineCount, px: x, py: y }
+}
+const flowCenter = flowPoint(30, 170)
+const seamSource = flowPoint(31, -170)
+const offlineSource = flowPoint(32, 90, 1)
+const flow = mapFlowPaths([flowCenter, seamSource, offlineSource], flowCenter, true, 1, { flat })
+assert.deepEqual(flow.map(({ key, active }) => [key, active]), [["31:0", true], ["31:-1", true], ["32:0", false]])
+for (const route of flow.slice(0, 2)) {
+  const [start, , end] = paths(route.d)[0]
+  close(end[0] - start[0], -23.34, "接缝两边的路径均从源点向中心走短弧")
+}
+assert.ok(mapFlowPaths([seamSource], flowCenter, false, 1, { flat }).every(({ active }) => !active))
+const zoomedOutBounds = flowMapBounds(flatCamera(0, 0, 50))
+assert.deepEqual(zoomedOutBounds, { x: 125, y: 62.5, w: 210, h: 105 }, "缩小后连线不超出实际地图边界")
+const frame = { w: 100, h: 100, cx: 50, cy: 50, r: 40 }
+const globeCenter = { ...flowCenter, px: 26, py: 22 }
+const globeSource = { ...seamSource, px: 74, py: 22 }
+const globeFlow = mapFlowPaths([globeCenter, globeSource], globeCenter, true, 1, { globe: frame })
+assert.equal(globeFlow.length, 1)
+assert.ok(paths(globeFlow[0].d)[0].every(([x, y]) => Math.hypot(x - frame.cx, y - frame.cy) <= frame.r), "地球弧线留在球面圆盘内")
 
 console.log("平面地图：等距投影、日期线拆分、填充/岸线裁切、南极、缩放平移、节点与输入不变全部通过")

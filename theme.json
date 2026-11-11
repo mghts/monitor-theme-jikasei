@@ -2,7 +2,7 @@
   "name": "jikasei",
   "short": "jikasei",
   "description": "自家制の极简探针（Monitor）主题：五种卡片形态、节点地球、分组筛选、明暗双色。",
-  "version": "1.35.3",
+  "version": "1.36.0",
   "author": "akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [
@@ -16,6 +16,13 @@
       "label": "节点地球",
       "default": true,
       "help": "列表页顶部那颗会自转的地球；关掉＝整块不渲染，顶栏那枚开关也一起收起（开着时访客可自行关）。"
+    },
+    {
+      "type": "text",
+      "key": "mapFlowCenterId",
+      "label": "地图流向中心节点 ID",
+      "default": "",
+      "help": "填写主题中中心节点详情 /node/ 后的数字 ID。留空关闭。连线示意各地点向该节点汇聚，光点不代表实测流量。"
     },
     {
       "type": "select",

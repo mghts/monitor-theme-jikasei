@@ -4,6 +4,7 @@
 // MAP_CHECK_GROUP=interactions 仅运行节点悬停、选择与实时更新，便于失败后定向复验。
 // MAP_CHECK_GROUP=locations 仅运行小队同地点合并、逐成员引线、缩放与准确详情。
 // MAP_CHECK_GROUP=mobile-layout 对比保留旧版的手机上下留白，并检查标签、控件与节点交互。
+// MAP_CHECK_GROUP=flow 仅验收中心节点、流向动效、离线与分组。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -23,7 +24,8 @@ const INTERACTIONS_ONLY = process.env.MAP_CHECK_GROUP === 'interactions'
 const LOCATIONS_ONLY = process.env.MAP_CHECK_GROUP === 'locations'
 const MOBILE_LAYOUT_ONLY = process.env.MAP_CHECK_GROUP === 'mobile-layout'
 const NEIGHBORS_ONLY = LOCATIONS_ONLY && process.env.MAP_LOCATION_NEIGHBORS_ONLY === '1'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY
+const FLOW_ONLY = process.env.MAP_CHECK_GROUP === 'flow'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
 let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
@@ -99,6 +101,7 @@ const baseline = new Map()
 const diagnostics = []
 const exceptions = []
 let base = 'http://127.0.0.1'
+let flowCenterId
 let chrome, chromeError, ws
 let commandId = 0
 const pending = new Map()
@@ -112,7 +115,7 @@ const server = createServer((req, res) => {
     requests.push({ path: url.pathname + url.search, at: Date.now(), dist: servingDist })
     const body = url.pathname === '/api/me' ? { authed: false, github: false, public_page: true, site_name: '地图控件验收', history_days: 30 }
       : url.pathname === '/api/nodes' ? { nodes }
-        : url.pathname.endsWith('/config') ? { globeOn: true, cardStyle: 'detailed', listTop: 'groups', themeMode: 'system' }
+        : url.pathname.endsWith('/config') ? { globeOn: true, cardStyle: 'detailed', listTop: 'groups', themeMode: 'system', mapFlowCenterId: flowCenterId }
           : url.pathname === '/api/version' ? { version: '1.4.0' }
             : { metrics: [], ping: [], probes: {}, loss: {}, step: 60 }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
@@ -793,7 +796,11 @@ async function singleActivationChecks() {
     await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cancelled.x, y: cancelled.y - 55, id: 1, radiusX: 2, radiusY: 2, force: 1 }] })
     await send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] })
     await sleep(250)
-    await evaluate(() => scrollTo(0, 0))
+    await evaluate(() => new Promise((resolve) => {
+      scrollTo({ top: 0, behavior: 'instant' })
+      // 先派发回到页首的 scroll 事件，再检查键盘打开的提示；Tooltip 会响应滚动而关闭。
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    }))
     const cancelState = await state()
     check(`${tag}：针上竖滑touchCancel不打开详情或选择框且结束drag`, cancelState.drag === 'false' && (await nodeUi()).path === '/' && !(await nodeUi()).dialog)
     const prior = await evaluate(() => {
@@ -1212,6 +1219,77 @@ async function aggregateMarkerChecks() {
   nodes = ordinaryNodes
   await navigate()
 }
+async function flowChecks() {
+  const snapshot = () => evaluate(() => {
+    const panel = document.querySelector('.globe-panel')
+    const ring = panel.querySelector('[data-map-flow-center]')
+    return {
+      name: panel.querySelector('.globe-flow-legend span')?.textContent,
+      center: ring && [Number(ring.getAttribute('cx')), Number(ring.getAttribute('cy'))],
+      routes: [...panel.querySelectorAll('[data-map-flow-route]')].map((route) => ({
+        end: route.querySelector('.globe-flow-track').getAttribute('d').split(' ').slice(-2).map(Number),
+        arrow: !!route.querySelector('.globe-flow-arrow')?.getAttribute('d'),
+      })),
+      animation: [...panel.querySelectorAll('.globe-flow-pulse')].map((pulse) => {
+        const style = getComputedStyle(pulse)
+        return { state: style.animationPlayState, offset: parseFloat(style.strokeDashoffset), display: style.display }
+      }),
+    }
+  })
+  const ordinaryNodes = nodes
+  const disabled = await snapshot()
+  check('旧配置不画流向或中心圈', disabled.routes.length === 0 && disabled.center === null)
+  nodes = [
+    makeNode(201, 'Frankfurt 一号', 'DE', '欧洲'), makeNode(202, 'Frankfurt 中心', 'DE', '欧洲'),
+    makeNode(203, 'Tokyo 一号', 'JP', '亚太'), makeNode(204, 'Tokyo 二号', 'JP', '亚太', false),
+    makeNode(205, 'San Jose 一号', 'US', '美洲'), makeNode(206, 'Auckland 一号', 'NZ', '亚太', false),
+    makeNode(207, '未定位节点', '', '亚太'),
+  ]
+  flowCenterId = '202'
+  await media(true)
+  await preferences('3d', '0')
+  await waitFor(() => !!document.querySelector('[data-map-flow-center]'))
+  const globe = await snapshot()
+  check('3D 仅绘制正面线路，中心可选同地点的非首个成员', globe.name?.includes('Frankfurt 中心') && globe.routes.length === 1 && globe.animation.length === 1 && globe.routes[0].arrow)
+  await screenshot('flow-3d-dark')
+  await mode('2d')
+  const flat = await snapshot()
+  const nearCenter = ([x, y]) => Math.hypot(x - flat.center[0], y - flat.center[1]) < 0.02
+  check('2D 同地点共享线路，未定位不画，离线线路只显示箭头', flat.routes.length === 3 && flat.animation.length === 2 && flat.routes.every((route) => route.arrow && nearCenter(route.end)))
+  await waitFor((offset) => {
+    const pulse = document.querySelector('.globe-flow-pulse')
+    return parseFloat(getComputedStyle(pulse).strokeDashoffset) < offset - 0.2
+  }, flat.animation[0].offset)
+  check('2D 光点沿 SVG 路径从源点向中心推进', flat.animation.every((item) => item.state === 'running'))
+  await screenshot('flow-2d-dark')
+  await control('flow')
+  const paused = await snapshot()
+  await sleep(220)
+  check('暂停光点后线路与箭头保留且进度冻结', paused.routes.length === 3 && paused.animation.every((item) => item.state === 'paused') && JSON.stringify(paused.animation) === JSON.stringify((await snapshot()).animation))
+  await control('flow')
+  await media(false, true)
+  const reduced = await snapshot()
+  check('减弱动态效果保留箭头并隐藏光点', reduced.routes.length === 3 && reduced.animation.every((item) => item.display === 'none'))
+  await media(false)
+  await viewport(320, 720)
+  check('320px 可见流向，流向说明不使页面横向溢出', (await snapshot()).routes.length === 3 && !(await state()).overflow)
+  await screenshot('flow-2d-light-mobile')
+  await viewport(1440, 1000)
+  await evaluate(() => [...document.querySelectorAll('.group-tab')].find((button) => button.firstChild?.textContent.trim() === '亚太')?.click())
+  await waitFor(() => !document.querySelector('.globe-flow-legend'))
+  check('当前分组不含中心时不画线路', (await snapshot()).routes.length === 0 && (await snapshot()).center === null)
+  nodes = nodes.map((node) => node.id === 202 ? { ...node, online: false } : node)
+  await navigate()
+  const offline = await snapshot()
+  check('指定中心离线时，同地点其他成员在线也不播放', offline.routes.length === 3 && offline.animation.length === 0)
+  flowCenterId = '999'
+  await navigate()
+  check('无匹配 ID 时回到普通地图', (await snapshot()).routes.length === 0 && (await snapshot()).center === null)
+  flowCenterId = undefined
+  nodes = ordinaryNodes
+  await preferences(null, null)
+}
+
 function layoutChecks(tag, snapshot) {
   check(`${tag}：实际绘出陆地与定位点，3D名称仍保留`, snapshot.paths?.some((p) => p.kind === 'globe-land' && p.d.length > 100) && snapshot.pins.length > 0 && (snapshot.mode === '2d' || snapshot.nameLabels > 0))
   check(`${tag}：路径与命中坐标有限`, snapshot.paths.every((p) => !/NaN|Infinity/.test(p.d)) && snapshot.pins.every((p) => Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))))
@@ -1273,6 +1351,7 @@ try {
   await media(false)
   await navigate()
   console.log(`本地夹具 ${base}；输出 ${OUT}`)
+  if (FLOW_ONLY) await flowChecks()
   if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
@@ -1467,8 +1546,9 @@ try {
   await beaconGateChecks()
   await sweepContinuity()
   await aggregateMarkerChecks()
+  await flowChecks()
   }
-  if (!MOBILE_LAYOUT_ONLY) {
+  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY) {
     if (!LOCATIONS_ONLY) await nodeInteractionChecks()
     if (!TOUCH_ONLY) await smallLocationChecks()
   }
@@ -1476,7 +1556,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

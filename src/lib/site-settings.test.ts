@@ -80,6 +80,11 @@ eq(TOPS.map((t) => [t, hasSummary(t), hasGroupTabs(t), isBudgetLayout(t)]),
 const sorted = (o: unknown) => JSON.stringify(Object.fromEntries(Object.entries(o as Record<string, unknown>).sort()))
 eq(sorted(normalizeConfig(null)), sorted(DEFAULTS), "什么都没存 → 全默认")
 eq(sorted(normalizeConfig({})), sorted(DEFAULTS), "空对象 → 全默认")
+eq(DEFAULTS.mapFlowCenterId, "", "旧配置默认不画地图流向")
+eq(normalizeConfig({ mapFlowCenterId: " 0042 " }).mapFlowCenterId, "42", "中心节点按整数 ID 匹配")
+for (const value of [0, 42, null, "", "-1", "0", "1.5", "1e2", "9007199254740992", "Frankfurt"]) {
+  eq(normalizeConfig({ mapFlowCenterId: value }).mapFlowCenterId, "", "无效中心节点 ID 关闭流向")
+}
 eq(DEFAULTS.gruvboxOn, false, "Gruvbox 默认关闭，旧站保持原配色")
 eq(normalizeConfig({ gruvboxOn: true, themeMode: "light" }).gruvboxOn, true, "亮色模式可启用 Gruvbox")
 eq(normalizeConfig({ gruvboxOn: true, themeMode: "dark" }).gruvboxOn, true, "暗色模式可启用 Gruvbox")
@@ -136,18 +141,22 @@ eq(normalizeConfig({ cardStyle: "detail", showSummary: true }).latencyStyle, "br
 //   （顶栏入口改成自动探测，不再需要设置项）→ 回到 **6 个**，面板也回到那套一页平铺的单列版式
 //   （最好看的那一档）。1.29.0 用户明确新增「延迟曲线样式」→ **7 个**。
 //   1.33.0 用户要求全球币种自动折算，新增「自定义汇率」作为无公开报价币种的补充 → **8 个**。
-//   本轮用户要求可选 Gruvbox，新增「Gruvbox 配色」→ **9 个**，外观仍归同一分组。
+//   1.35.0 新增可选「Gruvbox 配色」→ **9 个**。
+//   1.36.0 地图流向由站长指定中心节点 → **10 个**，仍使用现有分组。
 //   后续增加仍需有对应用户需求，避免后台配置无关扩张。
 const manifest = JSON.parse(readFileSync(new URL("../../theme.json", import.meta.url), "utf8"))
 const fields = manifest.config.filter((f: { type: string }) => f.type !== "title")
-if (fields.length > 9) {
+if (fields.length > 10) {
   failed++
-  console.error(`✗ theme.json 的非标题设置项有 ${fields.length} 个（> 9）：请核对新增字段的需求与布局`)
+  console.error(`✗ theme.json 的非标题设置项有 ${fields.length} 个（> 10）：请核对新增字段的需求与布局`)
 }
-eq(fields.length, 9, "9 个设置项（含用户要求的可选 Gruvbox 配色）")
+eq(fields.length, 10, "10 个设置项（含地图流向中心节点）")
 // 两边的 key 必须一一对上：面板按 theme.json 画表单，页面按 DEFAULTS 兜底。
 const keys = fields.map((f: { key: string }) => f.key).sort()
 eq(keys, Object.keys(DEFAULTS).sort(), "theme.json 的字段与 DEFAULTS 的键一致")
+const flowField = fields.find((f: { key: string }) => f.key === "mapFlowCenterId")
+eq(flowField?.type, "text", "中心节点 ID 由后台文本字段配置")
+eq(flowField?.default, DEFAULTS.mapFlowCenterId, "旧站不启用流向示意")
 const gruvboxField = fields.find((f: { key: string }) => f.key === "gruvboxOn")
 eq(gruvboxField?.type, "boolean", "Gruvbox 在主题设置中使用独立开关")
 eq(gruvboxField?.default, false, "后台 Gruvbox 开关默认关闭")

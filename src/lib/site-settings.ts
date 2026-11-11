@@ -39,6 +39,8 @@ export type ThemeConfig = {
    * （与 `cardStyle` 同一套口径：站点级设置存 hub、访客偏好才落本地）。
    */
   globeOn: boolean
+  /** 流向示意的中心节点 ID；空串关闭。 */
+  mapFlowCenterId: string
   /** 站点用哪一档明暗：随系统 / 随北京时间自动 / 固定亮 / 固定暗（访客自己的开关优先）。 */
   themeMode: ThemeMode
   /** 可选 Gruvbox 配色；只存 Hub，与明暗模式独立，旧站默认关闭。 */
@@ -127,6 +129,7 @@ export const DEFAULTS: ThemeConfig = {
   // 地球默认显示：它本来就是这块页面的招牌，站长要更安静的版面可以在后台关掉；
   // 关掉是**整块关**（地球不渲染、顶栏那枚开关也一起不出现），不是「访客还能自己开回来」的默认档。
   globeOn: true,
+  mapFlowCenterId: "",
   // 明暗默认「随系统」：与 1.25.0 之前的行为一致（那时没有这一项，就是跟着系统走）。
   themeMode: "system",
   gruvboxOn: false,
@@ -226,6 +229,8 @@ export function isBudgetLayout(top: ThemeConfig["listTop"]): boolean {
  */
 export function normalizeConfig(saved: unknown): ThemeConfig {
   const s = (saved && typeof saved === "object" ? saved : {}) as Record<string, unknown>
+  const flowCenterText = typeof s.mapFlowCenterId === "string" ? s.mapFlowCenterId.trim() : ""
+  const flowCenterId = /^\d{1,16}$/.test(flowCenterText) ? Number(flowCenterText) : 0
   return {
     // select：值不在声明里的选项内（旧版本、手改）就当没保存过，回落默认；
     // 旧值 "detail" 迁到 "latency"（见 cardStyleOf）。
@@ -242,6 +247,7 @@ export function normalizeConfig(saved: unknown): ThemeConfig {
       : DEFAULTS.remarkPlacement,
     // 开关：只认真布尔。老站点配置里没有这个键（→ 默认显示）；写成 "false" 这种字符串不算数。
     globeOn: typeof s.globeOn === "boolean" ? s.globeOn : DEFAULTS.globeOn,
+    mapFlowCenterId: Number.isSafeInteger(flowCenterId) && flowCenterId > 0 ? String(flowCenterId) : DEFAULTS.mapFlowCenterId,
     // 四档明暗：认不出来的取值（旧版本、手改）回落默认，别让页面卡在一个不存在的档上。
     themeMode: THEME_MODES.includes(s.themeMode as ThemeMode) ? (s.themeMode as ThemeMode) : DEFAULTS.themeMode,
     gruvboxOn: typeof s.gruvboxOn === "boolean" ? s.gruvboxOn : DEFAULTS.gruvboxOn,

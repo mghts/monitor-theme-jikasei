@@ -528,7 +528,7 @@ export default function App() {
             {hasSummary(config.listTop) && <SummaryCards nodes={found.shown} finance={isBudgetLayout(config.listTop)} searching={found.active} exchangeRates={config.exchangeRates} />}
             {/* 节点地球：概览卡片之下、列表之上（上游就是这个次序）。 */}
             {globeOn && (
-              <Globe nodes={view.shown} dark={dark} region={regions.current} onRegion={setRegion} onOpen={go} onWarm={warmDetail} />
+              <Globe nodes={view.shown} dark={dark} flowCenterId={Number(config.mapFlowCenterId) || null} region={regions.current} onRegion={setRegion} onOpen={go} onWarm={warmDetail} />
             )}
             {/* 一台都剩不下时说清楚是谁把它筛没的，并指回去哪儿取消 —— 否则访客只看到
                 一大片空白，会以为站点坏了。搜索那一层排在前面：它是最后叠上去、也是访客

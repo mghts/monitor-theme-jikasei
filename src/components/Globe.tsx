@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react"
-import { ChevronRight, Minus, Pause, Play, Plus, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, Minus, Pause, Play, Plus, X } from "lucide-react"
 import { Dialog, Tooltip } from "radix-ui"
 
 import {
@@ -110,6 +110,17 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
   const flowPoint = flowNode && points.find((point) => point.nodeIds.includes(flowNode.id))
   const globeFlows = useMemo(() => flowNode && flowPoint ? prepareGlobeFlows(points, flowPoint, flowNode.online) : [], [points, flowPoint, flowNode])
   const rows = useMemo(() => regionRows(nodes), [nodes])
+  const sideBySide = useSyncExternalStore((notify) => subscribe(SIDE_BY_SIDE, notify), () => SIDE_BY_SIDE.matches)
+  const regionPageSize = sideBySide ? 16 : 8
+  const regionPageKey = JSON.stringify([regionPageSize, rows.map((row) => row.region.key)])
+  const regionPages = Math.max(1, Math.ceil(rows.length / regionPageSize))
+  const selectedRegionIndex = rows.findIndex((row) => row.region.key === region)
+  const nextRegionPage = selectedRegionIndex < 0 ? 0 : Math.floor(selectedRegionIndex / regionPageSize)
+  const [regionPagination, setRegionPagination] = useState({ key: regionPageKey, page: nextRegionPage })
+  // 地区集合、顺序或每页容量变化时回到选中地区所在页；实时指标刷新不重置页码。
+  if (regionPagination.key !== regionPageKey) setRegionPagination({ key: regionPageKey, page: nextRegionPage })
+  const regionPage = regionPagination.key === regionPageKey ? Math.min(regionPagination.page, regionPages - 1) : nextRegionPage
+  const pageRows = rows.slice(regionPage * regionPageSize, (regionPage + 1) * regionPageSize)
   // 「全部」那一行的悬停说明：合计里有多少台认不出国家（不上地球与地区列表）——
   // 「全部 N」与地区分项合计对不上这件事，就在那里有一句明面上的说法。
   const unplaced = nodes.length - rows.reduce((sum, row) => sum + row.count, 0)
@@ -130,13 +141,13 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
   // 完整世界不做纬度平移；放大后限制平移范围，避免拖到两极之外留下空白。
   const flatLatLimit = Math.max(0, 90 - 90 / (zoom / 100))
   const flatLat = Math.max(-flatLatLimit, Math.min(flatLatLimit, flatView.lat))
-  const [fitHeight, setFitHeight] = useState(320)
   const zoomId = useId()
   const mapClipId = useId()
   const flowClipId = useId()
   const flowMaskId = useId()
   const beaconGlowId = useId()
   const choiceId = useId()
+  const regionListId = useId()
   // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
   const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
@@ -149,7 +160,6 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
   // 标签左右侧的记忆：跨帧保留，圆心附近 ±18 的机器才不会左右闪。布局函数就地写它。
   const sides = useRef(new Map<string, "L" | "R">())
   const host = useRef<HTMLDivElement>(null)
-  const regions = useRef<HTMLDivElement>(null)
   const controls = useRef<HTMLDivElement>(null)
   const choiceHost = useRef<HTMLDivElement>(null)
   const returnFocus = useRef<SVGCircleElement | null>(null)
@@ -180,18 +190,8 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect()
       setBox((prev) => prev?.w === r.width && prev.h === r.height ? prev : { w: r.width, h: r.height })
-      // 量地区内容本身，避免左栏增高后又把伸展的侧栏高度当成新目标，形成循环。
-      const list = regions.current
-      const toolbar = controls.current
-      if (list && toolbar && list.parentElement) {
-        const style = getComputedStyle(list.parentElement)
-        const sideHeight = list.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-        setFitHeight(Math.max(320, Math.min(400, sideHeight - toolbar.getBoundingClientRect().height)))
-      }
     })
     ro.observe(el)
-    if (regions.current) ro.observe(regions.current)
-    if (controls.current) ro.observe(controls.current)
     return () => ro.disconnect()
   }, [])
 
@@ -429,7 +429,7 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
   return (
     <Tooltip.Provider delayDuration={0}>
     <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"} data-map-flow-playing={flowPoint ? flowPlaying : undefined}>
-      <div className="globe-main" style={{ "--globe-fit-height": `${fitHeight}px`, "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h, "--globe-mobile-height": `${mobileHeight}px` } as CSSProperties}>
+      <div className="globe-main" style={{ "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h, "--globe-mobile-height": `${mobileHeight}px` } as CSSProperties}>
         <div
           ref={host}
           className="globe-atlas"
@@ -577,7 +577,7 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
       </Dialog.Root>
 
       <aside className="globe-side">
-        <div ref={regions} className="globe-regions">
+        <div id={regionListId} className="globe-regions" data-region-page={regionPage + 1} data-region-pages={regionPages} data-region-total={rows.length} style={{ "--globe-region-row-count": Math.max(1, Math.ceil(Math.min(rows.length, regionPageSize) / 2)) } as CSSProperties}>
           <div className="globe-side-title">
             地区{located ? " · 已定位" : ""}
           </div>
@@ -591,12 +591,13 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
             <span>全部</span>
             <b>{nodes.length}</b>
           </button>
-          {rows.map((row) => (
+          {pageRows.map((row) => (
             <button
               key={row.region.key}
               type="button"
               className="globe-reg"
               data-region-code={row.region.code}
+              data-region-key={row.region.key}
               aria-pressed={region === row.region.key}
               onClick={() => pick(row.region.key, row.aim)}
               title={`${row.region.label} · ${row.region.code} · ${row.count} 台${row.offline > 0 ? ` · ${row.offline} 台离线` : ""}`}
@@ -612,6 +613,15 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
             </button>
           ))}
         </div>
+        {regionPages > 1 && <nav className="globe-region-pager" aria-label="地区分页">
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="上一页地区" aria-controls={regionListId} disabled={regionPage === 0} onClick={() => setRegionPagination({ key: regionPageKey, page: regionPage - 1 })}>
+            <ChevronLeft aria-hidden="true" />
+          </Button>
+          <span className="tnum" aria-live="polite" aria-atomic="true">{regionPage + 1} / {regionPages} 页</span>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="下一页地区" aria-controls={regionListId} disabled={regionPage === regionPages - 1} onClick={() => setRegionPagination({ key: regionPageKey, page: regionPage + 1 })}>
+            <ChevronRight aria-hidden="true" />
+          </Button>
+        </nav>}
       </aside>
     </section>
     </Tooltip.Provider>
@@ -721,6 +731,7 @@ function RegionFlag({ code }: { code: string }) {
 }
 
 const NARROW = matchMedia("(max-width: 720px)")
+const SIDE_BY_SIDE = matchMedia("(min-width: 900px)")
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)")
 
 function subscribe(query: MediaQueryList, notify: () => void) {

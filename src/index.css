@@ -302,7 +302,7 @@
    换成本站的设计 token。规则**故意不放进 `@layer`**：SVG 内部那些类（.globe-land 等）
    上游是直接写的，不套层才能稳稳盖住 Tailwind 的工具类。
 
-   两列的比例 1.35fr / 0.65fr 照上游；地图在扣除底部控件的区域居中，基准高度增高至 400px。
+   两列的比例 1.35fr / 0.65fr 照上游；地图基准高度 260px，地区列表独立分页，不再撑高地图。
    窄到 900px 以下改成上下两段。放大或标签密集时增加画布高度，避免圆盘与文字被裁掉。 */
 .globe-panel {
   display: grid;
@@ -323,12 +323,12 @@
   flex-direction: column;
   justify-content: center;
   min-width: 0;
-  padding-bottom: 52px;
+  padding-bottom: 44px;
 }
 .globe-atlas {
   position: relative;
   flex: none;
-  height: calc(320px * var(--globe-height-ratio, 1));
+  height: calc(260px * var(--globe-height-ratio, 1));
   overflow: hidden;
   cursor: grab;
   /* 只让出竖向：手机上在地球上竖着划是滚页面（见组件注释），横着划才是转地球。 */
@@ -336,11 +336,8 @@
   user-select: none;
   -webkit-user-select: none;
 }
-@media (min-width: 900px) {
-  .globe-atlas { height: calc(var(--globe-fit-height, 320px) * var(--globe-height-ratio, 1)); }
-}
 .globe-atlas[data-drag="true"] { cursor: grabbing; }
-/* 手机高度贴合投影、成员标签与底注，去掉固定高盒产生的上下空白；控件仍独立占位。 */
+/* 手机高度贴合投影和地点标签，去掉固定高盒产生的上下空白；控件仍独立占位。 */
 @media (max-width: 720px) {
   .globe-atlas { height: var(--globe-mobile-height, 180px); }
 }
@@ -351,8 +348,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  height: 52px;
-  padding: 10px 12px;
+  height: 44px;
+  padding: 6px 12px;
   color: var(--muted-foreground);
 }
 .globe-map-controls {
@@ -393,8 +390,8 @@
 .globe-controls output { min-width: 40px; font-size: 12px; text-align: right; }
 .globe-zoom-reset { padding-inline: 8px; font-size: 12px; }
 @media (max-width: 1199px) {
-  .globe-main { padding-bottom: 60px; }
-  .globe-toolbar { height: 60px; gap: 8px; }
+  .globe-main { padding-bottom: 52px; }
+  .globe-toolbar { height: 52px; gap: 8px; }
   .globe-mode-label, .globe-spin-label { display: none; }
   .globe-mode-button, .globe-spin-button, .globe-zoom-button, .globe-zoom-reset { width: 32px; min-width: 32px; height: 40px; flex: none; padding-inline: 4px; }
   .globe-controls { gap: 4px; }
@@ -524,17 +521,31 @@
 }
 
 .globe-side {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding: 14px 16px;
+  padding: 10px 16px;
   border-top: 1px solid var(--border);
   font-size: 13px;
 }
 .globe-regions {
+  --globe-region-row-height: 20px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: 20px var(--globe-region-row-height) repeat(var(--globe-region-row-count, 1), var(--globe-region-row-height));
   align-content: start;
-  gap: 8px 18px;
+  gap: 6px 18px;
 }
+.globe-region-pager {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--muted-foreground);
+}
+.globe-region-pager span { min-width: 64px; text-align: center; font-size: 12px; }
 @media (min-width: 900px) {
   .globe-side { border-top: 0; border-left: 1px solid var(--border); }
 }
@@ -560,10 +571,11 @@
 /* ★ 地区行撑到 32（≈7mm）**只留给窄屏**：面板在那里是上下两段、手指操作，20px（4mm）
    点不准（WCAG 2.2 的硬线是 24）。桌面用鼠标 —— 站长 2026-10-07 看过桌面之后说
    「电脑端的地区显示改回原来那样」，于是这里按 900px 那道坎分开：桌面维持原来的行高
-   窄屏才撑高。行与行之间留着 .globe-side 的 8px gap，
-   命中区不会叠到邻居身上（撑高后命中 40，正好等于行高 32 + 行距 8）。 */
+   窄屏才撑高，行与行之间仍保留独立间隔。 */
 @media (max-width: 899px) {
+  .globe-regions { --globe-region-row-height: 32px; }
   .globe-reg { min-height: 32px; }
+  .globe-region-pager button { width: 40px; height: 40px; }
 }
 .globe-reg-all { grid-column: 1 / -1; }
 .globe-reg span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

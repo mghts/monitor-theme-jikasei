@@ -7,6 +7,7 @@
 // MAP_CHECK_GROUP=flow 仅验收中心节点、流向动效、离线与分组。
 // MAP_CHECK_GROUP=appearance 验收简化界面、地点标签及放大的球体布局。
 // MAP_CHECK_GROUP=colors 验收四套主题下的地图配色、陆海层次与流动线对比度。
+// MAP_CHECK_GROUP=compact 验收缩短面板、地区分页、触屏/键盘和实时数据变化。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -17,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { globeNodes, VIEW } from '../src/lib/globe.ts'
+import { CITY_HINTS } from '../src/lib/world.ts'
 
 const parentOutput = process.argv[2] ? resolve(process.argv[2]) : tmpdir()
 mkdirSync(parentOutput, { recursive: true })
@@ -30,7 +32,8 @@ const NEIGHBORS_ONLY = LOCATIONS_ONLY && process.env.MAP_LOCATION_NEIGHBORS_ONLY
 const FLOW_ONLY = process.env.MAP_CHECK_GROUP === 'flow'
 const APPEARANCE_ONLY = process.env.MAP_CHECK_GROUP === 'appearance'
 const COLORS_ONLY = process.env.MAP_CHECK_GROUP === 'colors'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY
+const COMPACT_ONLY = process.env.MAP_CHECK_GROUP === 'compact'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY || COMPACT_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
 let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
@@ -403,13 +406,33 @@ async function touchDrag(dx, dy) {
   await sleep(350)
 }
 async function region(code) {
-  const found = await evaluate((code) => {
-    const button = [...document.querySelectorAll('.globe-reg:not(.globe-reg-all)')].find((el) => el.querySelector(`img[src="/flags/${code}.svg"]`))
-    button?.click()
-    return !!button
-  }, code)
-  if (!found) throw new Error(`找不到地区行：${code}`)
-  await sleep(250)
+  for (let step = 0; step < 64; step++) {
+    const moved = await evaluate(() => {
+      const button = document.querySelector('button[aria-label="上一页地区"]')
+      if (!button || button.disabled) return false
+      button.click()
+      return true
+    })
+    if (!moved) break
+    await sleep(50)
+  }
+  for (let step = 0; step < 64; step++) {
+    const found = await evaluate((code) => {
+      const button = [...document.querySelectorAll('.globe-reg:not(.globe-reg-all)')].find((el) => el.dataset.regionCode === code)
+      button?.click()
+      return !!button
+    }, code)
+    if (found) { await sleep(250); return }
+    const moved = await evaluate(() => {
+      const button = document.querySelector('button[aria-label="下一页地区"]')
+      if (!button || button.disabled) return false
+      button.click()
+      return true
+    })
+    if (!moved) break
+    await sleep(50)
+  }
+  throw new Error(`找不到地区行：${code}`)
 }
 async function allRegions() {
   await evaluate(() => document.querySelector('.globe-reg-all')?.click())
@@ -1394,6 +1417,121 @@ async function appearanceChecks() {
   }
 }
 
+async function compactRegionChecks() {
+  const ordinaryNodes = nodes
+  const panel = () => evaluate(() => {
+    const root = document.querySelector('.globe-panel'), list = root.querySelector('.globe-regions')
+    return {
+      height: root.getBoundingClientRect().height,
+      page: Number(list.dataset.regionPage || 1), pages: Number(list.dataset.regionPages || 1),
+      total: Number(list.dataset.regionTotal), all: Number(root.querySelector('.globe-reg-all b').textContent),
+      keys: [...root.querySelectorAll('[data-region-key]')].map((button) => button.dataset.regionKey),
+      prev: root.querySelector('[aria-label="上一页地区"]')?.disabled,
+      next: root.querySelector('[aria-label="下一页地区"]')?.disabled,
+    }
+  })
+  const turn = async (next = true, physical = false) => {
+    const before = await panel()
+    const label = next ? '下一页地区' : '上一页地区'
+    if (physical) {
+      const target = await evaluate((label) => {
+        const button = document.querySelector('button[aria-label="' + label + '"]')
+        button.scrollIntoView({ block: 'nearest' })
+        const rect = button.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, label)
+      await clickAt(target, true)
+    } else await evaluate((label) => document.querySelector('button[aria-label="' + label + '"]').click(), label)
+    await waitFor((page) => Number(document.querySelector('.globe-regions').dataset.regionPage) !== page, before.page)
+    await sleep(100)
+  }
+  const heights = new Map()
+  for (const before of BASELINE_DIST ? [true, false] : [false]) {
+    servingDist = before ? BASELINE_DIST : DIST
+    for (const width of [1440, 900, 768, 390, 320]) {
+      await viewport(width, 1000)
+      for (const flow of [false, true]) {
+        flowCenterId = flow ? '5' : undefined
+        for (const selectedMode of ['3d', '2d']) {
+          await preferences(selectedMode, '0')
+          const tag = [width, selectedMode, flow ? 'flow' : 'plain'].join('/')
+          const snapshot = await state('compact-' + (before ? 'before-' : '') + tag)
+          const measured = await panel()
+          if (before) { heights.set(tag, measured.height); continue }
+          if (heights.has(tag)) check(tag + '：整块地图和地区面板高度缩小', measured.height <= heights.get(tag) - 6, heights.get(tag).toFixed(1) + ' → ' + measured.height.toFixed(1))
+          layoutChecks('紧凑/' + tag, snapshot)
+          if (flow && width === 1440) await screenshot('compact-panel-' + selectedMode)
+        }
+      }
+    }
+  }
+  const places = [...new Map(CITY_HINTS.map((hint) => [hint.country + ' · ' + hint.name, hint])).values()].slice(0, 36)
+  const expectedKeys = places.map((hint) => hint.country + ' · ' + hint.name).sort()
+  const fixture = places.map((hint, i) => makeNode(2000 + i, hint.name + '-01', hint.country, i < 32 ? '多地区' : '少地区'))
+  nodes = [...fixture, makeNode(2999, '无位置节点', '', '多地区')]
+  flowCenterId = '2000'
+  for (const width of [1440, 768, 320]) for (const selectedMode of ['3d', '2d']) {
+    await viewport(width, 1000)
+    await preferences(selectedMode, '0')
+    const tag = '地区分页/' + width + '/' + selectedMode
+    const capacity = width >= 900 ? 16 : 8
+    const first = await panel(), initialMap = await state(tag + '/first')
+    check(tag + '：页数、每页容量与全部台数准确', first.total === 36 && first.all === 37 && first.pages === Math.ceil(36 / capacity) && first.keys.length === capacity && first.prev === true && first.next === false)
+    const seen = [...first.keys]
+    for (let page = 2; page <= first.pages; page++) {
+      await turn(true, width === 320)
+      const current = await panel(), snapshot = await state(tag + '/' + page)
+      seen.push(...current.keys)
+      check(tag + '：第 ' + page + ' 页不撑高面板、不改变地图或筛选', current.page === page && Math.abs(current.height - first.height) <= 1 && geometry(snapshot) === geometry(initialMap) && snapshot.cards.length === 37 && !snapshot.overflow)
+    }
+    const last = await panel()
+    check(tag + '：所有地区可翻页到达且无重复遗漏，末页正确禁用', JSON.stringify(seen.sort()) === JSON.stringify(expectedKeys) && last.next === true && last.prev === false)
+    await screenshot('region-pages-' + width + '-' + selectedMode)
+    await evaluate(() => document.querySelector('[aria-label="上一页地区"]').focus())
+    await keyPress('Enter')
+    check(tag + '：键盘 Enter 可以翻页', (await panel()).page === first.pages - 1)
+    const selectedKey = (await panel()).keys[0]
+    const targetName = fixture.find((node) => {
+      const place = places[node.id - 2000]
+      return place.country + ' · ' + place.name === selectedKey
+    }).name
+    await evaluate((key) => [...document.querySelectorAll('[data-region-key]')].find((button) => button.dataset.regionKey === key).click(), selectedKey)
+    await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 1)
+    const selected = await panel()
+    await evaluate(() => document.querySelector('[data-slot="card"] h3').click())
+    await waitFor(() => /^\/node\/\d+$/.test(location.pathname) && !!document.querySelector('h2'))
+    await evaluate(() => [...document.querySelectorAll('header button')].find((button) => button.textContent.trim() === '地图控件验收').click())
+    await ready()
+    await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 1)
+    check(tag + '：从详情返回恢复选中地区所在页与筛选', (await panel()).page === selected.page && (await panel()).keys.includes(selectedKey) && (await state()).cards[0] === targetName)
+    await turn()
+    check(tag + '：翻页保留已选地区与节点筛选', (await state()).cards[0] === targetName && (await state()).cards.length === 1 && (await panel()).page === selected.page + 1)
+    await evaluate(() => [...document.querySelectorAll('.group-tab')].find((button) => button.firstChild?.textContent.trim() === '少地区').click())
+    await waitFor(() => document.querySelector('.globe-regions')?.dataset.regionTotal === '4')
+    const small = await panel()
+    check(tag + '：切小分组回到有效页码并隐藏分页', small.page === 1 && small.pages === 1 && small.keys.length === 4 && small.all === 4 && small.prev === undefined && small.next === undefined)
+  }
+  await viewport(1440, 1000)
+  await preferences('3d', '0')
+  await turn()
+  const resizeKey = (await panel()).keys[0]
+  await evaluate((key) => [...document.querySelectorAll('[data-region-key]')].find((button) => button.dataset.regionKey === key).click(), resizeKey)
+  await viewport(320, 1000)
+  await sleep(250)
+  check('改变窗口宽度后选中地区仍在当前页', (await panel()).keys.includes(resizeKey) && (await state()).cards.length === 1)
+  await allRegions()
+  await turn()
+  nodes = fixture.slice(0, 5)
+  await waitFor(() => document.querySelector('.globe-regions')?.dataset.regionTotal === '5')
+  check('实时删除地区后纠正页码，未出现空白页', (await panel()).page === 1 && (await panel()).pages === 1 && (await panel()).keys.length === 5)
+  nodes = [...fixture, makeNode(2999, '无位置节点', '', '多地区')]
+  await waitFor(() => document.querySelector('.globe-regions')?.dataset.regionTotal === '36')
+  check('实时恢复地区后不复活旧末页', (await panel()).page === 1 && (await panel()).keys.length === 8)
+  nodes = ordinaryNodes
+  flowCenterId = undefined
+  servingDist = DIST
+}
+
 async function colorChecks() {
   const sample = () => evaluate(async () => {
     const svg = document.querySelector('svg[data-map-canvas]')
@@ -1578,6 +1716,7 @@ try {
   if (FLOW_ONLY) await flowChecks()
   if (APPEARANCE_ONLY) await appearanceChecks()
   if (COLORS_ONLY) await colorChecks()
+  if (COMPACT_ONLY) await compactRegionChecks()
   if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
@@ -1774,7 +1913,7 @@ try {
   await aggregateMarkerChecks()
   await flowChecks()
   }
-  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY) {
+  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY && !COMPACT_ONLY) {
     if (!LOCATIONS_ONLY) await nodeInteractionChecks()
     if (!TOUCH_ONLY) await smallLocationChecks()
   }
@@ -1782,7 +1921,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: COMPACT_ONLY ? 'compact' : COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

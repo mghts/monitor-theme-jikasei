@@ -46,14 +46,17 @@ import { speedSeriesOf } from "@/lib/speed-history"
  *
  * 标签前不带图标：参考站的四张卡都没有，图标只是把标签挤窄、并把整行垫高。
  */
-function Block({ title, hint, children }: {
+function Block({ title, hint, fx, children }: {
   title: string
   /** 悬停提示：口径说明——月度预算与剩余价值那两个数不是一眼能看懂的，得写清楚。 */
   hint?: string
+  fx?: ReturnType<typeof useExchangeRates>
   children: ReactNode
 }) {
   return (
-    <div className="flex min-w-0 flex-col" title={hint}>
+    <div className="flex min-w-0 flex-col" title={hint}
+      data-exchange-rate-status={fx ? "" : undefined} data-fx-origin={fx?.origin}
+      data-fx-failed={fx ? String(fx.failed) : undefined} data-fx-loading={fx ? String(fx.loading) : undefined}>
       <div className="truncate text-xs text-muted-foreground">{title}</div>
       {children}
     </div>
@@ -288,6 +291,7 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
   const oldQuote = Date.now() - Date.parse(`${fx.snapshot.date}T00:00:00Z`) >= 3 * 86_400_000
   const status = needsFx ? `每日参考价 · ${fx.snapshot.date} · ${stateLabel}${oldQuote ? "（旧报价）" : ""}` : "自定义汇率"
   const received = fx.origin === "builtin" ? "随主题提供的离线报价" : `获取于 ${new Date(fx.snapshot.fetchedAtMs).toLocaleString("zh-CN")}`
+  const fxHint = showFx ? `。${status}。${needsFx ? `${received}；来源：Currency API；数据按日发布，具体付款以成交汇率为准。` : "使用站点设置中的自定义报价。"}${budget.skipped.length ? `${budget.skipped.length} 种币种缺少报价，未计入。` : ""}${custom.invalid ? `忽略 ${custom.invalid} 项无效自定义汇率。` : ""}` : ""
 
   return (
     /* 版式照参考站：`sm` 起两列、`lg` 起四列。**手机是一列而不是参考站的两列**——参考站每张
@@ -299,7 +303,7 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
           {/* 第一张卡：月度预算 + 剩余价值。两个数使用同一份汇率折成人民币后相加，
               所以写「≈」；口径与汇率清单放在悬停提示里（见 lib/money.ts）。 */}
           <Pair>
-            <Block title="月度预算" hint={`各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。${note}`}>
+            <Block title="月度预算" fx={showFx ? fx : undefined} hint={`各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。${note}${fxHint}`}>
               <Big tone={budget.monthly === null ? undefined : "budget"}>{budget.monthly === null ? "—" : `≈${cny(budget.monthly)}`}</Big>
               <Foot>{budget.monthlyCount ? `${monthlyCoverage} 台计费` : budget.skipped.length ? "缺少汇率" : "未记录价格"}</Foot>
             </Block>
@@ -356,17 +360,6 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
           <Sparkline series={series} />
         </Block>
       </Tile>
-      {showFx && (
-        <div className="col-span-full -mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-          role="status" aria-label="预算汇率状态" data-exchange-rate-status="" data-fx-origin={fx.origin}
-          data-fx-failed={fx.failed ? "true" : "false"} data-fx-loading={fx.loading ? "true" : "false"}
-          title={`${note}。${needsFx ? `${received}；数据按日发布，具体付款以成交汇率为准。` : "使用站点设置中的自定义报价。"}`}>
-          <span>{status}</span>
-          {needsFx && <a href="https://github.com/fawazahmed0/exchange-api" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">汇率来源</a>}
-          {budget.skipped.length > 0 && <span>{budget.skipped.length} 种币种缺少报价，未计入</span>}
-          {custom.invalid > 0 && <span>忽略 {custom.invalid} 项无效自定义汇率</span>}
-        </div>
-      )}
     </div>
   )
 }

@@ -151,6 +151,7 @@ function inspect(infoSelector, cacheKey) {
   return {
     budgets: blocks.map((block) => ({ title: block.firstElementChild.textContent.trim(), number: block.children[1]?.textContent.trim(), foot: block.children[2]?.textContent.trim(), hint: block.getAttribute('title'), numberClipped: !!block.children[1] && block.children[1].scrollWidth > block.children[1].clientWidth + 1, ...rect(block) })),
     info: info ? { text: info.textContent.trim(), title: info.getAttribute('title'), attrs: Object.fromEntries([...info.attributes].map((attr) => [attr.name, attr.value])), scrollWidth: info.scrollWidth, clientWidth: info.clientWidth, parts: [...info.children].map((part) => ({ text: part.textContent.trim(), clipped: part.scrollWidth > part.clientWidth + 1, ...rect(part) })), visible: getComputedStyle(info).display !== 'none' && rect(info).h > 0, ...rect(info) } : null,
+    fxLink: !!document.querySelector('a[href="https://github.com/fawazahmed0/exchange-api"]'),
     cache: localStorage.getItem(cacheKey), viewportWidth: innerWidth, dark: document.documentElement.classList.contains('dark'), overflow: document.documentElement.scrollWidth > innerWidth + 1,
     nodes: cards.filter((card) => card.getAttribute('role') === 'button').length, body: document.body.innerText,
   }
@@ -162,6 +163,7 @@ async function state(label) {
 }
 const amount = (snapshot, title) => Number(snapshot.budgets.find((block) => block.title === title)?.number?.match(/¥\s*([\d,]+(?:\.\d+)?)/)?.[1]?.replaceAll(',', ''))
 function budgetChecks(tag, snapshot, monthly, remaining, count) {
+  check(`${tag}：首页没有独立汇率状态文字或来源链接`, !/每日参考价|使用缓存|汇率来源/.test(snapshot.body) && !snapshot.fxLink)
   check(`${tag}：月度预算准确`, amount(snapshot, '月度预算') === monthly, snapshot.budgets.find((block) => block.title === '月度预算')?.number)
   check(`${tag}：剩余价值准确`, amount(snapshot, '剩余价值') === remaining, snapshot.budgets.find((block) => block.title === '剩余价值')?.number)
   check(`${tag}：两块覆盖台数准确，未知币种未计入`, snapshot.budgets.length === 2 && snapshot.budgets[0].foot === `${count} 台计费` && snapshot.budgets[1].foot === `${count} 台未到期`, snapshot.budgets.map((block) => block.foot).join(' / '))
@@ -187,7 +189,7 @@ async function runChecks() {
   }
   const metadataChecks = (tag, snapshot, origin, failed, wording, date) => {
     check(`${tag}：来源、失败和加载状态一致`, snapshot.info?.attrs['data-fx-origin'] === origin && snapshot.info.attrs['data-fx-failed'] === String(failed) && snapshot.info.attrs['data-fx-loading'] === 'false', JSON.stringify(snapshot.info?.attrs))
-    check(`${tag}：页面明确显示报价日期与回退状态`, snapshot.info?.text.includes(wording) && snapshot.info.text.includes(date), snapshot.info?.text)
+    check(`${tag}：预算悬停提示保留报价日期与回退状态`, snapshot.info?.title.includes(wording) && snapshot.info.title.includes(date), snapshot.info?.title)
   }
   const noRequestCheck = async (tag, before) => {
     await sleep(450)
@@ -217,16 +219,16 @@ async function runChecks() {
   await waitBudget()
   await waitFor((selector) => document.querySelector(selector)?.getAttribute('data-fx-loading') === 'true', INFO_SELECTOR)
   const loading = await state('before-primary-response')
-  const builtinDate = loading.info?.text.match(/\d{4}-\d{2}-\d{2}/)?.[0]
+  const builtinDate = loading.info?.title.match(/\d{4}-\d{2}-\d{2}/)?.[0]
   if (!builtinDate) throw new Error('页面没有给出内置报价日期')
-  check('冷启动：网络响应前两预算已有有限内置读数，明确显示正在更新', loading.info.attrs['data-fx-origin'] === 'builtin' && loading.info.text.includes('正在更新') && ['月度预算', '剩余价值'].every((title) => Number.isFinite(amount(loading, title)) && amount(loading, title) > 0), JSON.stringify(loading.budgets))
+  check('冷启动：网络响应前两预算已有有限内置读数，悬停提示说明正在更新', loading.info.attrs['data-fx-origin'] === 'builtin' && loading.info.title.includes('正在更新') && ['月度预算', '剩余价值'].every((title) => Number.isFinite(amount(loading, title)) && amount(loading, title) > 0), JSON.stringify(loading.budgets))
   await release('primary', payload(today))
   await waitFx('network')
   const updated = await state('primary-success')
   budgetChecks('主源成功', updated, 195, 187.5, '4/5')
   metadataChecks('主源成功', updated, 'network', false, '已自动更新', today)
   check('自动更新：两个预算同步从内置报价变为新参考价', ['月度预算', '剩余价值'].every((title) => amount(updated, title) !== amount(loading, title)))
-  check('未知币种：有价格的 XYZ 明示未计入，不能使用提供方额外代币报价', updated.info.text.includes('1 种币种缺少报价，未计入') && updated.budgets.every((block) => block.hint.includes('XYZ 没有汇率，未计入')))
+  check('未知币种：有价格的 XYZ 明示未计入，不能使用提供方额外代币报价', updated.info.title.includes('1 种币种缺少报价，未计入') && updated.budgets.every((block) => block.hint.includes('XYZ 没有汇率，未计入')))
   const fullCache = JSON.parse(updated.cache || 'null')
   check('缓存：保存带版本、日期、来源和获取时间的完整全局表', fullCache?.version === 1 && fullCache.snapshot?.source === 'currency-api' && fullCache.snapshot.date === today && Number.isFinite(fullCache.snapshot.fetchedAtMs) && fullCache.snapshot.fetchedAtMs > 0 && ISO_CODES.every((code) => Number.isFinite(fullCache.snapshot.rates[code]) && fullCache.snapshot.rates[code] > 0), fullCache ? `${Object.keys(fullCache.snapshot?.rates || {}).length} 币种` : '无缓存')
   check('缓存：倒数方向正确，未知币种和加密币未进入表', fullCache?.snapshot?.rates.USD === 7.5 && fullCache.snapshot.rates.CNY === 1 && !Object.hasOwn(fullCache.snapshot.rates, 'XYZ') && !Object.hasOwn(fullCache.snapshot.rates, 'BTC'))
@@ -250,7 +252,7 @@ async function runChecks() {
   await waitFx('cache')
   const rare = await state('rare-currencies')
   budgetChecks('少见币种全局覆盖', rare, 138.2, 128.51, '9/10')
-  check('少见币种：新节点所需八种报价来自原缓存且说明完整', rare.budgets.every((block) => ['HUF', 'NOK', 'UAH', 'MOP', 'KWD', 'XAF', 'CLP', 'AFN'].every((code) => block.hint.includes(`1 ${code} =`))) && rare.info.text.includes(today))
+  check('少见币种：新节点所需八种报价来自原缓存且说明完整', rare.budgets.every((block) => ['HUF', 'NOK', 'UAH', 'MOP', 'KWD', 'XAF', 'CLP', 'AFN'].every((code) => block.hint.includes(`1 ${code} =`))) && rare.info.title.includes(today))
   await noRequestCheck('少见币种全局覆盖', beforeRare)
   await screenshot('02-rare-currencies-desktop')
 
@@ -262,7 +264,7 @@ async function runChecks() {
   await waitFx('cache')
   const manual = await state('manual-priority')
   budgetChecks('手工价优先', manual, 194, 188.5, '4/5')
-  check('手工价：明确区分自定义和每日价，非法项未成为零报价', manual.budgets.every((block) => block.hint.includes('1 USD = ¥7.1') && block.hint.includes('1 AED = ¥2.3') && block.hint.includes('自定义') && block.hint.includes(`1 EUR = ¥8，${today}`) && block.hint.includes('XYZ 没有汇率，未计入')) && manual.info.text.includes('忽略 6 项无效自定义汇率'), manual.info.text)
+  check('手工价：明确区分自定义和每日价，非法项未成为零报价', manual.budgets.every((block) => block.hint.includes('1 USD = ¥7.1') && block.hint.includes('1 AED = ¥2.3') && block.hint.includes('自定义') && block.hint.includes(`1 EUR = ¥8，${today}`) && block.hint.includes('XYZ 没有汇率，未计入')) && manual.info.title.includes('忽略 6 项无效自定义汇率'), manual.info.title)
   check('手工价：人民币始终为 1，手工配置不污染自动全局缓存', manual.cache === reloaded.cache)
   await noRequestCheck('手工价优先且自动价已有缓存', beforeManual)
 
@@ -275,7 +277,7 @@ async function runChecks() {
   await waitBudget()
   const allManual = await state('all-manual')
   budgetChecks('所有外币已有手工价', allManual, 111, 55.5, '3')
-  check('全手工：允许显式补未知币价，标明自定义且不冒用自动日期', allManual.info?.text === '自定义汇率' && allManual.budgets.every((block) => block.hint.includes('1 XYZ = ¥2') && block.hint.includes('自定义') && !block.hint.includes(today)) && allManual.cache === null)
+  check('全手工：允许显式补未知币价，标明自定义且不冒用自动日期', allManual.info?.title.includes('自定义汇率') && allManual.budgets.every((block) => block.hint.includes('1 XYZ = ¥2') && block.hint.includes('自定义') && !block.hint.includes(today)) && allManual.cache === null)
   await noRequestCheck('所有外币已有手工价', beforeAllManual)
 
   scenario = 'backup-success'
@@ -326,7 +328,7 @@ async function runChecks() {
       const mobile = await state(`cache-failed-${width}-${dark ? 'dark' : 'light'}`)
       const info = mobile.info
       check(`窄屏 ${width}/${dark ? '暗' : '亮'}：实际视口和颜色模式正确`, mobile.viewportWidth === width && mobile.dark === dark)
-      check(`窄屏 ${width}/${dark ? '暗' : '亮'}：日期、失败和缺报价说明完整，没有水平裁切`, !!info?.visible && info.text.includes('更新失败，使用缓存报价') && info.text.includes(preserved.snapshot.date) && info.text.includes('1 种币种缺少报价，未计入') && !mobile.overflow && info.x >= -1 && info.right <= width + 1 && info.scrollWidth <= info.clientWidth + 1 && info.parts.every((part) => !part.clipped && part.x >= info.x - 1 && part.right <= info.right + 1 && part.y >= info.y - 1 && part.bottom <= info.bottom + 1), JSON.stringify(info))
+      check(`窄屏 ${width}/${dark ? '暗' : '亮'}：预算悬停提示保留日期与失败说明，预算没有水平裁切`, !!info?.visible && info.title.includes('更新失败，使用缓存报价') && info.title.includes(preserved.snapshot.date) && info.title.includes('1 种币种缺少报价，未计入') && !mobile.overflow && info.x >= -1 && info.right <= width + 1 && info.scrollWidth <= info.clientWidth + 1 && info.parts.every((part) => !part.clipped && part.x >= info.x - 1 && part.right <= info.right + 1 && part.y >= info.y - 1 && part.bottom <= info.bottom + 1), JSON.stringify(info))
       budgetChecks(`窄屏 ${width}/${dark ? '暗' : '亮'} 缓存回退`, mobile, 215, 210, '4/5')
       check(`窄屏 ${width}/${dark ? '暗' : '亮'}：两个金额没有省略截断`, mobile.budgets.every((block) => !block.numberClipped))
       await screenshot(`05-cache-failed-${width}-${dark ? 'dark' : 'light'}`)
@@ -360,7 +362,7 @@ async function runChecks() {
   await waitFx('builtin', true)
   const invalid = await state('invalid-manual-unknown')
   budgetChecks('非法手工未知币', invalid, 20, 10, '1/2')
-  check('非法手工未知币：缺报价和非法输入均明示，不以默认 1/0 计入', invalid.info.text.includes('忽略 2 项无效自定义汇率') && invalid.info.text.includes('1 种币种缺少报价，未计入') && invalid.budgets.every((block) => block.hint.includes('XYZ 没有汇率，未计入')))
+  check('非法手工未知币：缺报价和非法输入均明示，不以默认 1/0 计入', invalid.info.title.includes('忽略 2 项无效自定义汇率') && invalid.info.title.includes('1 种币种缺少报价，未计入') && invalid.budgets.every((block) => block.hint.includes('XYZ 没有汇率，未计入')))
 
   scenario = 'cny-only'
   await clearCache()

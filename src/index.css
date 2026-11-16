@@ -302,7 +302,7 @@
    换成本站的设计 token。规则**故意不放进 `@layer`**：SVG 内部那些类（.globe-land 等）
    上游是直接写的，不套层才能稳稳盖住 Tailwind 的工具类。
 
-   两列的比例 1.35fr / 0.65fr 照上游；地图基准高度 260px，地区列表独立分页，不再撑高地图。
+   地图与分组地区列表等宽；地图基准高度 260px，地区列表独立分页、滚动，不撑高地图。
    窄到 900px 以下改成上下两段。放大或标签密集时增加画布高度，避免圆盘与文字被裁掉。 */
 .globe-panel {
   display: grid;
@@ -314,7 +314,7 @@
   color: var(--card-foreground);
 }
 @media (min-width: 900px) {
-  .globe-panel { grid-template-columns: 1.35fr 0.65fr; }
+  .globe-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .globe-main {
@@ -529,12 +529,38 @@
   font-size: 13px;
 }
 .globe-regions {
-  --globe-region-row-height: 20px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: 20px var(--globe-region-row-height) repeat(var(--globe-region-row-count, 1), var(--globe-region-row-height));
-  align-content: start;
-  gap: 6px 18px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: 6px;
+}
+.globe-side-inner { display: flex; flex-direction: column; min-height: 0; }
+.globe-region-groups {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 10px;
+  height: var(--globe-region-list-height, 32px);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.globe-region-group { flex: none; min-width: 0; }
+.globe-region-group-title {
+  height: 18px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.globe-region-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; }
+@media (min-width: 721px) {
+  .globe-region-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 .globe-region-pager {
   display: flex;
@@ -547,15 +573,19 @@
 }
 .globe-region-pager span { min-width: 64px; text-align: center; font-size: 12px; }
 @media (min-width: 900px) {
-  .globe-side { border-top: 0; border-left: 1px solid var(--border); }
+  .globe-side { position: relative; padding: 0; border-top: 0; border-left: 1px solid var(--border); }
+  .globe-side-inner { position: absolute; inset: 10px 16px; }
+  .globe-region-groups { flex: 1; height: auto; }
 }
-.globe-side-title { grid-column: 1 / -1; color: var(--muted-foreground); }
+.globe-side-title { flex: none; height: 20px; color: var(--muted-foreground); }
 .globe-reg {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  min-width: 0;
+  min-height: 20px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -566,18 +596,16 @@
   cursor: pointer;
 }
 .globe-reg:hover { color: var(--foreground); }
-/* 「全部」独占一整行：它是一条汇总（本分组一共几台），跟具体地区并排会读成"第一个地区"；
-   而两列的地区列表本来就要从它下面开始排。 */
+/* 「全部」常驻；各分组标题独占一行，下面按两列/三列排列该分组的地区。 */
 /* ★ 地区行撑到 32（≈7mm）**只留给窄屏**：面板在那里是上下两段、手指操作，20px（4mm）
    点不准（WCAG 2.2 的硬线是 24）。桌面用鼠标 —— 站长 2026-10-07 看过桌面之后说
    「电脑端的地区显示改回原来那样」，于是这里按 900px 那道坎分开：桌面维持原来的行高
    窄屏才撑高，行与行之间仍保留独立间隔。 */
 @media (max-width: 899px) {
-  .globe-regions { --globe-region-row-height: 32px; }
   .globe-reg { min-height: 32px; }
   .globe-region-pager button { width: 40px; height: 40px; }
 }
-.globe-reg-all { grid-column: 1 / -1; }
+.globe-reg-all { flex: none; }
 .globe-reg span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .globe-reg b { color: var(--foreground); font-weight: 500; font-variant-numeric: tabular-nums; }
 /* 地区行上的「有机器离线」小点：这台地区里有离线时挂在台数后面（全在线不出现），

@@ -706,17 +706,17 @@ let classicNet = null
 
   const onlyTabs = await render({ showGroupTabs: true }, 'legacy-tabs')
   check('旧键迁移：只存 showGroupTabs=true → 分组标签行在、概览行不在',
-    onlyTabs.tiles.length === 0 && onlyTabs.body.includes('未分组'),
-    `概览 ${onlyTabs.tiles.length} 张 / 分组行 ${onlyTabs.body.includes('未分组')}`)
+    onlyTabs.tiles.length === 0 && !!onlyTabs.groupRow,
+    `概览 ${onlyTabs.tiles.length} 张 / 分组行 ${!!onlyTabs.groupRow}`)
 
   const both = await render({ showSummary: true, showGroupTabs: true }, 'legacy-both')
   check('旧键迁移：两个旧键都开 → 两个都显示（原版）',
-    both.tiles.length === 4 && both.body.includes('未分组') && !both.body.includes('月度预算'),
-    `概览 ${both.tiles.length} 张 / 分组行 ${both.body.includes('未分组')}`)
+    both.tiles.length === 4 && !!both.groupRow && !both.body.includes('月度预算'),
+    `概览 ${both.tiles.length} 张 / 分组行 ${!!both.groupRow}`)
 
   const none = await render({ showSummary: false, showGroupTabs: false }, 'legacy-none')
-  check('旧键迁移：两个旧键都关 → 两个都不显示', none.tiles.length === 0 && !none.body.includes('未分组'),
-    `概览 ${none.tiles.length} 张 / 分组行 ${none.body.includes('未分组')}`)
+  check('旧键迁移：两个旧键都关 → 两个都不显示', none.tiles.length === 0 && !none.groupRow,
+    `概览 ${none.tiles.length} 张 / 分组行 ${!!none.groupRow}`)
 }
 
 /* 11) 长读数：概览行那两列数字的宽度上限（读数口径收敛 + 几何微调后，1024 起都应放得下） */

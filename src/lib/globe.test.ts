@@ -5,7 +5,7 @@
 // 经度符号、`y` 的上下），地球会整个镜像或者翻转，而看截图不一定看得出来。
 // 所以测试里把上游那两行公式**原样**再写一遍，逐点比对。
 import {
-  camera, cityHint, clampLat, curvePath, globeCaption, globeNodes, globeProfile, graticule, inkWidth, landPaths, mergeRegion,
+  camera, cityHint, clampLat, curvePath, globeCaption, globeNodes, globeProfile, graticule, groupedRegionRows, inkWidth, landPaths, mergeRegion,
   layoutLabels, links, prepareRings, regionOf, regionRows, regionView, sweepLonAt, sweepOpacity, trimLabel, VIEW, wrapLon, zoomView,
 } from "./globe.ts"
 import { CITY_HINTS, COARSE_WORLD_OUTLINES, COUNTRY_LL, COUNTRY_NAMES, WORLD_OUTLINES } from "./world.ts"
@@ -393,6 +393,27 @@ eq(regionView(fleet, "不存在的地区").current, null, "悬空的选中态回
 eq(regionView(fleet, "不存在的地区").shown.length, 10, "回落时列表仍然是全部（含没落点的机器）")
 eq(regionView(fleet, null).shown.length, 10, "没选地区 = 全部")
 eq(regionView([], "JP").current, null, "没有节点时不存在悬空选中")
+
+// 同一城市出现在不同分组时，台数与点击筛选必须保持同一口径。
+const groupedFleet = [
+  node(3100, "Tokyo A1", "JP", { group: "A" }),
+  node(3101, "Tokyo B1", "JP", { group: "B", online: false }),
+  node(3102, "Tokyo A2", "JP", { group: "A" }),
+  node(3103, "Osaka A", "JP", { group: "A" }),
+  node(3104, "Tokyo Ungrouped", "JP"),
+  node(3105, "未知地点", "", { group: "无位置" }),
+]
+eq(groupedRegionRows(groupedFleet).map(({ group, rows }) => [group, rows.map((row) => [row.region.key, row.count, row.offline])]), [
+  ["A", [["JP · Tokyo", 2, 0], ["JP · Osaka", 1, 0]]],
+  ["B", [["JP · Tokyo", 1, 1]]],
+  ["", [["JP · Tokyo", 1, 0]]],
+], "分组标题沿节点顺序，组内独立合计，未分组在最后，不编造缺失地点")
+eq(regionView(groupedFleet, "JP · Tokyo", "A").shown.map((n) => n.id), [3100, 3102], "点击 A 组东京只筛出 A 组两台")
+eq(regionView(groupedFleet, "JP · Tokyo", "B").shown.map((n) => n.id), [3101], "同城另一个分组独立筛选，离线也保留")
+eq(regionView(groupedFleet, "JP · Tokyo", "").shown.map((n) => n.id), [3104], "未分组与所有分组有不同筛选口径")
+eq(regionView(groupedFleet, "JP · Tokyo").shown.length, 4, "旧的全分组地区筛选仍兼容")
+eq(regionView(groupedFleet, "JP · Tokyo", "不存在").current, null, "分组失效时回落全部，不误筛其他分组的同城")
+eq(regionView(groupedFleet, null, "A").shown.length, 6, "取消地区选择同时取消地区内分组筛选")
 
 /* ---------------------------------------------------------------- 标签排布 */
 

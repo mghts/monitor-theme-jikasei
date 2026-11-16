@@ -793,14 +793,30 @@ export function regionRows(nodes: Node[]): RegionRow[] {
   return [...map.values()].sort((a, b) => b.count - a.count || (a.region.key < b.region.key ? -1 : a.region.key > b.region.key ? 1 : 0))
 }
 
+/** 分组沿用节点顺序，未分组放在最后；同一地点在不同组内分别计数。 */
+export function groupedRegionRows(nodes: Node[]): { group: string; rows: RegionRow[] }[] {
+  const groups = new Map<string, Node[]>()
+  for (const node of nodes) {
+    const group = node.group ?? ""
+    const members = groups.get(group)
+    if (members) members.push(node)
+    else groups.set(group, [node])
+  }
+  return [...groups].sort(([a], [b]) => Number(!a) - Number(!b))
+    .map(([group, members]) => ({ group, rows: regionRows(members) }))
+    .filter(({ rows }) => rows.length > 0)
+}
+
 /**
  * 选中地区的筛选：选中的地区已经不在了（节点下线/改名/换了分组）就回落「全部」，
  * 而不是停在一个什么都看不见的筛选上 —— 与 `groupView` 同一套归一化思路。
  */
-export function regionView(nodes: Node[], current: string | null) {
+export function regionView(nodes: Node[], current: string | null, group: string | null = null) {
   const rows = regionRows(nodes)
-  const valid = current !== null && rows.some((row) => row.region.key === current) ? current : null
-  return { rows, current: valid, shown: valid === null ? nodes : nodes.filter((node) => regionOf(node)?.key === valid), total: nodes.length }
+  const candidates = group === null ? nodes : nodes.filter((node) => (node.group ?? "") === group)
+  const shown = current === null ? [] : candidates.filter((node) => regionOf(node)?.key === current)
+  const valid = shown.length > 0 ? current : null
+  return { rows, current: valid, group: valid === null ? null : group, shown: valid === null ? nodes : shown, total: nodes.length }
 }
 
 /* ------------------------------------------------------------------ 标签排布 */

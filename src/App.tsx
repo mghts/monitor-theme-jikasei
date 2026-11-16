@@ -239,6 +239,7 @@ export default function App() {
   const [group, setGroup] = useState<string | null>(null)
   // 地球侧栏里选中的地区：同理留在这儿，进详情页再回来不丢。
   const [region, setRegion] = useState<string | null>(null)
+  const [regionGroup, setRegionGroup] = useState<string | null>(null)
   // 访客自己的两个偏好（都只存在他自己浏览器里，见 @/lib/theme-config）：
   // 地球看不看，以及列表用哪种卡片形态 —— 后者没选过时跟着站长的设置走。
   // ★ 站长那档是「节点地球」的**闸门**：他关掉时 `globeOn` 一律是 false，顶栏那枚开关也一起
@@ -346,7 +347,7 @@ export default function App() {
   //     切分组时地球上的针与地区台数一起变；
   //   · 下面的列表再按地区收窄一层（`listView`）。
   // 这样「上头写着 JP 4 台、下面只剩 2 张卡片」不会出现：地球是分组的地图，不是列表的地图。
-  const regions = regionView(view.shown, globeOn ? region : null)
+  const regions = regionView(view.shown, globeOn ? region : null, regionGroup)
   // 再叠一层搜索（口径见 @/lib/search）：这一层与地区筛选同一套——**下面那张列表与上面
   // 那行概览卡片一起收窄**，地球仍然是「分组的地图」（它画的是分组里有哪些地方，
   // 不是搜索结果热力图；地区列表点一行照样能把列表收窄到那个地区）。
@@ -528,7 +529,7 @@ export default function App() {
             {hasSummary(config.listTop) && <SummaryCards nodes={found.shown} finance={isBudgetLayout(config.listTop)} searching={found.active} exchangeRates={config.exchangeRates} />}
             {/* 节点地球：概览卡片之下、列表之上（上游就是这个次序）。 */}
             {globeOn && (
-              <Globe nodes={view.shown} flowCenterId={Number(config.mapFlowCenterId) || null} region={regions.current} onRegion={setRegion} onOpen={go} onWarm={warmDetail} />
+              <Globe nodes={view.shown} flowCenterId={Number(config.mapFlowCenterId) || null} region={regions.current} regionGroup={regions.group} onRegion={(key, group) => { setRegion(key); setRegionGroup(group) }} onOpen={go} onWarm={warmDetail} />
             )}
             {/* 一台都剩不下时说清楚是谁把它筛没的，并指回去哪儿取消 —— 否则访客只看到
                 一大片空白，会以为站点坏了。搜索那一层排在前面：它是最后叠上去、也是访客

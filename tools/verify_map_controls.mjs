@@ -1422,7 +1422,7 @@ async function compactRegionChecks() {
   const panel = () => evaluate(() => {
     const root = document.querySelector('.globe-panel'), list = root.querySelector('.globe-regions')
     return {
-      height: root.getBoundingClientRect().height,
+      height: root.getBoundingClientRect().height, atlasHeight: root.querySelector('.globe-atlas').getBoundingClientRect().height,
       page: Number(list.dataset.regionPage || 1), pages: Number(list.dataset.regionPages || 1),
       total: Number(list.dataset.regionTotal), all: Number(root.querySelector('.globe-reg-all b').textContent),
       keys: [...root.querySelectorAll('[data-region-key]')].map((button) => button.dataset.regionKey),
@@ -1457,8 +1457,11 @@ async function compactRegionChecks() {
           const tag = [width, selectedMode, flow ? 'flow' : 'plain'].join('/')
           const snapshot = await state('compact-' + (before ? 'before-' : '') + tag)
           const measured = await panel()
-          if (before) { heights.set(tag, measured.height); continue }
-          if (heights.has(tag)) check(tag + '：整块地图和地区面板高度缩小', measured.height <= heights.get(tag) - 6, heights.get(tag).toFixed(1) + ' → ' + measured.height.toFixed(1))
+          if (before) { heights.set(tag, measured); continue }
+          if (heights.has(tag)) {
+            const old = heights.get(tag)
+            check(tag + '：桌面面板与地图本体不被分组列表撑高', measured.atlasHeight <= old.atlasHeight + 1 && (width < 900 || measured.height <= old.height + 1), JSON.stringify({ before: old.height, after: measured.height, atlasBefore: old.atlasHeight, atlasAfter: measured.atlasHeight }))
+          }
           layoutChecks('紧凑/' + tag, snapshot)
           if (flow && width === 1440) await screenshot('compact-panel-' + selectedMode)
         }
@@ -1474,7 +1477,7 @@ async function compactRegionChecks() {
     await viewport(width, 1000)
     await preferences(selectedMode, '0')
     const tag = '地区分页/' + width + '/' + selectedMode
-    const capacity = width >= 900 ? 16 : 8
+    const capacity = width >= 900 ? 18 : 8
     const first = await panel(), initialMap = await state(tag + '/first')
     check(tag + '：页数、每页容量与全部台数准确', first.total === 36 && first.all === 37 && first.pages === Math.ceil(36 / capacity) && first.keys.length === capacity && first.prev === true && first.next === false)
     const seen = [...first.keys]
@@ -1527,6 +1530,54 @@ async function compactRegionChecks() {
   nodes = [...fixture, makeNode(2999, '无位置节点', '', '多地区')]
   await waitFor(() => document.querySelector('.globe-regions')?.dataset.regionTotal === '36')
   check('实时恢复地区后不复活旧末页', (await panel()).page === 1 && (await panel()).keys.length === 8)
+  nodes = [
+    makeNode(3100, 'Tokyo A1', 'JP', '常用节点'), makeNode(3101, 'Tokyo A2', 'JP', '常用节点', false),
+    makeNode(3102, 'Osaka A', 'JP', '常用节点'), makeNode(3103, 'Singapore A', 'SG', '常用节点'),
+    makeNode(3104, 'Tokyo B', 'JP', '备用节点'), makeNode(3105, 'Frankfurt B', 'DE', '备用节点'),
+    makeNode(3106, 'Seattle B', 'US', '备用节点'), makeNode(3107, 'Hong Kong B', 'HK', '备用节点'),
+    makeNode(3108, 'London Ungrouped', 'GB', ''), makeNode(3109, '未知位置', '', '无位置'),
+  ]
+  for (const width of [1440, 900, 768, 390, 320]) for (const selectedMode of ['3d', '2d']) {
+    await viewport(width, 1000)
+    await media(false)
+    await preferences(selectedMode, '0')
+    const grouped = await evaluate(() => {
+      const root = document.querySelector('.globe-panel'), side = root.querySelector('.globe-side'), main = root.querySelector('.globe-main')
+      const groups = [...root.querySelectorAll('.globe-region-group')]
+      return {
+        titles: groups.map((group) => group.querySelector('h3').textContent),
+        columns: groups.map((group) => getComputedStyle(group.querySelector('.globe-region-grid')).gridTemplateColumns.split(' ').length),
+        fullTitles: groups.every((group) => group.querySelector('h3').getBoundingClientRect().width >= group.getBoundingClientRect().width - 1),
+        main: main.getBoundingClientRect().width, side: side.getBoundingClientRect().width,
+        tokyo: [...root.querySelectorAll('[data-region-key="JP · Tokyo"]')].map((b) => [b.dataset.regionGroup, Number(b.querySelector('b').textContent)]),
+        placed: [...root.querySelectorAll('[data-region-key] b')].reduce((sum, b) => sum + Number(b.textContent), 0),
+      }
+    })
+    const tag = '分组地区/' + width + '/' + selectedMode
+    check(tag + '：标题独占整行，组内列数正确，未分组独立展示', JSON.stringify(grouped.titles) === JSON.stringify(['常用节点', '备用节点', '未分组']) && grouped.columns.every((n) => n === (width <= 720 ? 2 : 3)) && grouped.fullTitles, JSON.stringify(grouped))
+    if (width >= 900) check(tag + '：左右等宽，地区区域较旧版加宽', Math.abs(grouped.main - grouped.side) <= 2)
+    check(tag + '：同城按组独立计数，缺失位置不编造城市', JSON.stringify(grouped.tokyo) === JSON.stringify([['常用节点', 2], ['备用节点', 1]]) && grouped.placed === 9 && (await panel()).all === 10)
+    layoutChecks(tag, await state())
+    if ([1440, 390].includes(width)) await screenshot('grouped-regions-' + width + '-' + selectedMode + '-light')
+    if (width === 1440) {
+      const clip = await evaluate(() => { const r = document.querySelector('.globe-panel').getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height, scale: 1 } })
+      const response = await send('Page.captureScreenshot', { format: 'png', clip })
+      writeFileSync(join(OUT, 'grouped-panel-' + selectedMode + '.png'), Buffer.from(response.data, 'base64'))
+    }
+    await evaluate(() => document.querySelector('[data-region-group="常用节点"][data-region-key="JP · Tokyo"]').click())
+    await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 2)
+    const first = await state()
+    check(tag + '：点击常用东京只筛两台，地图保持全部当前节点', JSON.stringify(first.cards) === JSON.stringify(['Tokyo A1', 'Tokyo A2']) && (await panel()).all === 10 && (await panel()).total === 8)
+    await evaluate(() => document.querySelector('[data-region-group="备用节点"][data-region-key="JP · Tokyo"]').click())
+    await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 1)
+    check(tag + '：点击同城另一分组正确切换，不误取消选择', (await state()).cards[0] === 'Tokyo B' && await evaluate(() => document.querySelectorAll('[data-region-key][aria-pressed="true"]').length === 1))
+    await allRegions()
+    check(tag + '：全部恢复10台与地图，组名不改变顶部分组选择', (await state()).cards.length === 10)
+  }
+  await viewport(1440, 1000)
+  await media(true)
+  await preferences('3d', '0')
+  await screenshot('grouped-regions-1440-3d-dark')
   nodes = ordinaryNodes
   flowCenterId = undefined
   servingDist = DIST

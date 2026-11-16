@@ -4,7 +4,7 @@ import { Dialog, Tooltip } from "radix-ui"
 
 import {
   camera, clampLat, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
-  GLOBE_ZOOM, prepareRings, regionRows, VIEW, wrapLon, zoomView, type Placed, type Quality,
+  GLOBE_ZOOM, prepareRings, groupedRegionRows, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
 import { flatCamera, flatNodes, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
@@ -75,13 +75,14 @@ function measureLabel(text: string): number | null {
   return labelCtx.measureText(text).width
 }
 
-export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }: {
+export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOpen, onWarm }: {
   /** 当前分组里的节点（与概览卡片、下面的列表同一批）。 */
   nodes: Node[]
   flowCenterId: number | null
   /** 选中的地区键（null = 全部）。 */
   region: string | null
-  onRegion: (key: string | null) => void
+  regionGroup: string | null
+  onRegion: (key: string | null, group: string | null) => void
   onOpen: (id: number) => void
   /** 指针已经落到某台机器上：提前把详情那块 chunk 取回来（见 App 的 warmDetail）。 */
   onWarm: () => void
@@ -109,18 +110,25 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
   const flowNode = flowCenterId === null ? undefined : nodeById.get(flowCenterId)
   const flowPoint = flowNode && points.find((point) => point.nodeIds.includes(flowNode.id))
   const globeFlows = useMemo(() => flowNode && flowPoint ? prepareGlobeFlows(points, flowPoint, flowNode.online) : [], [points, flowPoint, flowNode])
-  const rows = useMemo(() => regionRows(nodes), [nodes])
+  const rows = useMemo(() => groupedRegionRows(nodes).flatMap(({ group, rows }) => rows.map((row) => ({ ...row, group }))), [nodes])
   const sideBySide = useSyncExternalStore((notify) => subscribe(SIDE_BY_SIDE, notify), () => SIDE_BY_SIDE.matches)
-  const regionPageSize = sideBySide ? 16 : 8
-  const regionPageKey = JSON.stringify([regionPageSize, rows.map((row) => row.region.key)])
+  const regionPageSize = sideBySide ? 18 : 8
+  const regionPageKey = JSON.stringify([regionPageSize, rows.map((row) => [row.group, row.region.key])])
   const regionPages = Math.max(1, Math.ceil(rows.length / regionPageSize))
-  const selectedRegionIndex = rows.findIndex((row) => row.region.key === region)
+  const selectedRegionIndex = rows.findIndex((row) => row.region.key === region && (regionGroup === null || row.group === regionGroup))
   const nextRegionPage = selectedRegionIndex < 0 ? 0 : Math.floor(selectedRegionIndex / regionPageSize)
   const [regionPagination, setRegionPagination] = useState({ key: regionPageKey, page: nextRegionPage })
   // 地区集合、顺序或每页容量变化时回到选中地区所在页；实时指标刷新不重置页码。
   if (regionPagination.key !== regionPageKey) setRegionPagination({ key: regionPageKey, page: nextRegionPage })
   const regionPage = regionPagination.key === regionPageKey ? Math.min(regionPagination.page, regionPages - 1) : nextRegionPage
   const pageRows = rows.slice(regionPage * regionPageSize, (regionPage + 1) * regionPageSize)
+  const pageGroups = [...new Set(pageRows.map((row) => row.group))].map((group) => ({ group, rows: pageRows.filter((row) => row.group === group) }))
+  // 窄屏预留所有页中最高一页的列表空间；长分组列表独立滚动，翻到末页也不使面板跳动。
+  const regionListHeight = useMemo(() => Math.min(240, Math.max(32, ...Array.from({ length: regionPages }, (_, page) => {
+    const chunk = rows.slice(page * regionPageSize, (page + 1) * regionPageSize)
+    const groups = [...new Set(chunk.map((row) => row.group))]
+    return groups.reduce((height, group) => height + 24 + Math.ceil(chunk.filter((row) => row.group === group).length / (narrow ? 2 : 3)) * 38 - 6, Math.max(0, groups.length - 1) * 10)
+  }))), [rows, regionPages, regionPageSize, narrow])
   // 「全部」那一行的悬停说明：合计里有多少台认不出国家（不上地球与地区列表）——
   // 「全部 N」与地区分项合计对不上这件事，就在那里有一句明面上的说法。
   const unplaced = nodes.length - rows.reduce((sum, row) => sum + row.count, 0)
@@ -307,15 +315,15 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
     setHoveredKey((current) => open ? key : current === key ? null : current)
   }
 
-  const pick = (key: string | null, aim?: [number, number]) => {
+  const pick = (key: string | null, aim?: [number, number], group: string | null = null) => {
     // 再点一次同一个地区、或点「全部」= 取消筛选并放它继续自转（上游同此）。
-    if (!key || key === region) {
-      onRegion(null)
+    if (!key || (key === region && group === regionGroup)) {
+      onRegion(null, null)
       setPinned(false)
       if (mode === "2d") setFlatView({ lon: 0, lat: 0 })
       return
     }
-    onRegion(key)
+    onRegion(key, group)
     if (aim) {
       setView({ lon: wrapLon(aim[0]), lat: clampLat(aim[1]) })
       setFlatView({ lon: wrapLon(aim[0]), lat: Math.max(-flatLatLimit, Math.min(flatLatLimit, aim[1])) })
@@ -577,51 +585,64 @@ export function Globe({ nodes, flowCenterId, region, onRegion, onOpen, onWarm }:
       </Dialog.Root>
 
       <aside className="globe-side">
-        <div id={regionListId} className="globe-regions" data-region-page={regionPage + 1} data-region-pages={regionPages} data-region-total={rows.length} style={{ "--globe-region-row-count": Math.max(1, Math.ceil(Math.min(rows.length, regionPageSize) / 2)) } as CSSProperties}>
-          <div className="globe-side-title">
-            地区{located ? " · 已定位" : ""}
-          </div>
-          <button
-            type="button"
-            className="globe-reg globe-reg-all"
-            aria-pressed={!region}
-            onClick={() => pick(null)}
-            title={unplaced > 0 ? `共 ${nodes.length} 台，其中 ${unplaced} 台认不出国家（不上地球与地区列表）` : `共 ${nodes.length} 台`}
-          >
-            <span>全部</span>
-            <b>{nodes.length}</b>
-          </button>
-          {pageRows.map((row) => (
+        <div className="globe-side-inner" style={{ "--globe-region-list-height": `${regionListHeight}px` } as CSSProperties}>
+          <div id={regionListId} className="globe-regions" data-region-page={regionPage + 1} data-region-pages={regionPages} data-region-total={rows.length}>
+            <div className="globe-side-title">
+              地区{located ? " · 已定位" : ""}
+            </div>
             <button
-              key={row.region.key}
               type="button"
-              className="globe-reg"
-              data-region-code={row.region.code}
-              data-region-key={row.region.key}
-              aria-pressed={region === row.region.key}
-              onClick={() => pick(row.region.key, row.aim)}
-              title={`${row.region.label} · ${row.region.code} · ${row.count} 台${row.offline > 0 ? ` · ${row.offline} 台离线` : ""}`}
+              className="globe-reg globe-reg-all"
+              aria-pressed={!region}
+              onClick={() => pick(null)}
+              title={unplaced > 0 ? `共 ${nodes.length} 台，其中 ${unplaced} 台认不出国家（不上地球与地区列表）` : `共 ${nodes.length} 台`}
             >
-              <span>
-                <RegionFlag code={row.region.code} />
-                {row.region.label}
-              </span>
-              <b>
-                {row.count}
-                {row.offline > 0 && <i className="globe-reg-dot" aria-hidden="true" />}
-              </b>
+              <span>全部</span>
+              <b>{nodes.length}</b>
             </button>
-          ))}
+            <div className="globe-region-groups">
+              {pageGroups.map(({ group, rows }) => (
+                <section className="globe-region-group" key={group} aria-label={group || "未分组"}>
+                  <h3 className="globe-region-group-title" title={group || "未分组"}>{group || "未分组"}</h3>
+                  <div className="globe-region-grid">
+                    {rows.map((row) => (
+                      <button
+                        key={row.region.key}
+                        type="button"
+                        className="globe-reg"
+                        data-region-code={row.region.code}
+                        data-region-key={row.region.key}
+                        data-region-group={group}
+                        aria-pressed={region === row.region.key && (regionGroup === null || regionGroup === group)}
+                        onClick={() => pick(row.region.key, row.aim, group)}
+                        title={`${group || "未分组"} · ${row.region.label} · ${row.region.code} · ${row.count} 台${row.offline > 0 ? ` · ${row.offline} 台离线` : ""}`}
+                      >
+                        <span>
+                          <RegionFlag code={row.region.code} />
+                          {row.region.label}
+                        </span>
+                        <b>
+                          {row.count}
+                          {row.offline > 0 && <i className="globe-reg-dot" aria-hidden="true" />}
+                        </b>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
+              {rows.length === 0 && <p className="text-xs text-muted-foreground">暂无可定位的地区</p>}
+            </div>
+          </div>
+          {regionPages > 1 && <nav className="globe-region-pager" aria-label="地区分页">
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="上一页地区" aria-controls={regionListId} disabled={regionPage === 0} onClick={() => setRegionPagination({ key: regionPageKey, page: regionPage - 1 })}>
+              <ChevronLeft aria-hidden="true" />
+            </Button>
+            <span className="tnum" aria-live="polite" aria-atomic="true">{regionPage + 1} / {regionPages} 页</span>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="下一页地区" aria-controls={regionListId} disabled={regionPage === regionPages - 1} onClick={() => setRegionPagination({ key: regionPageKey, page: regionPage + 1 })}>
+              <ChevronRight aria-hidden="true" />
+            </Button>
+          </nav>}
         </div>
-        {regionPages > 1 && <nav className="globe-region-pager" aria-label="地区分页">
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="上一页地区" aria-controls={regionListId} disabled={regionPage === 0} onClick={() => setRegionPagination({ key: regionPageKey, page: regionPage - 1 })}>
-            <ChevronLeft aria-hidden="true" />
-          </Button>
-          <span className="tnum" aria-live="polite" aria-atomic="true">{regionPage + 1} / {regionPages} 页</span>
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="下一页地区" aria-controls={regionListId} disabled={regionPage === regionPages - 1} onClick={() => setRegionPagination({ key: regionPageKey, page: regionPage + 1 })}>
-            <ChevronRight aria-hidden="true" />
-          </Button>
-        </nav>}
       </aside>
     </section>
     </Tooltip.Provider>

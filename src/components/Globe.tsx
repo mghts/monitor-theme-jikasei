@@ -113,7 +113,7 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
   const rows = useMemo(() => groupedRegionRows(nodes).flatMap(({ group, rows }) => rows.map((row) => ({ ...row, group }))), [nodes])
   const sideBySide = useSyncExternalStore((notify) => subscribe(SIDE_BY_SIDE, notify), () => SIDE_BY_SIDE.matches)
   const regionHost = useRef<HTMLDivElement>(null)
-  const [regionLayout, setRegionLayout] = useState({ height: sideBySide ? 180 : 236, columns: narrow ? 2 : 3, rowHeight: sideBySide ? 20 : 32, rowGap: 6, groupHeight: 24, groupGap: 10, pagerHeight: sideBySide ? 40 : 48 })
+  const [regionLayout, setRegionLayout] = useState({ height: sideBySide ? 180 : 236, columns: narrow ? 2 : 3, rowHeight: sideBySide ? 20 : 32, rowGap: 6, groupHeight: 30, groupGap: 10, pagerHeight: sideBySide ? 40 : 48 })
   useEffect(() => {
     const el = regionHost.current
     if (!el || typeof ResizeObserver !== "function") return
@@ -126,7 +126,7 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
       const heading = el.querySelector<HTMLElement>(".globe-region-group-title")
       if (!list || !title || !all || !groups) return
       const rowHeight = all.getBoundingClientRect().height
-      const groupHeight = heading ? heading.getBoundingClientRect().height + parseFloat(getComputedStyle(heading).marginBottom) : 24
+      const groupHeight = heading ? heading.getBoundingClientRect().height + parseFloat(getComputedStyle(heading).marginBottom) : 30
       const headerHeight = title.getBoundingClientRect().height + rowHeight + 2 * parseFloat(getComputedStyle(list).rowGap)
       const next = {
         height: sideBySide ? Math.max(groupHeight + rowHeight, Math.floor(el.clientHeight - headerHeight - 4)) : 236,
@@ -622,9 +622,9 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
       <aside className="globe-side">
         <div ref={regionHost} className="globe-side-inner" style={{ "--globe-region-list-height": `${regionListHeight}px` } as CSSProperties}>
           <div id={regionListId} className="globe-regions" data-region-page={regionPage + 1} data-region-pages={regionPages} data-region-total={rows.length}>
-            <div className="globe-side-title">
-              地区{located ? " · 已定位" : ""}
-            </div>
+            <h2 className="globe-side-title">
+              地区分布{located && <span className="globe-side-status">已定位</span>}
+            </h2>
             <button
               type="button"
               className="globe-reg globe-reg-all"

@@ -1594,7 +1594,15 @@ async function paginationChecks() {
     const el = document.querySelector('.globe-region-groups'), rect = el.getBoundingClientRect(), root = document.querySelector('.globe-panel')
     const list = document.querySelector('.globe-regions'), host = root.querySelector('.globe-atlas').getBoundingClientRect()
     const cells = [...el.querySelectorAll('button,h3')]
+    const title = root.querySelector('.globe-side-title'), heading = el.querySelector('h3'), city = el.querySelector('button')
+    const titleStyle = getComputedStyle(title), headingStyle = getComputedStyle(heading), cityStyle = getComputedStyle(city)
     return { page: Number(list.dataset.regionPage), pages: Number(list.dataset.regionPages),
+      hierarchy: {
+        title: title.textContent.trim(), semantic: title.tagName === 'H2' && heading.tagName === 'H3',
+        titleProminent: parseFloat(titleStyle.fontSize) > parseFloat(cityStyle.fontSize) && Number(titleStyle.fontWeight) > Number(cityStyle.fontWeight) && titleStyle.color !== cityStyle.color,
+        groupDistinct: Number(headingStyle.fontWeight) > Number(cityStyle.fontWeight) && headingStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && headingStyle.backgroundColor !== getComputedStyle(root).backgroundColor && parseFloat(headingStyle.borderLeftWidth) > 0,
+        indented: city.getBoundingClientRect().left > heading.getBoundingClientRect().left,
+      },
       keys: [...el.querySelectorAll('[data-region-key]')].map((button) => JSON.stringify([button.dataset.regionGroup, button.dataset.regionKey])),
       fits: el.scrollHeight <= el.clientHeight + 1 && cells.every((cell) => { const r = cell.getBoundingClientRect(); return r.top >= rect.top - 1 && r.bottom <= rect.bottom + 1 }),
       gutter: el.offsetWidth - el.clientWidth, scroll: el.scrollTop, w: host.width, h: host.height,
@@ -1611,6 +1619,7 @@ async function paginationChecks() {
       await preferences(selectedMode, '0')
       const first = await inspectPage(), tag = `高度分页/${palette}/${dark ? '暗' : '亮'}/${width}/${selectedMode}`
       const seen = [...first.keys]
+      check(tag + '：地区分布、分组名和城市具备明确的标题层级与视觉区别', first.hierarchy.title === '地区分布' && first.hierarchy.semantic && first.hierarchy.titleProminent && first.hierarchy.groupDistinct && first.hierarchy.indented, JSON.stringify(first.hierarchy))
       check(tag + '：标题与地区均完整可见，没有内部滚动条', first.fits && first.gutter === 0 && first.scroll === 0 && !first.overflow && first.pages > 1, JSON.stringify(first))
       for (let page = 2; page <= first.pages; page++) {
         const previous = (await inspectPage()).page

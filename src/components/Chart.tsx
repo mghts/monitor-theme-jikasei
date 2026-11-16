@@ -147,16 +147,22 @@ export function TimeChart({
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<number | null>(null)
   const [pointerY, setPointerY] = useState<number | null>(null)
-  const [tipH, setTipH] = useState(0)
+  const [tipSize, setTipSize] = useState({ w: 0, h: 0 })
   const [drag, setDrag] = useState<{ from: number; to: number } | null>(null)
 
-  // 卡片高度：用来把它夹在绘图区里（别顶出去）。悬停的那一格变了才量一次 —— 带依赖数组
-  // 是给 linter 一个交代（不写它会被判成「每次渲染都 setState」），值没变时 setState 会被
-  // React 直接丢掉，不会多渲染一轮。
+  // 用提示框的实际尺寸防止越界；线路显示状态或屏宽变化时也要重新测量。
   useLayoutEffect(() => {
-    const h = tip.current?.offsetHeight ?? 0
-    if (h && h !== tipH) setTipH(h)
-  }, [hover, tipH])
+    const el = tip.current
+    if (!el) return
+    const read = () => {
+      const next = { w: el.offsetWidth, h: el.offsetHeight }
+      setTipSize((previous) => previous.w === next.w && previous.h === next.h ? previous : next)
+    }
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    read()
+    return () => ro.disconnect()
+  }, [hover])
 
   useLayoutEffect(() => {
     const el = box.current
@@ -437,15 +443,15 @@ export function TimeChart({
       {hovered && (
         <div
           ref={tip}
-          className="pointer-events-none absolute z-30"
+          className="pointer-events-none absolute z-30 w-max max-w-full"
           // 纵向**跟着鼠标**走（原来是钉在图表顶端）：以光标为中心，再夹在绘图区里 ——
           // 上下两头各留一点，别顶出图外，也别盖住 x 轴标签。
-          // 横向仍贴着光标那条竖线（靠右时翻到左边），与原来一致。
+          // 横向按真实宽度选择左右，并夹在画布内，避免手机上完整线路列表移出屏幕。
           style={{
-            top: Math.min(Math.max((pointerY ?? plotH / 2) - tipH / 2 + TOP, TOP), Math.max(TOP, TOP + plotH - tipH)),
-            ...(x(hovered.ts) > left + plotW - 150
-              ? { right: w - x(hovered.ts) + 8 }
-              : { left: x(hovered.ts) + 8 }),
+            top: Math.min(Math.max((pointerY ?? plotH / 2) - tipSize.h / 2 + TOP, TOP), Math.max(TOP, TOP + plotH - tipSize.h)),
+            left: Math.max(0, Math.min(x(hovered.ts) + 8 + tipSize.w > w
+              ? x(hovered.ts) - tipSize.w - 8
+              : x(hovered.ts) + 8, w - tipSize.w)),
           }}
         >
           {renderTooltip ? (

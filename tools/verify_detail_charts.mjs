@@ -49,6 +49,7 @@ const samples = Array.from({ length: 40 }, (_, i) => {
 })
 const without = (row, keys) => Object.fromEntries(Object.entries(row).filter(([key]) => !keys.includes(key)))
 let fixture = 'modern'
+let cardStyle = 'detailed'
 const HISTORIES = {
   modern: { metrics: samples },
   legacy: { metrics: samples.map((row) => without(row, EXTRA)) },
@@ -68,6 +69,7 @@ const HISTORIES = {
   'capacity-covering': { metrics: samples, step: 300 },
   'omitted-buckets': { metrics: samples.filter((_row, i) => i < 12 || i > 15), step: 300 },
   'single-hidden': { metrics: samples, step: 300 },
+  'many-probes': { metrics: samples, step: 300 },
 }
 const PING = {
   ping: Array.from({ length: 40 }, (_, i) => ({ task_id: 1, ts: START + i * 300, latency: 30 + (i % 5) * 3,
@@ -75,7 +77,14 @@ const PING = {
   probes: { 1: '北京电信' }, loss: { 1: 0.4 },
   step: 300,
 }
+const MANY_PROBES = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, name: i === 4 ? '华东上海电信互联网国际出口线路 05' : `探测线路 ${String(i + 1).padStart(2, '0')}` }))
 function pingFor(hours) {
+  if (fixture === 'many-probes') return {
+    probes: Object.fromEntries(MANY_PROBES.map(({ id, name }) => [id, name])),
+    loss: { 11: 25, 12: 100 }, step: 300,
+    ping: MANY_PROBES.flatMap(({ id }) => PING.ping.map((point) => ({ ...point, task_id: id,
+      latency: id === 12 ? null : (id - 1) * 10, band: undefined, loss: id === 12 ? 100 : id === 11 ? 25 : 0 }))),
+  }
   if (fixture === 'omitted-buckets') return { ...PING, ping: PING.ping.filter((_row, i) => i < 12 || i > 15) }
   if (fixture === 'single-hidden') return {
     ...PING, probes: { 1: '线路 A', 2: '线路 B' }, loss: {},
@@ -105,7 +114,7 @@ const server = createServer((req, res) => {
     }
     const body = path === '/api/me' ? { authed: false, github: false, public_page: true, site: BASE, site_name: '图表', history_days: 7 }
       : path === '/api/nodes' ? NODES
-        : path.endsWith('/config') ? { listTop: 'both', cardStyle: 'detailed', remarkPlacement: 'both', pingLines: '' }
+        : path.endsWith('/config') ? { listTop: 'both', cardStyle, remarkPlacement: 'both', pingLines: '' }
           : path.includes('/metrics') ? (url.searchParams.get('series') === 'metrics' ? HISTORIES[fixture] : url.searchParams.get('series') === 'ping' ? pingFor(url.searchParams.get('hours')) : { metrics: [], ping: [], probes: {}, loss: {} }) : {}
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
     return res.end(JSON.stringify(body))
@@ -471,6 +480,56 @@ if (!REAL && !UPSTREAM) {
   const restored=await latencyState()
   check('点击保留的单线路图例恢复真实曲线',!restored.empty&&restored.paths.length===1&&restored.paths[0].key==='t1'&&restored.paths[0].d.length>0,JSON.stringify(restored))
   evidence.push({fixture:'omitted-buckets-ping',broken,connected},{fixture:'hidden-single-probe',hidden,restored})
+
+  // 用真实触屏点按验证超过五条的读数，避免只在 DOM 中移除上限却仍把后面的行裁掉。
+  console.log('\n三、多线路延迟提示（手机点按 / 紧凑展开）:')
+  const tapLatency = async (ratio, mobile) => {
+    await js(`document.querySelector('svg[aria-label="节点延迟走势"]').scrollIntoView({block:'center'})`)
+    await sleep(100)
+    const plot = await js(`(() => {const r=document.querySelector('svg[aria-label="节点延迟走势"] rect[fill="transparent"]').getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})()`)
+    const x = plot.x + plot.w * ratio, y = plot.y + plot.h / 2
+    if (mobile) {
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] })
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    } else await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+    await sleep(150)
+    return js(`(() => {
+      const tip=document.querySelector('svg[aria-label="节点延迟走势"]').closest('[data-chart]').querySelector('.rounded-lg');if(!tip)return null
+      const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}}
+      const ink=[...tip.querySelectorAll('li span')].filter(el=>el.textContent).map(el=>{const range=document.createRange();range.selectNodeContents(el);return rect(range)})
+      return {text:tip.textContent,box:rect(tip),rows:[...tip.querySelectorAll('li')].map(li=>({text:li.textContent,box:rect(li)})),ink,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth}
+    })()`)
+  }
+  for (const width of [320,390,1000]) for (const dark of [false,true]) for (const context of ['detail','compact']) {
+    const mobile=width<640
+    await viewport(width,dark,mobile)
+    if(mobile) await send('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:2,mobile:true})
+    await send('Emulation.setTouchEmulationEnabled',{enabled:mobile})
+    cardStyle=context==='compact'?'compact':'detailed'
+    if(context==='detail') await openLatency('many-probes')
+    else {
+      fixture='many-probes'
+      await send('Page.navigate',{url:`${BASE}/?many-probes=${width}-${dark}`})
+      for(let i=0;i<50;i++) { if(await js(`!!document.querySelector('tbody tr[role="button"]')`)) break;await sleep(100) }
+      await js(`document.querySelector('tbody tr[role="button"]').click()`)
+      for(let i=0;i<50;i++) { if(await js(`document.querySelectorAll('svg[aria-label="节点延迟走势"] path[data-series]').length===12`)) break;await sleep(100) }
+    }
+    const name=`many-probes/${context}/${width}/${dark?'dark':'light'}`
+    for(const ratio of [.05,.5,.95]) {
+      const tip=await tapLatency(ratio,mobile)
+      const expected=[...MANY_PROBES].reverse().map(({id,name})=>name+(id===12?'无响应丢 100%':`${(id-1)*10} ms${id===11?'丢 25%':''}`))
+      check(`${name}/${ratio}: 全部12条、排序、零值与丢包准确，无折叠提示`,!!tip&&JSON.stringify(tip.rows.map(row=>row.text))===JSON.stringify(expected)&&!tip.text.includes('另有'),JSON.stringify(tip))
+      check(`${name}/${ratio}: 长名称及全部读数位于提示框和视口内`,!!tip&&tip.scrollWidth<=width&&tip.box.x>=-.5&&tip.box.right<=width+.5&&tip.box.y>=0&&tip.box.bottom<=tip.height+.5&&tip.rows.every(row=>row.box.x>=tip.box.x-.5&&row.box.right<=tip.box.right+.5&&row.box.y>=tip.box.y&&row.box.bottom<=tip.box.bottom)&&tip.ink.every(ink=>ink.x>=tip.box.x-.5&&ink.right<=tip.box.right+.5&&ink.y>=tip.box.y-.5&&ink.bottom<=tip.box.bottom+.5))
+    }
+    if(width===390) await shot(`many-probes-${context}-${width}-${dark?'dark':'light'}`)
+    await js(`(() => {[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='探测线路 03').click()})()`)
+    const hiddenTip=await tapLatency(.5,mobile)
+    check(`${name}: 图例隐藏后完整显示其余11条`,hiddenTip?.rows.length===11&&!hiddenTip.text.includes('探测线路 03'))
+    await js(`(() => {[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='探测线路 03').click()})()`)
+    const restoredTip=await tapLatency(.5,mobile)
+    check(`${name}: 恢复图例重新显示12条`,restoredTip?.rows.length===12&&restoredTip.text.includes('探测线路 03'))
+    evidence.push({fixture:'many-probes',context,width,dark,hiddenTip,restoredTip})
+  }
 }
 
   check('没有页面 JavaScript 异常',errors.length===0,JSON.stringify(errors))

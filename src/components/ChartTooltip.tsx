@@ -6,7 +6,7 @@ import type { ReactNode } from "react"
  * 用自绘而不是 recharts 默认的那张：默认 tooltip 每个点只给「名字 + 值」一行，
  * 延迟图里四条线路叠在一起时看不出谁最慢、谁在丢包，而且要按当前主题色去配一套
  * 样式。改成一张列表面板——每条曲线一枚同色圆点、名字、值，需要时后面再跟一小段
- * 尾巴（丢包率），最差的一条排最前，窄屏只列前几条、其余折成「另有 N 条」。
+ * 尾巴（丢包率），最差的一条排最前。延迟图在窄屏也完整列出当前显示的线路。
  *
  * 值不是有限数（探测超时）时默认整行不列：一条没有数据的线画不出来，列出来只会
  * 让人以为它是 0。要保留这种行的地方（延迟图，超时恰恰是要看的）在 `keepEmpty`
@@ -73,14 +73,14 @@ export function ChartTooltip({
       <div className="mb-1 text-muted-foreground">{new Date(Number(label)).toLocaleString("zh-CN")}</div>
       <ul className="space-y-px">
         {shown.map((entry) => (
-          <li key={String(entry.dataKey)} className="flex items-center gap-1.5 whitespace-nowrap">
+          <li key={String(entry.dataKey)} className="flex items-center gap-1.5">
             {/* 与线上同色同线型的那枚小圆点。 */}
             <span className="size-1.5 shrink-0 rounded-full" style={{ background: entry.color }} />
-            <span>{entry.name}</span>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{entry.name}</span>
             {finite(entry) ? (
-              <span className="tnum ml-auto pl-2 font-medium">{format(Number(entry.value))}</span>
+              <span className="tnum ml-auto shrink-0 whitespace-nowrap pl-2 font-medium">{format(Number(entry.value))}</span>
             ) : (
-              <span className="ml-auto pl-2 text-muted-foreground">{emptyText ?? "—"}</span>
+              <span className="ml-auto shrink-0 whitespace-nowrap pl-2 text-muted-foreground">{emptyText ?? "—"}</span>
             )}
             {trailing?.(entry)}
           </li>
@@ -134,7 +134,6 @@ export function PingTooltip({
       label={label}
       payload={payload}
       worstFirst
-      capNarrow={5}
       format={(value) => `${value} ms`}
       // 没答上来的排最后：它们是「没有值」，不是「很快」。
       sortKey={(entry) => (entry.value == null ? Number.MAX_SAFE_INTEGER : Number(entry.value))}
@@ -142,7 +141,7 @@ export function PingTooltip({
       emptyText="无响应"
       trailing={(entry) => {
         const loss = lossOf(entry)
-        return loss > 0 ? <span className="tnum pl-1 text-muted-foreground">丢 {loss}%</span> : null
+        return loss > 0 ? <span className="tnum shrink-0 whitespace-nowrap pl-1 text-muted-foreground">丢 {loss}%</span> : null
       }}
     />
   )

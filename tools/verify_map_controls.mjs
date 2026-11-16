@@ -8,6 +8,7 @@
 // MAP_CHECK_GROUP=appearance 验收简化界面、地点标签及放大的球体布局。
 // MAP_CHECK_GROUP=colors 验收四套主题下的地图配色、陆海层次与流动线对比度。
 // MAP_CHECK_GROUP=compact 验收缩短面板、地区分页、触屏/键盘和实时数据变化。
+// MAP_CHECK_GROUP=scrollbars 保持滚动条可见，验收四套主题下的宽度、颜色与滚动交互。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -33,7 +34,8 @@ const FLOW_ONLY = process.env.MAP_CHECK_GROUP === 'flow'
 const APPEARANCE_ONLY = process.env.MAP_CHECK_GROUP === 'appearance'
 const COLORS_ONLY = process.env.MAP_CHECK_GROUP === 'colors'
 const COMPACT_ONLY = process.env.MAP_CHECK_GROUP === 'compact'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY || COMPACT_ONLY
+const SCROLLBARS_ONLY = process.env.MAP_CHECK_GROUP === 'scrollbars'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY || COMPACT_ONLY || SCROLLBARS_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
 let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
@@ -1583,6 +1585,65 @@ async function compactRegionChecks() {
   servingDist = DIST
 }
 
+async function scrollbarChecks() {
+  const original = nodes
+  const places = [...new Map(CITY_HINTS.map((hint) => [hint.country + hint.name, hint])).values()].slice(0, 18)
+  nodes = places.map((place, i) => makeNode(4000 + i, place.name, place.country, '分组 ' + (i + 1)))
+  const sample = () => evaluate(() => {
+    const el = document.querySelector('.globe-region-groups'), r = el.getBoundingClientRect()
+    const thumb = getComputedStyle(el, '::-webkit-scrollbar-thumb'), track = getComputedStyle(el, '::-webkit-scrollbar-track')
+    const probe = document.createElement('span'); probe.style.background = 'var(--region-scroll-thumb)'; el.append(probe)
+    const expected = getComputedStyle(probe).backgroundColor; probe.remove()
+    return { width: getComputedStyle(el, '::-webkit-scrollbar').width, thumb: thumb.backgroundColor, expected, track: track.backgroundColor,
+      buttons: getComputedStyle(el, '::-webkit-scrollbar-button').display, gutter: el.offsetWidth - el.clientWidth,
+      max: el.scrollHeight - el.clientHeight, top: el.scrollTop, pageY: scrollY, x: r.x, y: r.y, w: r.width, h: r.height,
+      background: getComputedStyle(document.querySelector('.globe-panel')).backgroundColor,
+      palette: document.documentElement.dataset.palette, dark: document.documentElement.classList.contains('dark'),
+      overflow: document.documentElement.scrollWidth > innerWidth + 1 }
+  })
+  const themes = new Set()
+  for (const palette of ['default', 'gruvbox']) for (const dark of [false, true]) {
+    gruvboxOn = palette === 'gruvbox'
+    for (const width of [1440, 900, 390, 320]) for (const selectedMode of ['3d', '2d']) {
+      await viewport(width, 1000)
+      await media(dark)
+      await preferences(selectedMode, '0')
+      const initial = await sample(), tag = `滚动条/${palette}/${dark ? '暗' : '亮'}/${width}/${selectedMode}`
+      themes.add(initial.thumb)
+      check(tag + '：真实溢出，滚动条宽5px且无系统箭头', initial.max > 0 && initial.width === '5px' && initial.gutter > 0 && initial.gutter <= 6 && initial.buttons === 'none', JSON.stringify(initial))
+      check(tag + '：透明轨道和滑块颜色跟随实际主题，无横向溢出', initial.track === 'rgba(0, 0, 0, 0)' && initial.thumb === initial.expected && initial.dark === dark && (initial.palette === 'gruvbox') === gruvboxOn && !initial.overflow)
+      if (width >= 900) {
+        await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: initial.x + initial.w / 2, y: initial.y + initial.h / 2, deltaX: 0, deltaY: 220 })
+        await sleep(250)
+        const moved = await sample()
+        check(tag + '：鼠标滚轮可滚动地区，页面保持原位', moved.top > initial.top && Math.abs(moved.pageY - initial.pageY) <= 1)
+      } else {
+        const point = (y) => [{ x: initial.x + initial.w / 2, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }]
+        const start = initial.y + initial.h * 0.8
+        await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(start) })
+        for (let i = 1; i <= 6; i++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(start - i * 20) }); await sleep(40) }
+        await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+        await sleep(200)
+        check(tag + '：触屏滑动可到达下方分组', (await sample()).top > 0)
+      }
+      await evaluate(() => { const el = document.querySelector('.globe-region-groups'); el.scrollTop = 0; el.querySelector('button').focus() })
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 })
+      await sleep(200)
+      check(tag + '：键盘PageDown可以滚动地区', (await sample()).top > 0)
+      if (width === 1440 && selectedMode === '3d') {
+        await evaluate(() => { const el = document.querySelector('.globe-region-groups'); el.scrollTop = 0; document.activeElement?.blur() })
+        const clip = await evaluate(() => { const r = document.querySelector('.globe-panel').getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height, scale: 1 } })
+        const shot = await send('Page.captureScreenshot', { format: 'png', clip })
+        writeFileSync(join(OUT, `scrollbar-${palette}-${dark ? 'dark' : 'light'}.png`), Buffer.from(shot.data, 'base64'))
+      }
+    }
+  }
+  check('四套主题的滚动条滑块使用各自主题色，未硬编码同一颜色', themes.size === 4)
+  nodes = original
+  gruvboxOn = false
+}
+
 async function colorChecks() {
   const sample = () => evaluate(async () => {
     const svg = document.querySelector('svg[data-map-canvas]')
@@ -1717,7 +1778,7 @@ try {
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen) })
   base = `http://127.0.0.1:${server.address().port}`
   const profile = join(OUT, 'chrome-profile')
-  chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--no-proxy-server', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' })
+  chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check', '--disable-gpu', ...(!SCROLLBARS_ONLY ? ['--hide-scrollbars'] : []), '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--no-proxy-server', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' })
   chrome.on('error', (error) => { chromeError = error })
   let wsUrl
   for (let i = 0; i < 100 && !wsUrl; i++) {
@@ -1768,6 +1829,7 @@ try {
   if (APPEARANCE_ONLY) await appearanceChecks()
   if (COLORS_ONLY) await colorChecks()
   if (COMPACT_ONLY) await compactRegionChecks()
+  if (SCROLLBARS_ONLY) await scrollbarChecks()
   if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
@@ -1964,7 +2026,7 @@ try {
   await aggregateMarkerChecks()
   await flowChecks()
   }
-  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY && !COMPACT_ONLY) {
+  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY && !COMPACT_ONLY && !SCROLLBARS_ONLY) {
     if (!LOCATIONS_ONLY) await nodeInteractionChecks()
     if (!TOUCH_ONLY) await smallLocationChecks()
   }
@@ -1972,7 +2034,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: COMPACT_ONLY ? 'compact' : COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: SCROLLBARS_ONLY ? 'scrollbars' : COMPACT_ONLY ? 'compact' : COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

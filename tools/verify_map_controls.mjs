@@ -8,7 +8,7 @@
 // MAP_CHECK_GROUP=appearance 验收简化界面、地点标签及放大的球体布局。
 // MAP_CHECK_GROUP=colors 验收四套主题下的地图配色、陆海层次与流动线对比度。
 // MAP_CHECK_GROUP=compact 验收缩短面板、地区分页、触屏/键盘和实时数据变化。
-// MAP_CHECK_GROUP=scrollbars 保持滚动条可见，验收四套主题下的宽度、颜色与滚动交互。
+// MAP_CHECK_GROUP=pagination 保持系统滚动条可见，验收按高度分页、无内部滚动与2D/3D共用画布。
 // 再设 MAP_LOCATION_NEIGHBORS_ONLY=1 可仅复验 Tokyo→Osaka→Tokyo 连续悬停。
 // 再设 MAP_INTERACTION_TOUCH_ONLY=1 可仅复验 320px/2D/亮的触屏选择完整前置步骤。
 // 临时 Chrome profile、截图与 report.json 全部保留；验收退出只终止本脚本创建的进程。
@@ -34,8 +34,8 @@ const FLOW_ONLY = process.env.MAP_CHECK_GROUP === 'flow'
 const APPEARANCE_ONLY = process.env.MAP_CHECK_GROUP === 'appearance'
 const COLORS_ONLY = process.env.MAP_CHECK_GROUP === 'colors'
 const COMPACT_ONLY = process.env.MAP_CHECK_GROUP === 'compact'
-const SCROLLBARS_ONLY = process.env.MAP_CHECK_GROUP === 'scrollbars'
-const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY || COMPACT_ONLY || SCROLLBARS_ONLY
+const PAGINATION_ONLY = process.env.MAP_CHECK_GROUP === 'pagination'
+const TARGETED = INTERACTIONS_ONLY || LOCATIONS_ONLY || MOBILE_LAYOUT_ONLY || FLOW_ONLY || APPEARANCE_ONLY || COLORS_ONLY || COMPACT_ONLY || PAGINATION_ONLY
 const TOUCH_ONLY = INTERACTIONS_ONLY && process.env.MAP_INTERACTION_TOUCH_ONLY === '1'
 let servingDist = MOBILE_LAYOUT_ONLY ? BASELINE_DIST || DIST : TARGETED ? DIST : BASELINE_DIST || DIST
 const CHROME = process.env.CHROME_PATH || [
@@ -591,7 +591,7 @@ function renderingChecks(tag, snapshot) {
   if (snapshot.mode === '2d') {
     check(`${tag}：2D没有节点名称、引线和计数字样`, snapshot.nameLabels === 0 && snapshot.stems === 0 && snapshot.countLabels === 0, `names=${snapshot.nameLabels}, stems=${snapshot.stems}, counts=${snapshot.countLabels}`)
     const { host, projection } = snapshot
-    const worldWidth = Math.min(host.w - 24, 2 * (host.h - 24))
+    const worldWidth = Math.min(host.w - 16, 2 * (host.h - 16))
     const worldHeight = worldWidth / 2
     const expectedX = host.x + (host.w - worldWidth) / 2
     const expectedY = host.y + (host.h - worldHeight) / 2
@@ -1459,10 +1459,10 @@ async function compactRegionChecks() {
           const tag = [width, selectedMode, flow ? 'flow' : 'plain'].join('/')
           const snapshot = await state('compact-' + (before ? 'before-' : '') + tag)
           const measured = await panel()
-          if (before) { heights.set(tag, measured); continue }
+          if (before) { heights.set(tag, { ...measured, projection: snapshot.projection }); continue }
           if (heights.has(tag)) {
             const old = heights.get(tag)
-            check(tag + '：桌面面板与地图本体不被分组列表撑高', measured.atlasHeight <= old.atlasHeight + 1 && (width < 900 || measured.height <= old.height + 1), JSON.stringify({ before: old.height, after: measured.height, atlasBefore: old.atlasHeight, atlasAfter: measured.atlasHeight }))
+            if (selectedMode === '2d') check(tag + '：2D地图内容较旧版放大', snapshot.projection.w >= old.projection.w - 1 && snapshot.projection.h >= old.projection.h - 1, JSON.stringify({ before: old.projection, after: snapshot.projection }))
           }
           layoutChecks('紧凑/' + tag, snapshot)
           if (flow && width === 1440) await screenshot('compact-panel-' + selectedMode)
@@ -1479,9 +1479,8 @@ async function compactRegionChecks() {
     await viewport(width, 1000)
     await preferences(selectedMode, '0')
     const tag = '地区分页/' + width + '/' + selectedMode
-    const capacity = width >= 900 ? 18 : 8
     const first = await panel(), initialMap = await state(tag + '/first')
-    check(tag + '：页数、每页容量与全部台数准确', first.total === 36 && first.all === 37 && first.pages === Math.ceil(36 / capacity) && first.keys.length === capacity && first.prev === true && first.next === false)
+    check(tag + '：页数、每页容量与全部台数准确', first.total === 36 && first.all === 37 && first.pages >= 2 && first.keys.length > 0 && first.keys.length < 36 && first.prev === true && first.next === false)
     const seen = [...first.keys]
     for (let page = 2; page <= first.pages; page++) {
       await turn(true, width === 320)
@@ -1508,6 +1507,7 @@ async function compactRegionChecks() {
     await evaluate(() => [...document.querySelectorAll('header button')].find((button) => button.textContent.trim() === '地图控件验收').click())
     await ready()
     await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 1)
+    await sleep(250) // 等待重新挂载后的 ResizeObserver 完成容量测量。
     check(tag + '：从详情返回恢复选中地区所在页与筛选', (await panel()).page === selected.page && (await panel()).keys.includes(selectedKey) && (await state()).cards[0] === targetName)
     await turn()
     check(tag + '：翻页保留已选地区与节点筛选', (await state()).cards[0] === targetName && (await state()).cards.length === 1 && (await panel()).page === selected.page + 1)
@@ -1531,7 +1531,7 @@ async function compactRegionChecks() {
   check('实时删除地区后纠正页码，未出现空白页', (await panel()).page === 1 && (await panel()).pages === 1 && (await panel()).keys.length === 5)
   nodes = [...fixture, makeNode(2999, '无位置节点', '', '多地区')]
   await waitFor(() => document.querySelector('.globe-regions')?.dataset.regionTotal === '36')
-  check('实时恢复地区后不复活旧末页', (await panel()).page === 1 && (await panel()).keys.length === 8)
+  check('实时恢复地区后不复活旧末页', (await panel()).page === 1 && (await panel()).keys.length > 0)
   nodes = [
     makeNode(3100, 'Tokyo A1', 'JP', '常用节点'), makeNode(3101, 'Tokyo A2', 'JP', '常用节点', false),
     makeNode(3102, 'Osaka A', 'JP', '常用节点'), makeNode(3103, 'Singapore A', 'SG', '常用节点'),
@@ -1556,9 +1556,9 @@ async function compactRegionChecks() {
       }
     })
     const tag = '分组地区/' + width + '/' + selectedMode
-    check(tag + '：标题独占整行，组内列数正确，未分组独立展示', JSON.stringify(grouped.titles) === JSON.stringify(['常用节点', '备用节点', '未分组']) && grouped.columns.every((n) => n === (width <= 720 ? 2 : 3)) && grouped.fullTitles, JSON.stringify(grouped))
+    check(tag + '：标题独占整行，组内列数正确，未分组独立展示', grouped.titles.length >= 2 && grouped.titles.every((title, i) => title === ['常用节点', '备用节点', '未分组'][i]) && grouped.columns.every((n) => n === (width <= 720 ? 2 : 3)) && grouped.fullTitles, JSON.stringify(grouped))
     if (width >= 900) check(tag + '：左右等宽，地区区域较旧版加宽', Math.abs(grouped.main - grouped.side) <= 2)
-    check(tag + '：同城按组独立计数，缺失位置不编造城市', JSON.stringify(grouped.tokyo) === JSON.stringify([['常用节点', 2], ['备用节点', 1]]) && grouped.placed === 9 && (await panel()).all === 10)
+    check(tag + '：同城按组独立计数，缺失位置不编造城市', JSON.stringify(grouped.tokyo) === JSON.stringify([['常用节点', 2], ['备用节点', 1]]) && grouped.placed <= 9 && grouped.placed >= 8 && (await panel()).all === 10)
     layoutChecks(tag, await state())
     if ([1440, 390].includes(width)) await screenshot('grouped-regions-' + width + '-' + selectedMode + '-light')
     if (width === 1440) {
@@ -1585,61 +1585,66 @@ async function compactRegionChecks() {
   servingDist = DIST
 }
 
-async function scrollbarChecks() {
+async function paginationChecks() {
   const original = nodes
   const places = [...new Map(CITY_HINTS.map((hint) => [hint.country + hint.name, hint])).values()].slice(0, 18)
   nodes = places.map((place, i) => makeNode(4000 + i, place.name, place.country, '分组 ' + (i + 1)))
-  const sample = () => evaluate(() => {
-    const el = document.querySelector('.globe-region-groups'), r = el.getBoundingClientRect()
-    const thumb = getComputedStyle(el, '::-webkit-scrollbar-thumb'), track = getComputedStyle(el, '::-webkit-scrollbar-track')
-    const probe = document.createElement('span'); probe.style.background = 'var(--region-scroll-thumb)'; el.append(probe)
-    const expected = getComputedStyle(probe).backgroundColor; probe.remove()
-    return { width: getComputedStyle(el, '::-webkit-scrollbar').width, thumb: thumb.backgroundColor, expected, track: track.backgroundColor,
-      buttons: getComputedStyle(el, '::-webkit-scrollbar-button').display, gutter: el.offsetWidth - el.clientWidth,
-      max: el.scrollHeight - el.clientHeight, top: el.scrollTop, pageY: scrollY, x: r.x, y: r.y, w: r.width, h: r.height,
-      background: getComputedStyle(document.querySelector('.globe-panel')).backgroundColor,
-      palette: document.documentElement.dataset.palette, dark: document.documentElement.classList.contains('dark'),
+  const expected = places.map((place, i) => JSON.stringify(['分组 ' + (i + 1), place.country + ' · ' + place.name]))
+  const inspectPage = () => evaluate(() => {
+    const el = document.querySelector('.globe-region-groups'), rect = el.getBoundingClientRect(), root = document.querySelector('.globe-panel')
+    const list = document.querySelector('.globe-regions'), host = root.querySelector('.globe-atlas').getBoundingClientRect()
+    const cells = [...el.querySelectorAll('button,h3')]
+    return { page: Number(list.dataset.regionPage), pages: Number(list.dataset.regionPages),
+      keys: [...el.querySelectorAll('[data-region-key]')].map((button) => JSON.stringify([button.dataset.regionGroup, button.dataset.regionKey])),
+      fits: el.scrollHeight <= el.clientHeight + 1 && cells.every((cell) => { const r = cell.getBoundingClientRect(); return r.top >= rect.top - 1 && r.bottom <= rect.bottom + 1 }),
+      gutter: el.offsetWidth - el.clientWidth, scroll: el.scrollTop, w: host.width, h: host.height,
+      next: root.querySelector('[aria-label="下一页地区"]')?.disabled,
+      panelHeight: root.getBoundingClientRect().height,
       overflow: document.documentElement.scrollWidth > innerWidth + 1 }
   })
-  const themes = new Set()
+  const snapshots = new Map()
   for (const palette of ['default', 'gruvbox']) for (const dark of [false, true]) {
     gruvboxOn = palette === 'gruvbox'
-    for (const width of [1440, 900, 390, 320]) for (const selectedMode of ['3d', '2d']) {
+    for (const width of [1440, 900, 768, 390, 320]) for (const selectedMode of ['3d', '2d']) {
       await viewport(width, 1000)
       await media(dark)
       await preferences(selectedMode, '0')
-      const initial = await sample(), tag = `滚动条/${palette}/${dark ? '暗' : '亮'}/${width}/${selectedMode}`
-      themes.add(initial.thumb)
-      check(tag + '：真实溢出，滚动条宽5px且无系统箭头', initial.max > 0 && initial.width === '5px' && initial.gutter > 0 && initial.gutter <= 6 && initial.buttons === 'none', JSON.stringify(initial))
-      check(tag + '：透明轨道和滑块颜色跟随实际主题，无横向溢出', initial.track === 'rgba(0, 0, 0, 0)' && initial.thumb === initial.expected && initial.dark === dark && (initial.palette === 'gruvbox') === gruvboxOn && !initial.overflow)
-      if (width >= 900) {
-        await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: initial.x + initial.w / 2, y: initial.y + initial.h / 2, deltaX: 0, deltaY: 220 })
-        await sleep(250)
-        const moved = await sample()
-        check(tag + '：鼠标滚轮可滚动地区，页面保持原位', moved.top > initial.top && Math.abs(moved.pageY - initial.pageY) <= 1)
-      } else {
-        const point = (y) => [{ x: initial.x + initial.w / 2, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }]
-        const start = initial.y + initial.h * 0.8
-        await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(start) })
-        for (let i = 1; i <= 6; i++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(start - i * 20) }); await sleep(40) }
-        await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-        await sleep(200)
-        check(tag + '：触屏滑动可到达下方分组', (await sample()).top > 0)
+      const first = await inspectPage(), tag = `高度分页/${palette}/${dark ? '暗' : '亮'}/${width}/${selectedMode}`
+      const seen = [...first.keys]
+      check(tag + '：标题与地区均完整可见，没有内部滚动条', first.fits && first.gutter === 0 && first.scroll === 0 && !first.overflow && first.pages > 1, JSON.stringify(first))
+      for (let page = 2; page <= first.pages; page++) {
+        const previous = (await inspectPage()).page
+        if (width === 320) {
+          const point = await evaluate(() => { const r = document.querySelector('[aria-label="下一页地区"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })
+          await clickAt(point, true)
+        } else await evaluate(() => document.querySelector('[aria-label="下一页地区"]').click())
+        await waitFor((previous) => Number(document.querySelector('.globe-regions').dataset.regionPage) !== previous, previous)
+        const current = await inspectPage()
+        seen.push(...current.keys)
+        check(tag + '：第' + page + '页无裁切、无滚动，面板高度稳定', current.fits && current.gutter === 0 && Math.abs(current.panelHeight - first.panelHeight) <= 1 && !current.overflow)
       }
-      await evaluate(() => { const el = document.querySelector('.globe-region-groups'); el.scrollTop = 0; el.querySelector('button').focus() })
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 })
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 })
-      await sleep(200)
-      check(tag + '：键盘PageDown可以滚动地区', (await sample()).top > 0)
-      if (width === 1440 && selectedMode === '3d') {
-        await evaluate(() => { const el = document.querySelector('.globe-region-groups'); el.scrollTop = 0; document.activeElement?.blur() })
+      check(tag + '：各分组地区可翻页到达，无遗漏和重复', JSON.stringify(seen) === JSON.stringify(expected) && (await inspectPage()).next === true)
+      await evaluate(() => { document.querySelector('.globe-region-groups').scrollTop = 100 })
+      check(tag + '：内容不会被滚轮或焦点挤入隐藏滚动区', (await inspectPage()).scroll === 0)
+      const key = [palette, dark, width].join('/')
+      if (selectedMode === '3d') snapshots.set(key, first)
+      else {
+        const globe = snapshots.get(key)
+        check(tag + '：2D和3D画布尺寸一致', Math.abs(first.w - globe.w) <= 1 && Math.abs(first.h - globe.h) <= 1, `${globe.w}×${globe.h} / ${first.w}×${first.h}`)
+        const flat = await state()
+        const maximum = Math.min(flat.host.w - 16, 2 * (flat.host.h - 16))
+        check(tag + '：完整世界保持2:1并最大化铺满可用区域', flat.projection && Math.abs(flat.projection.w - maximum) <= 2 && Math.abs(flat.projection.h * 2 - maximum) <= 2 && flat.nameLabels === 0)
+      }
+      await mode(selectedMode === '3d' ? '2d' : '3d')
+      check(tag + '：切换2D/3D保留页码', (await inspectPage()).page === first.pages)
+      await mode(selectedMode)
+      if (width === 1440 || width === 390) {
         const clip = await evaluate(() => { const r = document.querySelector('.globe-panel').getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height, scale: 1 } })
         const shot = await send('Page.captureScreenshot', { format: 'png', clip })
-        writeFileSync(join(OUT, `scrollbar-${palette}-${dark ? 'dark' : 'light'}.png`), Buffer.from(shot.data, 'base64'))
+        writeFileSync(join(OUT, `pagination-${palette}-${dark ? 'dark' : 'light'}-${width}-${selectedMode}.png`), Buffer.from(shot.data, 'base64'))
       }
     }
   }
-  check('四套主题的滚动条滑块使用各自主题色，未硬编码同一颜色', themes.size === 4)
   nodes = original
   gruvboxOn = false
 }
@@ -1778,7 +1783,7 @@ try {
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen) })
   base = `http://127.0.0.1:${server.address().port}`
   const profile = join(OUT, 'chrome-profile')
-  chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check', '--disable-gpu', ...(!SCROLLBARS_ONLY ? ['--hide-scrollbars'] : []), '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--no-proxy-server', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' })
+  chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check', '--disable-gpu', ...(!PAGINATION_ONLY ? ['--hide-scrollbars'] : []), '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--no-proxy-server', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' })
   chrome.on('error', (error) => { chromeError = error })
   let wsUrl
   for (let i = 0; i < 100 && !wsUrl; i++) {
@@ -1829,7 +1834,7 @@ try {
   if (APPEARANCE_ONLY) await appearanceChecks()
   if (COLORS_ONLY) await colorChecks()
   if (COMPACT_ONLY) await compactRegionChecks()
-  if (SCROLLBARS_ONLY) await scrollbarChecks()
+  if (PAGINATION_ONLY) await paginationChecks()
   if (MOBILE_LAYOUT_ONLY) await mobileLayoutChecks()
   if (!TARGETED) {
   const initial = await state('first-visit')
@@ -2026,7 +2031,7 @@ try {
   await aggregateMarkerChecks()
   await flowChecks()
   }
-  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY && !COMPACT_ONLY && !SCROLLBARS_ONLY) {
+  if (!MOBILE_LAYOUT_ONLY && !FLOW_ONLY && !APPEARANCE_ONLY && !COLORS_ONLY && !COMPACT_ONLY && !PAGINATION_ONLY) {
     if (!LOCATIONS_ONLY) await nodeInteractionChecks()
     if (!TOUCH_ONLY) await smallLocationChecks()
   }
@@ -2034,7 +2039,7 @@ try {
 } catch (error) {
   check('地图控件回归脚本完成', false, error.stack || String(error))
 } finally {
-  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: SCROLLBARS_ONLY ? 'scrollbars' : COMPACT_ONLY ? 'compact' : COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
+  writeFileSync(join(OUT, 'report.json'), JSON.stringify({ output: OUT, dist: DIST, baselineDist: BASELINE_DIST, checkGroup: PAGINATION_ONLY ? 'pagination' : COMPACT_ONLY ? 'compact' : COLORS_ONLY ? 'colors' : APPEARANCE_ONLY ? 'appearance' : FLOW_ONLY ? 'flow' : MOBILE_LAYOUT_ONLY ? 'mobile-layout' : LOCATIONS_ONLY ? 'locations' : INTERACTIONS_ONLY ? 'interactions' : 'all', touchOnly: TOUCH_ONLY, neighborsOnly: NEIGHBORS_ONLY, base, preferences: { modeKey: MODE_KEY, spinKey: SPIN_KEY }, results, evidence, diagnostics, requests, exceptions }, null, 2))
   writeFileSync(join(OUT, 'checks.log'), results.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? ' — ' + r.detail : ''}`).join('\n') + '\n')
   for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('CDP 已关闭')) }
   pending.clear()

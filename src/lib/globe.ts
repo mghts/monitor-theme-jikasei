@@ -807,6 +807,45 @@ export function groupedRegionRows(nodes: Node[]): { group: string; rows: RegionR
     .filter(({ rows }) => rows.length > 0)
 }
 
+export type RegionPageLayout = {
+  height: number
+  columns: number
+  rowHeight: number
+  rowGap: number
+  groupHeight: number
+  groupGap: number
+}
+
+/** 按完整标题与地区行占用的高度分页；分组跨页时重新预留标题，不截断任何条目。 */
+export function paginateRegionRows<T extends { group: string }>(rows: T[], layout: RegionPageLayout): { pages: T[][]; heights: number[] } {
+  const pages: T[][] = [[]]
+  const heights = [0]
+  const columns = Math.max(1, Math.floor(layout.columns))
+  let group: string | null = null
+  let count = 0
+  for (const row of rows) {
+    let page = pages.length - 1
+    const cost = row.group !== group
+      ? (pages[page].length ? layout.groupGap : 0) + layout.groupHeight + layout.rowHeight
+      : count % columns === 0 ? layout.rowGap + layout.rowHeight : 0
+    if (pages[page].length && heights[page] + cost > layout.height) {
+      pages.push([])
+      heights.push(0)
+      page++
+      group = null
+      count = 0
+    }
+    if (row.group !== group) {
+      heights[page] += (pages[page].length ? layout.groupGap : 0) + layout.groupHeight + layout.rowHeight
+      group = row.group
+      count = 0
+    } else if (count % columns === 0) heights[page] += layout.rowGap + layout.rowHeight
+    pages[page].push(row)
+    count++
+  }
+  return { pages, heights }
+}
+
 /**
  * 选中地区的筛选：选中的地区已经不在了（节点下线/改名/换了分组）就回落「全部」，
  * 而不是停在一个什么都看不见的筛选上 —— 与 `groupView` 同一套归一化思路。

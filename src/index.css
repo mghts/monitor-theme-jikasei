@@ -328,7 +328,7 @@
 .globe-atlas {
   position: relative;
   flex: none;
-  height: calc(260px * var(--globe-height-ratio, 1));
+  height: var(--globe-shared-height, 260px);
   overflow: hidden;
   cursor: grab;
   /* 只让出竖向：手机上在地球上竖着划是滚页面（见组件注释），横着划才是转地球。 */
@@ -537,28 +537,14 @@
 }
 .globe-side-inner { display: flex; flex-direction: column; min-height: 0; }
 .globe-region-groups {
-  --region-scroll-thumb: color-mix(in srgb, var(--muted-foreground) 45%, var(--card));
-  --region-scroll-thumb-hover: color-mix(in srgb, var(--muted-foreground) 65%, var(--card));
   display: flex;
   flex-direction: column;
   flex: none;
   gap: 10px;
   height: var(--globe-region-list-height, 32px);
   min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--region-scroll-thumb) transparent;
-}
-/* Chromium / Safari 使用明确的 5px 宽度；其他浏览器保留上方的原生细滚动条。 */
-@supports selector(::-webkit-scrollbar) {
-  .globe-region-groups { scrollbar-width: auto; scrollbar-color: auto; }
-  .globe-region-groups::-webkit-scrollbar { width: 5px; height: 5px; }
-  .globe-region-groups::-webkit-scrollbar-track,
-  .globe-region-groups::-webkit-scrollbar-corner { background: transparent; }
-  .globe-region-groups::-webkit-scrollbar-thumb { min-height: 28px; border-radius: 999px; background: var(--region-scroll-thumb); }
-  .globe-region-groups::-webkit-scrollbar-thumb:hover { background: var(--region-scroll-thumb-hover); }
-  .globe-region-groups::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  overflow: hidden;
+  overflow: clip;
 }
 .globe-region-group { flex: none; min-width: 0; }
 .globe-region-group-title {
@@ -583,6 +569,8 @@
   gap: 6px;
   margin-top: auto;
   padding-top: 8px;
+  min-height: 40px;
+  flex: none;
   color: var(--muted-foreground);
 }
 .globe-region-pager span { min-width: 64px; text-align: center; font-size: 12px; }
@@ -617,6 +605,7 @@
    窄屏才撑高，行与行之间仍保留独立间隔。 */
 @media (max-width: 899px) {
   .globe-reg { min-height: 32px; }
+  .globe-region-pager { min-height: 48px; }
   .globe-region-pager button { width: 40px; height: 40px; }
 }
 .globe-reg-all { flex: none; }

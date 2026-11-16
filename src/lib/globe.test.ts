@@ -6,7 +6,7 @@
 // 所以测试里把上游那两行公式**原样**再写一遍，逐点比对。
 import {
   camera, cityHint, clampLat, curvePath, globeCaption, globeNodes, globeProfile, graticule, groupedRegionRows, inkWidth, landPaths, mergeRegion,
-  layoutLabels, links, prepareRings, regionOf, regionRows, regionView, sweepLonAt, sweepOpacity, trimLabel, VIEW, wrapLon, zoomView,
+  layoutLabels, links, paginateRegionRows, prepareRings, regionOf, regionRows, regionView, sweepLonAt, sweepOpacity, trimLabel, VIEW, wrapLon, zoomView,
 } from "./globe.ts"
 import { CITY_HINTS, COARSE_WORLD_OUTLINES, COUNTRY_LL, COUNTRY_NAMES, WORLD_OUTLINES } from "./world.ts"
 import type { Node } from "./api.ts"
@@ -414,6 +414,18 @@ eq(regionView(groupedFleet, "JP · Tokyo", "").shown.map((n) => n.id), [3104], "
 eq(regionView(groupedFleet, "JP · Tokyo").shown.length, 4, "旧的全分组地区筛选仍兼容")
 eq(regionView(groupedFleet, "JP · Tokyo", "不存在").current, null, "分组失效时回落全部，不误筛其他分组的同城")
 eq(regionView(groupedFleet, null, "A").shown.length, 6, "取消地区选择同时取消地区内分组筛选")
+
+// 标题/行间距也必须计入分页预算；不能只数地区个数。
+const pageLayout = { height: 100, columns: 3, rowHeight: 20, rowGap: 6, groupHeight: 24, groupGap: 10 }
+const pageItems = Array.from({ length: 9 }, (_, id) => ({ id, group: "A" }))
+eq(paginateRegionRows(pageItems, { ...pageLayout, height: 70 }).pages.map((p) => p.map((row) => row.id)), [[0, 1, 2, 3, 4, 5], [6, 7, 8]], "一行容纳三地区，超出可用高度直接下一页并重复标题")
+eq(paginateRegionRows(pageItems, { ...pageLayout, height: 69 }).pages.map((p) => p.length), [3, 3, 3], "差一像素也不能截断下一行")
+const separateGroups = Array.from({ length: 9 }, (_, id) => ({ id, group: String(id) }))
+eq(paginateRegionRows(separateGroups, pageLayout).pages.map((p) => p.length), [2, 2, 2, 2, 1], "每组只有一地区时同样预留所有标题和分组间距")
+const packed = paginateRegionRows([...pageItems, ...separateGroups], { ...pageLayout, height: 214, columns: 2, rowHeight: 32 })
+eq(packed.pages.flat().map((row) => row.id), [...pageItems, ...separateGroups].map((row) => row.id), "分页无重复、无遗漏且保留输入顺序")
+ok(packed.heights.every((height) => height <= 214), "手机每页所有标题和地区行均在可用区域内")
+eq(paginateRegionRows([], pageLayout), { pages: [[]], heights: [0] }, "空地区保留有效第一页")
 
 /* ---------------------------------------------------------------- 标签排布 */
 

@@ -16,7 +16,7 @@ const EPS = 1e-9
 export function mapViewport(width: number = MAP_VIEW.w, height: number = MAP_VIEW.h): { w: number; h: number; bounds: MapBounds } {
   const w = Number.isFinite(width) && width > 48 ? width : MAP_VIEW.w
   const h = Number.isFinite(height) && height > 48 ? height : MAP_VIEW.h
-  const mapWidth = Math.min(w - 24, 2 * (h - 24))
+  const mapWidth = Math.min(w - 16, 2 * (h - 16))
   const mapHeight = mapWidth / 2
   return { w, h, bounds: { x: (w - mapWidth) / 2, y: (h - mapHeight) / 2, w: mapWidth, h: mapHeight } }
 }

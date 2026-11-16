@@ -46,9 +46,10 @@
   默认流动线为灰青色，Gruvbox 为灰绿色，保持明暗模式下的陆海层次与线路对比度。
   地图基准高度 260px，桌面地图与右侧地区面板等宽。地区按节点分组展示，标题独占一行，
   组内桌面三列、720px 及以下两列；同城按组独立计数，点击筛选该分组及地区，地图仍保留当前顶部分组全貌。
-  地区列表独立滚动、不反向撑高地图。桌面每页 18 个分组地区条目、窄屏每页 8 个，
+  地区列表无内部滚动，按实际高度及分组标题、地区行、间距分页，放不下的完整条目排到下一页。
+  桌面以侧栏实际高度决定容量，窄屏列表最多 240px；不能通过隐藏滚动条截掉条目。
   「全部」常驻；翻页不改变地图、流动线和当前筛选。地区或容量变化时纠正页码，不遗留空白页。
-  地区列表滚动条使用透明轨道及当前主题色，Chromium/Safari 宽度 5px，不能回退成系统粗条或固定浅色轨道。
+  2D/3D 共用相同画布尺寸；2D 保留完整世界的 2:1 比例，在区域内居中最大化显示。
 - 延迟线形由同一主题设置同步控制首页、浮层、紧凑展开及详情；连接断点和平滑只改变显示，
   不补造延迟值、不抹去丢包与无响应。削峰是独立选项。
 - Monitor 1.4.1 增加 `swap_used`、`tcp`、`udp`、`procs` 历史字段。新增序列是区间均值，
@@ -98,8 +99,8 @@
   流动线相关改动还需运行 `MAP_CHECK_GROUP=flow node tools/verify_map_controls.mjs`。
 - 地图高度或地区分页改动运行 `MAP_CHECK_GROUP=compact node tools/verify_map_controls.mjs`，
   配合 `MAP_BASELINE_DIST` 对比旧面板高度；同时运行 `MAP_CHECK_GROUP=appearance` 检查缩放与标签防裁。
-- 地区滚动条修改运行 `MAP_CHECK_GROUP=scrollbars node tools/verify_map_controls.mjs`，
-  保持滚动条可见，检查默认/Gruvbox 明暗四套配色，以及桌面滚轮、键盘和手机触摸滚动。
+- 自适应地区分页修改运行 `MAP_CHECK_GROUP=pagination node tools/verify_map_controls.mjs`，
+  保持系统滚动条可见，检查四套主题下所有条目完整可达、无内部滚动，以及 2D/3D 画布尺寸一致。
 - 本地夹具不需要登录或修改真实 Hub；汇率验收拦截第三方请求，其通过不能证明公开汇率源当前可用。
   线上只读核查与夹具结果分别记录，不能把浏览器模拟当成真实 Hub 版本验证。
 - 当前 lint 已有 4 条警告：`tools/verify_latency_range.mjs` 的 `no-useless-escape` 一条，

@@ -4,7 +4,7 @@ import { Dialog, Tooltip } from "radix-ui"
 
 import {
   camera, clampLat, globeNodes, globeProfile, graticule, inkWidthWith, landPaths, layoutLabels,
-  GLOBE_ZOOM, prepareRings, groupedRegionRows, VIEW, wrapLon, zoomView, type Placed, type Quality,
+  GLOBE_ZOOM, prepareRings, groupedRegionRows, paginateRegionRows, VIEW, wrapLon, zoomView, type Placed, type Quality,
 } from "@/lib/globe"
 import { COARSE_WORLD_OUTLINES, WORLD_OUTLINES } from "@/lib/world"
 import { flatCamera, flatNodes, mapHitAreas, mapPaths, mapViewport, prepareMapRings, type FlatNode } from "@/lib/map"
@@ -112,23 +112,53 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
   const globeFlows = useMemo(() => flowNode && flowPoint ? prepareGlobeFlows(points, flowPoint, flowNode.online) : [], [points, flowPoint, flowNode])
   const rows = useMemo(() => groupedRegionRows(nodes).flatMap(({ group, rows }) => rows.map((row) => ({ ...row, group }))), [nodes])
   const sideBySide = useSyncExternalStore((notify) => subscribe(SIDE_BY_SIDE, notify), () => SIDE_BY_SIDE.matches)
-  const regionPageSize = sideBySide ? 18 : 8
-  const regionPageKey = JSON.stringify([regionPageSize, rows.map((row) => [row.group, row.region.key])])
-  const regionPages = Math.max(1, Math.ceil(rows.length / regionPageSize))
-  const selectedRegionIndex = rows.findIndex((row) => row.region.key === region && (regionGroup === null || row.group === regionGroup))
-  const nextRegionPage = selectedRegionIndex < 0 ? 0 : Math.floor(selectedRegionIndex / regionPageSize)
+  const regionHost = useRef<HTMLDivElement>(null)
+  const [regionLayout, setRegionLayout] = useState({ height: sideBySide ? 180 : 236, columns: narrow ? 2 : 3, rowHeight: sideBySide ? 20 : 32, rowGap: 6, groupHeight: 24, groupGap: 10, pagerHeight: sideBySide ? 40 : 48 })
+  useEffect(() => {
+    const el = regionHost.current
+    if (!el || typeof ResizeObserver !== "function") return
+    const observer = new ResizeObserver(() => {
+      const list = el.querySelector<HTMLElement>(".globe-regions")
+      const title = el.querySelector<HTMLElement>(".globe-side-title")
+      const all = el.querySelector<HTMLElement>(".globe-reg-all")
+      const groups = el.querySelector<HTMLElement>(".globe-region-groups")
+      const grid = el.querySelector<HTMLElement>(".globe-region-grid")
+      const heading = el.querySelector<HTMLElement>(".globe-region-group-title")
+      if (!list || !title || !all || !groups) return
+      const rowHeight = all.getBoundingClientRect().height
+      const groupHeight = heading ? heading.getBoundingClientRect().height + parseFloat(getComputedStyle(heading).marginBottom) : 24
+      const headerHeight = title.getBoundingClientRect().height + rowHeight + 2 * parseFloat(getComputedStyle(list).rowGap)
+      const next = {
+        height: sideBySide ? Math.max(groupHeight + rowHeight, Math.floor(el.clientHeight - headerHeight - 4)) : 236,
+        columns: narrow ? 2 : 3,
+        rowHeight,
+        rowGap: grid ? parseFloat(getComputedStyle(grid).rowGap) : 6,
+        groupHeight,
+        groupGap: parseFloat(getComputedStyle(groups).rowGap),
+        pagerHeight: sideBySide ? 40 : 48,
+      }
+      setRegionLayout((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [sideBySide, narrow])
+  const pagination = useMemo(() => {
+    const complete = paginateRegionRows(rows, regionLayout)
+    // 桌面侧栏高度由地图决定，多页时先为分页按钮留出空间，再计算可见条目。
+    return sideBySide && complete.pages.length > 1
+      ? paginateRegionRows(rows, { ...regionLayout, height: regionLayout.height - regionLayout.pagerHeight })
+      : complete
+  }, [rows, regionLayout, sideBySide])
+  const regionPageKey = JSON.stringify([regionLayout, rows.map((row) => [row.group, row.region.key])])
+  const regionPages = pagination.pages.length
+  const nextRegionPage = Math.max(0, pagination.pages.findIndex((page) => page.some((row) => row.region.key === region && (regionGroup === null || row.group === regionGroup))))
   const [regionPagination, setRegionPagination] = useState({ key: regionPageKey, page: nextRegionPage })
-  // 地区集合、顺序或每页容量变化时回到选中地区所在页；实时指标刷新不重置页码。
   if (regionPagination.key !== regionPageKey) setRegionPagination({ key: regionPageKey, page: nextRegionPage })
   const regionPage = regionPagination.key === regionPageKey ? Math.min(regionPagination.page, regionPages - 1) : nextRegionPage
-  const pageRows = rows.slice(regionPage * regionPageSize, (regionPage + 1) * regionPageSize)
+  const pageRows = pagination.pages[regionPage]
   const pageGroups = [...new Set(pageRows.map((row) => row.group))].map((group) => ({ group, rows: pageRows.filter((row) => row.group === group) }))
-  // 窄屏预留所有页中最高一页的列表空间；长分组列表独立滚动，翻到末页也不使面板跳动。
-  const regionListHeight = useMemo(() => Math.min(240, Math.max(32, ...Array.from({ length: regionPages }, (_, page) => {
-    const chunk = rows.slice(page * regionPageSize, (page + 1) * regionPageSize)
-    const groups = [...new Set(chunk.map((row) => row.group))]
-    return groups.reduce((height, group) => height + 24 + Math.ceil(chunk.filter((row) => row.group === group).length / (narrow ? 2 : 3)) * 38 - 6, Math.max(0, groups.length - 1) * 10)
-  }))), [rows, regionPages, regionPageSize, narrow])
+  // 窄屏预留最高一页的高度与 4px 行内绘制/焦点余量，末页不跳动且不裁切。
+  const regionListHeight = Math.max(32, ...pagination.heights) + 4
   // 「全部」那一行的悬停说明：合计里有多少台认不出国家（不上地球与地区列表）——
   // 「全部 N」与地区分项合计对不上这件事，就在那里有一句明面上的说法。
   const unplaced = nodes.length - rows.reduce((sum, row) => sum + row.count, 0)
@@ -159,9 +189,10 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
   // 画布实际像素尺寸：3D 用来计算标签留白，2D 用来适配完整地图。
   const [box, setBox] = useState<{ w: number; h: number } | null>(null)
   const viewport = useMemo(() => mapViewport(box?.w, box?.h), [box])
-  const frame = useMemo(() => mode === "2d"
+  const globeFrame = useMemo(() => globeFlows.length ? globeFlowView(zoomView(zoom, labelCount)) : zoomView(zoom, labelCount), [zoom, labelCount, globeFlows.length])
+  const frame = mode === "2d"
     ? { w: viewport.w, h: viewport.h, cx: viewport.w / 2, cy: viewport.bounds.y + viewport.bounds.h / 2, r: viewport.bounds.w / 2 }
-    : globeFlows.length ? globeFlowView(zoomView(zoom, labelCount)) : zoomView(zoom, labelCount), [mode, zoom, labelCount, viewport, globeFlows.length])
+    : globeFrame
   const mapBounds = viewport.bounds
   const reduced = useReducedMotion()
   const pageVisible = useSyncExternalStore(subscribeVisibility, () => !document.hidden)
@@ -361,28 +392,32 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
     const probe = measureLabel("W")
     return probe === null ? undefined : (text: string) => measureLabel(text) as number
   }, [])
-  const canvas = useMemo(() => {
-    const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${frame.w} ${frame.h}` }
-    if (mode === "2d" || !box || !points.length) return plain
+  const globeCanvas = useMemo(() => {
+    const plain = { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${globeFrame.w} ${globeFrame.h}` }
+    if (!box || !points.length) return plain
     const ink = Math.max(0, ...points.map((point) => inkWidthWith(measured, `${point.code} · ${point.region.label}`)))
-    const scale = Math.min(box.w / frame.w, box.h / frame.h)
+    const scale = Math.min(box.w / globeFrame.w, box.h / globeFrame.h)
     // 一侧还剩多少余量（用户单位）：宽屏是"容器比画布宽"留下的空白，窄屏约等于 0。
     // 手机按最终 viewBox 宽度决定高度，左右余量只由 pad 提供，避免高度与 pad 相互反馈。
-    const room = narrow ? 0 : (box.w / scale - frame.w) / 2
+    const room = narrow ? 0 : (box.w / scale - globeFrame.w) / 2
     // 撑开最多 36：再长宁可截字（见 labelMax），也不能让地球被挤小一圈 ——
     // 460 的画布撑到 532 已经让圆盘小 13%，再多就不是"复刻"那个地球了。
     // 标签距边缘的余量会跟随圆盘半径变化；默认是上游的 123。
-    const labelEdge = frame.cx - frame.r - 15
+    const labelEdge = globeFrame.cx - globeFrame.r - 15
     const pad = Math.max(0, Math.min(36, ink + 6 - (labelEdge + room)))
     return {
       pad,
       room,
-      viewBox: pad ? `${-pad.toFixed(1)} 0 ${(frame.w + pad * 2).toFixed(1)} ${frame.h}` : `0 0 ${frame.w} ${frame.h}`,
+      viewBox: pad ? `${-pad.toFixed(1)} 0 ${(globeFrame.w + pad * 2).toFixed(1)} ${globeFrame.h}` : `0 0 ${globeFrame.w} ${globeFrame.h}`,
     }
-  }, [mode, box, points, measured, frame, narrow])
+  }, [box, points, measured, globeFrame, narrow])
+  const canvas = mode === "2d"
+    ? { pad: 0, room: Number.POSITIVE_INFINITY, viewBox: `0 0 ${viewport.w} ${viewport.h}` }
+    : globeCanvas
+  // 两种模式共用画布大小；宽屏也为完整的 2:1 世界预留足够高度。
+  const sharedHeight = Math.max(260 * globeFrame.h / VIEW.h, (box?.w ?? 0) / 2 + 8)
   const mobileHeight = box
-    ? mode === "2d" ? Math.min(250, (box.w - 24) / 2 + 24)
-      : Math.min(250 * frame.h / VIEW.h, box.w * frame.h / (frame.w + canvas.pad * 2))
+    ? Math.max(box.w / 2 + 8, Math.min(250 * globeFrame.h / VIEW.h, box.w * globeFrame.h / (globeFrame.w + globeCanvas.pad * 2)))
     : 180
   // 100% 保留获批信标大小，再按缩放倍率同步核心、光晕和命中区域。
   const pixelScale = box && box.w > 0 && box.h > 0
@@ -437,7 +472,7 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
   return (
     <Tooltip.Provider delayDuration={0}>
     <section className="globe-panel" aria-label="节点地图" data-map-mode={mode} data-map-spin={rotating ? "true" : "false"} data-map-spinning={spinning ? "true" : "false"} data-marker-pulse={inView && pageVisible && !reduced ? "true" : "false"} data-map-flow-playing={flowPoint ? flowPlaying : undefined}>
-      <div className="globe-main" style={{ "--globe-height-ratio": mode === "2d" ? 1 : frame.h / VIEW.h, "--globe-mobile-height": `${mobileHeight}px` } as CSSProperties}>
+      <div className="globe-main" style={{ "--globe-shared-height": `${sharedHeight}px`, "--globe-mobile-height": `${mobileHeight}px` } as CSSProperties}>
         <div
           ref={host}
           className="globe-atlas"
@@ -585,7 +620,7 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
       </Dialog.Root>
 
       <aside className="globe-side">
-        <div className="globe-side-inner" style={{ "--globe-region-list-height": `${regionListHeight}px` } as CSSProperties}>
+        <div ref={regionHost} className="globe-side-inner" style={{ "--globe-region-list-height": `${regionListHeight}px` } as CSSProperties}>
           <div id={regionListId} className="globe-regions" data-region-page={regionPage + 1} data-region-pages={regionPages} data-region-total={rows.length}>
             <div className="globe-side-title">
               地区{located ? " · 已定位" : ""}

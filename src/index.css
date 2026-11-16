@@ -550,16 +550,12 @@
 .globe-region-group-title {
   height: 24px;
   margin-bottom: 6px;
-  padding: 0 8px;
-  border-left: 3px solid var(--muted-foreground);
-  border-radius: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--foreground);
-  background: var(--muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 24px;
 }
 .globe-region-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; padding-left: 10px; }

@@ -1600,7 +1600,7 @@ async function paginationChecks() {
       hierarchy: {
         title: title.textContent.trim(), semantic: title.tagName === 'H2' && heading.tagName === 'H3',
         titleProminent: parseFloat(titleStyle.fontSize) > parseFloat(cityStyle.fontSize) && Number(titleStyle.fontWeight) > Number(cityStyle.fontWeight) && titleStyle.color !== cityStyle.color,
-        groupDistinct: Number(headingStyle.fontWeight) > Number(cityStyle.fontWeight) && headingStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && headingStyle.backgroundColor !== getComputedStyle(root).backgroundColor && parseFloat(headingStyle.borderLeftWidth) > 0,
+        groupDistinct: Number(headingStyle.fontWeight) > Number(cityStyle.fontWeight) && Number(headingStyle.fontWeight) < Number(titleStyle.fontWeight) && headingStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(headingStyle.borderLeftWidth) === 0,
         indented: city.getBoundingClientRect().left > heading.getBoundingClientRect().left,
       },
       keys: [...el.querySelectorAll('[data-region-key]')].map((button) => JSON.stringify([button.dataset.regionGroup, button.dataset.regionKey])),
@@ -1619,7 +1619,7 @@ async function paginationChecks() {
       await preferences(selectedMode, '0')
       const first = await inspectPage(), tag = `高度分页/${palette}/${dark ? '暗' : '亮'}/${width}/${selectedMode}`
       const seen = [...first.keys]
-      check(tag + '：地区分布、分组名和城市具备明确的标题层级与视觉区别', first.hierarchy.title === '地区分布' && first.hierarchy.semantic && first.hierarchy.titleProminent && first.hierarchy.groupDistinct && first.hierarchy.indented, JSON.stringify(first.hierarchy))
+      check(tag + '：标题层级清晰，分组名为无底色无竖线的轻量文字', first.hierarchy.title === '地区分布' && first.hierarchy.semantic && first.hierarchy.titleProminent && first.hierarchy.groupDistinct && first.hierarchy.indented, JSON.stringify(first.hierarchy))
       check(tag + '：标题与地区均完整可见，没有内部滚动条', first.fits && first.gutter === 0 && first.scroll === 0 && !first.overflow && first.pages > 1, JSON.stringify(first))
       for (let page = 2; page <= first.pages; page++) {
         const previous = (await inspectPage()).page

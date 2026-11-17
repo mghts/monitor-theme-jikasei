@@ -6,15 +6,15 @@ import type { Node } from "@/lib/api"
 import { bytes, rate } from "@/lib/format"
 import { budgetOf, cny, fxNote, parseRateOverrides } from "@/lib/money"
 import { useExchangeRates } from "@/lib/use-exchange-rates"
-import { summarize, type Fleet } from "@/lib/summary"
+import { expirationsOf, summarize, type Fleet } from "@/lib/summary"
 import { speedSeriesOf } from "@/lib/speed-history"
 
 /**
  * 列表页顶上那行概览卡片，两副面孔（主题设置的「列表页顶部」里选）：
  *
  *   原版（summary / both）——四张卡片，各一块读数：节点 / 最忙节点 / 今日流量 / 实时网速。
- *   月度预算剩余价值版（budget / bothBudget）——四张卡片，但前两张各排两块读数：
- *     ① 月度预算 + 剩余价值（口径见 lib/money.ts）
+ *   计费版（budget / bothBudget）——四张卡片，但前两张各排两块读数：
+ *     ① 月度预算 + 最近到期（口径见 lib/money.ts 与 lib/summary.ts）
  *     ② 节点 + 最忙节点（照参考图：节点挪到原先最忙节点那一侧、最忙节点往右让位，
  *        两块分居同一张卡片的两端，下沿对齐）
  *     后两张两副面孔完全一样。
@@ -48,7 +48,7 @@ import { speedSeriesOf } from "@/lib/speed-history"
  */
 function Block({ title, hint, fx, children }: {
   title: string
-  /** 悬停提示：口径说明——月度预算与剩余价值那两个数不是一眼能看懂的，得写清楚。 */
+  /** 悬停提示：统计口径与完整节点名称。 */
   hint?: string
   fx?: ReturnType<typeof useExchangeRates>
   children: ReactNode
@@ -75,7 +75,7 @@ function Block({ title, hint, fx, children }: {
  */
 const BIG_BASE = 24
 const BIG_MIN = 16
-function Big({ children, tone }: { children: ReactNode; tone?: "budget" | "value" | "online" }) {
+function Big({ children, tone }: { children: ReactNode; tone?: "budget" | "online" | "expiry-warn" | "expiry-urgent" }) {
   const ref = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -277,13 +277,14 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
   const fx = useExchangeRates(needsFx)
   const rates = useMemo(() => ({ ...fx.snapshot.rates, ...custom.rates, CNY: 1 }), [fx.snapshot.rates, custom.rates])
   const budget = budgetOf(nodes, rates)
+  const expiry = expirationsOf(nodes)
+  const next = expiry.next
   // 与上方读数使用相同节点集合：分组、地区、搜索三层筛选都作用于历史快照。
   // 缓冲仍由 useNodes 维护，进详情再返回不会丢失已收集的历史。
   const series = speedSeriesOf(nodes)
   // 折算说明：只列真的用到过的币种——各站的账混着 USD / EUR / CNY 记，合起来必须说明口径。
   const note = fxNote(budget.used, budget.skipped, { rates, date: fx.snapshot.date, custom: custom.rates, label: "按参考汇率折算" })
   const monthlyCoverage = budget.monthlyCount < nodes.length ? `${budget.monthlyCount}/${nodes.length}` : `${budget.monthlyCount}`
-  const remainingCoverage = budget.remainingCount < nodes.length ? `${budget.remainingCount}/${nodes.length}` : `${budget.remainingCount}`
   const showFx = finance && (budget.used.some((code) => code !== "CNY") || budget.skipped.length > 0 || custom.invalid > 0)
   const stateLabel = fx.loading ? "正在更新"
     : fx.failed ? fx.origin === "builtin" ? "更新失败，使用内置报价" : "更新失败，使用缓存报价"
@@ -300,16 +301,21 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {finance ? (
         <>
-          {/* 第一张卡：月度预算 + 剩余价值。两个数使用同一份汇率折成人民币后相加，
-              所以写「≈」；口径与汇率清单放在悬停提示里（见 lib/money.ts）。 */}
+          {/* 第一张卡：月度预算 + 最近到期；到期提醒不受价格与汇率可用性影响。 */}
           <Pair>
             <Block title="月度预算" fx={showFx ? fx : undefined} hint={`各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。${note}${fxHint}`}>
               <Big tone={budget.monthly === null ? undefined : "budget"}>{budget.monthly === null ? "—" : `≈${cny(budget.monthly)}`}</Big>
               <Foot>{budget.monthlyCount ? `${monthlyCoverage} 台计费` : budget.skipped.length ? "缺少汇率" : "未记录价格"}</Foot>
             </Block>
-            <Block title="剩余价值" hint={`已经付掉、还没用掉的那一段：价格 × 剩余天数 ÷ 周期天数；没填价格、无到期日与一次性买断的不计入。${note}`}>
-              <Big tone={budget.remaining === null ? undefined : "value"}>{budget.remaining === null ? "—" : `≈${cny(budget.remaining)}`}</Big>
-              <Foot>{budget.remainingCount ? `${remainingCoverage} 台未到期` : budget.skipped.length ? "缺少汇率" : "无预付到期"}</Foot>
+            <Block title="最近到期" hint={`当前筛选节点中下一台到期的节点${next ? `：${next.name}，${next.days === 0 ? "今天到期" : `剩余 ${next.days} 天`}` : ""}。7 天内包含今天及第 7 天；少于 7 天橙色，少于 3 天红色。已过期 ${expiry.expired} 台，单独统计。无到期日与一次性买断不计入；不要求价格或汇率。`}>
+              <Big tone={next ? next.days < 3 ? "expiry-urgent" : next.days < 7 ? "expiry-warn" : undefined : undefined}>
+                {next ? next.days === 0 ? "今天到期" : `${next.days} 天` : "—"}
+              </Big>
+              <Foot>
+                <div className="truncate" title={next?.name}>{next ? next.name : "无待到期节点"}</div>
+                <div data-expiry-week="">7 天内 {expiry.withinWeek} 台</div>
+                {expiry.expired > 0 && <div data-readout="expiry-urgent">已过期 {expiry.expired} 台</div>}
+              </Foot>
             </Block>
           </Pair>
 

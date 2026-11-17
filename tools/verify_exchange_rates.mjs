@@ -146,10 +146,12 @@ async function navigate() {
 function inspect(infoSelector, cacheKey) {
   const rect = (element) => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom } }
   const cards = [...document.querySelectorAll('[data-slot="card"]')]
-  const blocks = cards.flatMap((card) => [...card.children]).filter((block) => ['月度预算', '剩余价值'].includes(block.firstElementChild?.textContent.trim()))
+  const blocks = cards.flatMap((card) => [...card.children]).filter((block) => block.firstElementChild?.textContent.trim() === '月度预算')
+  const expiry = cards.flatMap((card) => [...card.children]).find((block) => block.firstElementChild?.textContent.trim() === '最近到期')
   const info = document.querySelector(infoSelector)
   return {
     budgets: blocks.map((block) => ({ title: block.firstElementChild.textContent.trim(), number: block.children[1]?.textContent.trim(), foot: block.children[2]?.textContent.trim(), hint: block.getAttribute('title'), numberClipped: !!block.children[1] && block.children[1].scrollWidth > block.children[1].clientWidth + 1, ...rect(block) })),
+    expiry: expiry?.innerText,
     info: info ? { text: info.textContent.trim(), title: info.getAttribute('title'), attrs: Object.fromEntries([...info.attributes].map((attr) => [attr.name, attr.value])), scrollWidth: info.scrollWidth, clientWidth: info.clientWidth, parts: [...info.children].map((part) => ({ text: part.textContent.trim(), clipped: part.scrollWidth > part.clientWidth + 1, ...rect(part) })), visible: getComputedStyle(info).display !== 'none' && rect(info).h > 0, ...rect(info) } : null,
     fxLink: !!document.querySelector('a[href="https://github.com/fawazahmed0/exchange-api"]'),
     cache: localStorage.getItem(cacheKey), viewportWidth: innerWidth, dark: document.documentElement.classList.contains('dark'), overflow: document.documentElement.scrollWidth > innerWidth + 1,
@@ -162,11 +164,10 @@ async function state(label) {
   return snapshot
 }
 const amount = (snapshot, title) => Number(snapshot.budgets.find((block) => block.title === title)?.number?.match(/¥\s*([\d,]+(?:\.\d+)?)/)?.[1]?.replaceAll(',', ''))
-function budgetChecks(tag, snapshot, monthly, remaining, count) {
+function budgetChecks(tag, snapshot, monthly, count) {
   check(`${tag}：首页没有独立汇率状态文字或来源链接`, !/每日参考价|使用缓存|汇率来源/.test(snapshot.body) && !snapshot.fxLink)
   check(`${tag}：月度预算准确`, amount(snapshot, '月度预算') === monthly, snapshot.budgets.find((block) => block.title === '月度预算')?.number)
-  check(`${tag}：剩余价值准确`, amount(snapshot, '剩余价值') === remaining, snapshot.budgets.find((block) => block.title === '剩余价值')?.number)
-  check(`${tag}：两块覆盖台数准确，未知币种未计入`, snapshot.budgets.length === 2 && snapshot.budgets[0].foot === `${count} 台计费` && snapshot.budgets[1].foot === `${count} 台未到期`, snapshot.budgets.map((block) => block.foot).join(' / '))
+  check(`${tag}：预算覆盖台数准确，未知币种未计入`, snapshot.budgets.length === 1 && snapshot.budgets[0].foot === `${count} 台计费`, snapshot.budgets.map((block) => block.foot).join(' / '))
 }
 async function screenshot(label) {
   const response = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
@@ -178,7 +179,7 @@ async function runChecks() {
   const scenarioRequests = () => requests.filter((request) => request.scenario === scenario)
   const clearCache = () => evaluate((key) => localStorage.removeItem(key), CACHE_KEY)
   const seedCache = (cache) => evaluate((key, value) => localStorage.setItem(key, JSON.stringify(value)), CACHE_KEY, cache)
-  const waitBudget = () => waitFor(() => [...document.querySelectorAll('[data-slot="card"]')].flatMap((card) => [...card.children]).filter((block) => ['月度预算', '剩余价值'].includes(block.firstElementChild?.textContent.trim())).length === 2)
+  const waitBudget = () => waitFor(() => [...document.querySelectorAll('[data-slot="card"]')].flatMap((card) => [...card.children]).filter((block) => block.firstElementChild?.textContent.trim() === '月度预算').length === 1)
   const waitFx = (origin, failed = false) => waitFor((selector, expectedOrigin, expectedFailed) => {
     const info = document.querySelector(selector)
     return info?.getAttribute('data-fx-origin') === expectedOrigin && info.getAttribute('data-fx-failed') === String(expectedFailed) && info.getAttribute('data-fx-loading') === 'false'
@@ -221,13 +222,13 @@ async function runChecks() {
   const loading = await state('before-primary-response')
   const builtinDate = loading.info?.title.match(/\d{4}-\d{2}-\d{2}/)?.[0]
   if (!builtinDate) throw new Error('页面没有给出内置报价日期')
-  check('冷启动：网络响应前两预算已有有限内置读数，悬停提示说明正在更新', loading.info.attrs['data-fx-origin'] === 'builtin' && loading.info.title.includes('正在更新') && ['月度预算', '剩余价值'].every((title) => Number.isFinite(amount(loading, title)) && amount(loading, title) > 0), JSON.stringify(loading.budgets))
+  check('冷启动：网络响应前预算已有有限内置读数，悬停提示说明正在更新', loading.info.attrs['data-fx-origin'] === 'builtin' && loading.info.title.includes('正在更新') && Number.isFinite(amount(loading, '月度预算')) && amount(loading, '月度预算') > 0, JSON.stringify(loading.budgets))
   await release('primary', payload(today))
   await waitFx('network')
   const updated = await state('primary-success')
-  budgetChecks('主源成功', updated, 195, 187.5, '4/5')
+  budgetChecks('主源成功', updated, 195, '4/5')
   metadataChecks('主源成功', updated, 'network', false, '已自动更新', today)
-  check('自动更新：两个预算同步从内置报价变为新参考价', ['月度预算', '剩余价值'].every((title) => amount(updated, title) !== amount(loading, title)))
+  check('自动更新：预算更新报价，到期提醒保持独立', amount(updated, '月度预算') !== amount(loading, '月度预算') && updated.expiry === loading.expiry)
   check('未知币种：有价格的 XYZ 明示未计入，不能使用提供方额外代币报价', updated.info.title.includes('1 种币种缺少报价，未计入') && updated.budgets.every((block) => block.hint.includes('XYZ 没有汇率，未计入')))
   const fullCache = JSON.parse(updated.cache || 'null')
   check('缓存：保存带版本、日期、来源和获取时间的完整全局表', fullCache?.version === 1 && fullCache.snapshot?.source === 'currency-api' && fullCache.snapshot.date === today && Number.isFinite(fullCache.snapshot.fetchedAtMs) && fullCache.snapshot.fetchedAtMs > 0 && ISO_CODES.every((code) => Number.isFinite(fullCache.snapshot.rates[code]) && fullCache.snapshot.rates[code] > 0), fullCache ? `${Object.keys(fullCache.snapshot?.rates || {}).length} 币种` : '无缓存')
@@ -241,7 +242,7 @@ async function runChecks() {
   await navigate()
   await waitFx('cache')
   const reloaded = await state('cache-reload')
-  budgetChecks('新鲜缓存重载', reloaded, 195, 187.5, '4/5')
+  budgetChecks('新鲜缓存重载', reloaded, 195, '4/5')
   metadataChecks('新鲜缓存重载', reloaded, 'cache', false, '使用缓存', today)
   await noRequestCheck('新鲜缓存重载', beforeReload)
 
@@ -251,7 +252,7 @@ async function runChecks() {
   await navigate()
   await waitFx('cache')
   const rare = await state('rare-currencies')
-  budgetChecks('少见币种全局覆盖', rare, 138.2, 128.51, '9/10')
+  budgetChecks('少见币种全局覆盖', rare, 138.2, '9/10')
   check('少见币种：新节点所需八种报价来自原缓存且说明完整', rare.budgets.every((block) => ['HUF', 'NOK', 'UAH', 'MOP', 'KWD', 'XAF', 'CLP', 'AFN'].every((code) => block.hint.includes(`1 ${code} =`))) && rare.info.title.includes(today))
   await noRequestCheck('少见币种全局覆盖', beforeRare)
   await screenshot('02-rare-currencies-desktop')
@@ -263,7 +264,7 @@ async function runChecks() {
   await navigate()
   await waitFx('cache')
   const manual = await state('manual-priority')
-  budgetChecks('手工价优先', manual, 194, 188.5, '4/5')
+  budgetChecks('手工价优先', manual, 194, '4/5')
   check('手工价：明确区分自定义和每日价，非法项未成为零报价', manual.budgets.every((block) => block.hint.includes('1 USD = ¥7.1') && block.hint.includes('1 AED = ¥2.3') && block.hint.includes('自定义') && block.hint.includes(`1 EUR = ¥8，${today}`) && block.hint.includes('XYZ 没有汇率，未计入')) && manual.info.title.includes('忽略 6 项无效自定义汇率'), manual.info.title)
   check('手工价：人民币始终为 1，手工配置不污染自动全局缓存', manual.cache === reloaded.cache)
   await noRequestCheck('手工价优先且自动价已有缓存', beforeManual)
@@ -276,7 +277,7 @@ async function runChecks() {
   await navigate()
   await waitBudget()
   const allManual = await state('all-manual')
-  budgetChecks('所有外币已有手工价', allManual, 111, 55.5, '3')
+  budgetChecks('所有外币已有手工价', allManual, 111, '3')
   check('全手工：允许显式补未知币价，标明自定义且不冒用自动日期', allManual.info?.title.includes('自定义汇率') && allManual.budgets.every((block) => block.hint.includes('1 XYZ = ¥2') && block.hint.includes('自定义') && !block.hint.includes(today)) && allManual.cache === null)
   await noRequestCheck('所有外币已有手工价', beforeAllManual)
 
@@ -288,7 +289,7 @@ async function runChecks() {
   await navigate()
   await waitFx('network')
   const backup = await state('backup-success')
-  budgetChecks('主源失败备用成功', backup, 215, 210, '4/5')
+  budgetChecks('主源失败备用成功', backup, 215, '4/5')
   metadataChecks('主源失败备用成功', backup, 'network', false, '已自动更新', today)
   requestChecks('主源失败备用成功', 1, 1)
   check('备用：严格主源失败后才使用备用响应', scenarioRequests().map((request) => request.kind).join(',') === 'primary,backup' && JSON.parse(backup.cache).snapshot.rates.USD === 8)
@@ -313,7 +314,7 @@ async function runChecks() {
   }
   await waitFx('cache', true)
   const failedCache = await state(canSeedExpired ? 'expired-cache-both-fail' : 'online-cache-both-fail')
-  budgetChecks('双源失败保留缓存', failedCache, 215, 210, '4/5')
+  budgetChecks('双源失败保留缓存', failedCache, 215, '4/5')
   metadataChecks('双源失败保留缓存', failedCache, 'cache', true, '更新失败，使用缓存报价', preserved.snapshot.date)
   check('双源失败：保留原缓存获取时间/日期/值，没有把失败保存为新报价', JSON.stringify(JSON.parse(failedCache.cache)) === JSON.stringify(preserved))
   requestChecks('双源失败保留缓存', 1, 1)
@@ -329,7 +330,7 @@ async function runChecks() {
       const info = mobile.info
       check(`窄屏 ${width}/${dark ? '暗' : '亮'}：实际视口和颜色模式正确`, mobile.viewportWidth === width && mobile.dark === dark)
       check(`窄屏 ${width}/${dark ? '暗' : '亮'}：预算悬停提示保留日期与失败说明，预算没有水平裁切`, !!info?.visible && info.title.includes('更新失败，使用缓存报价') && info.title.includes(preserved.snapshot.date) && info.title.includes('1 种币种缺少报价，未计入') && !mobile.overflow && info.x >= -1 && info.right <= width + 1 && info.scrollWidth <= info.clientWidth + 1 && info.parts.every((part) => !part.clipped && part.x >= info.x - 1 && part.right <= info.right + 1 && part.y >= info.y - 1 && part.bottom <= info.bottom + 1), JSON.stringify(info))
-      budgetChecks(`窄屏 ${width}/${dark ? '暗' : '亮'} 缓存回退`, mobile, 215, 210, '4/5')
+      budgetChecks(`窄屏 ${width}/${dark ? '暗' : '亮'} 缓存回退`, mobile, 215, '4/5')
       check(`窄屏 ${width}/${dark ? '暗' : '亮'}：两个金额没有省略截断`, mobile.budgets.every((block) => !block.numberClipped))
       await screenshot(`05-cache-failed-${width}-${dark ? 'dark' : 'light'}`)
     }
@@ -348,8 +349,8 @@ async function runChecks() {
   await waitFx('builtin', true)
   const failedBuiltin = await state('both-fail-builtin')
   metadataChecks('双源失败无缓存', failedBuiltin, 'builtin', true, '更新失败，使用内置报价', builtinDate)
-  check('双源失败无缓存：两个预算保留有限内置数值而非空值或零', ['月度预算', '剩余价值'].every((title) => Number.isFinite(amount(failedBuiltin, title)) && amount(failedBuiltin, title) > 0 && amount(failedBuiltin, title) === amount(builtinBefore, title)) && failedBuiltin.budgets.every((block) => block.foot.startsWith('2 台')), JSON.stringify(failedBuiltin.budgets))
-  check('双源失败无缓存：剩余价值仍遵守半周期口径，不伪造成功缓存', Math.abs(amount(failedBuiltin, '剩余价值') - ((amount(failedBuiltin, '月度预算') - 20) / 2 + 10)) <= 0.011 && failedBuiltin.cache === null)
+  check('双源失败无缓存：预算保留有限内置数值而非空值或零', Number.isFinite(amount(failedBuiltin, '月度预算')) && amount(failedBuiltin, '月度预算') > 0 && amount(failedBuiltin, '月度预算') === amount(builtinBefore, '月度预算') && failedBuiltin.budgets.every((block) => block.foot.startsWith('2 台')), JSON.stringify(failedBuiltin.budgets))
+  check('双源失败无缓存：到期提醒保持可用，不伪造成功缓存', failedBuiltin.expiry === builtinBefore.expiry && failedBuiltin.expiry.includes('15 天') && failedBuiltin.cache === null)
   requestChecks('双源失败无缓存', 1, 1)
   await screenshot('06-builtin-failed-desktop')
 
@@ -361,7 +362,7 @@ async function runChecks() {
   await navigate()
   await waitFx('builtin', true)
   const invalid = await state('invalid-manual-unknown')
-  budgetChecks('非法手工未知币', invalid, 20, 10, '1/2')
+  budgetChecks('非法手工未知币', invalid, 20, '1/2')
   check('非法手工未知币：缺报价和非法输入均明示，不以默认 1/0 计入', invalid.info.title.includes('忽略 2 项无效自定义汇率') && invalid.info.title.includes('1 种币种缺少报价，未计入') && invalid.budgets.every((block) => block.hint.includes('XYZ 没有汇率，未计入')))
 
   scenario = 'cny-only'
@@ -372,7 +373,7 @@ async function runChecks() {
   await navigate()
   await waitBudget()
   const cnyOnly = await state('cny-only')
-  budgetChecks('仅人民币', cnyOnly, 20, 10, '1')
+  budgetChecks('仅人民币', cnyOnly, 20, '1')
   check('仅人民币：没有多余汇率状态或缓存', cnyOnly.info === null && cnyOnly.cache === null)
   await noRequestCheck('仅人民币', beforeCny)
 
@@ -385,7 +386,7 @@ async function runChecks() {
     await navigate()
     await noRequestCheck(`非预算布局 ${mode}`, before)
     const nonFinance = await state(scenario)
-    check(`非预算布局 ${mode}：无两预算与汇率状态`, nonFinance.budgets.length === 0 && nonFinance.info === null && nonFinance.nodes === MIXED.length)
+    check(`非预算布局 ${mode}：无月度预算与汇率状态`, nonFinance.budgets.length === 0 && nonFinance.info === null && nonFinance.nodes === MIXED.length)
   }
   scenario = 'once-only'
   await clearCache()
@@ -396,7 +397,7 @@ async function runChecks() {
   await waitBudget()
   await noRequestCheck('只有一次性费用', beforeOnce)
   const once = await state('once-only')
-  check('只有一次性费用：两预算保持空值，不折算成零或月费，也不显示虚假汇率状态', once.budgets.length === 2 && once.budgets.every((block) => block.number === '—') && once.info === null && once.cache === null, JSON.stringify(once.budgets))
+  check('只有一次性费用：预算空值，无待到期节点，不显示虚假汇率状态', once.budgets.length === 1 && once.budgets.every((block) => block.number === '—') && once.expiry.includes('无待到期节点') && once.info === null && once.cache === null, JSON.stringify(once.budgets))
 }
 try {
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen) })

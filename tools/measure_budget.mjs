@@ -28,7 +28,7 @@ await send('Runtime.enable'); await send('Page.enable')
 
 // 读数格：卡里那些 truncate 的大数字（含它们所在格的宽度）
 const MEASURE = `JSON.stringify((() => {
-  const tiles = [...document.querySelectorAll('[data-slot=card]')].filter((c) => /月度预算|剩余价值|节点|最忙节点|今日流量|实时网速/.test(c.innerText.slice(0, 12)))
+  const tiles = [...document.querySelectorAll('[data-slot=card]')].filter((c) => /月度预算|最近到期|节点|最忙节点|今日流量|实时网速/.test(c.innerText.slice(0, 12)))
   const out = []
   for (const c of tiles) {
     for (const d of c.querySelectorAll('div.tnum')) {

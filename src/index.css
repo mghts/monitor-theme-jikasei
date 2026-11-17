@@ -184,7 +184,6 @@
   --globe-pin-detail: #fbf1c7;
   /* 金、绿色略混入暖墨，兼顾米纸底上的读数与小字号选中标签。 */
   --gruvbox-budget: color-mix(in srgb, #b57614 55%, #282828);
-  --gruvbox-value: color-mix(in srgb, #427b58 85%, #282828);
   --gruvbox-online: color-mix(in srgb, #427b58 85%, #282828);
   --gruvbox-rx: #076678;
   --gruvbox-tx: #af3a03;
@@ -233,14 +232,14 @@
   --globe-pin-offline: #fb4934;
   --globe-pin-detail: #fbf1c7;
   --gruvbox-budget: #fabd2f;
-  --gruvbox-value: #8ec07c;
   --gruvbox-online: #b8bb26;
   --gruvbox-rx: #83a598;
   --gruvbox-tx: #fe8019;
 }
 
 :root[data-palette="gruvbox"] [data-readout="budget"] { color: var(--gruvbox-budget); }
-:root[data-palette="gruvbox"] [data-readout="value"] { color: var(--gruvbox-value); }
+[data-readout="expiry-warn"] { color: var(--chart-2); }
+[data-readout="expiry-urgent"] { color: var(--chart-5); }
 :root[data-palette="gruvbox"] [data-readout="online"] { color: var(--gruvbox-online); }
 :root[data-palette="gruvbox"] [data-transfer="rx"] { color: var(--gruvbox-rx); }
 :root[data-palette="gruvbox"] [data-transfer="tx"] { color: var(--gruvbox-tx); }

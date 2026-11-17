@@ -1,7 +1,7 @@
 // 概览卡片的合计口径：全站加总、掉线的机器不贡献速率、最忙的那台按 CPU 占用选。
 // 跑法同另外两个：`npm test`（Node 自己剥类型，不需要 runner）。
 // 没有任何东西 import 它，所以不进 bundle。
-import { summarize, type Fleet } from "./summary.ts"
+import { expirationsOf, summarize, type Fleet } from "./summary.ts"
 import type { Node } from "./api.ts"
 
 let failed = 0
@@ -69,6 +69,35 @@ eq([silent.busiest, silent.netRx, silent.online], [null, 0, 1], "在线无指标
 // 老 hub 少了 day_rx/day_tx：缺的按 0 算，不能让合计变成 NaN。
 const legacy = { ...node(1, { total_rx: TB }), day_rx: undefined, day_tx: undefined } as unknown as Node
 eq(summarize([legacy]).dayRx, 0, "缺 day_rx 的老 hub 按 0 算（不是 NaN）")
+
+eq(expirationsOf([]), { next: null, withinWeek: 0, expired: 0 }, "空列表没有待到期节点")
+const expirations = [
+  node(1, { name: "已过期", expires_in: -2 }),
+  node(2, { name: "七天后", expires_in: 7 }),
+  node(3, { name: "八天后", expires_in: 8 }),
+  node(4, { name: "免费且离线", price: 0, expires_in: 2 }),
+  node(5, { name: "缺汇率", currency: "XYZ", price: 10, expires_in: 2 }),
+  node(6, { name: "买断", billing_cycle: "once", expires_in: 0 }),
+  node(7, { name: "无日期", expires_in: null }),
+]
+eq(expirationsOf(expirations), {
+  next: { id: 4, name: "免费且离线", days: 2 }, withinWeek: 3, expired: 1,
+}, "到期提醒含第7天、零价和缺汇率节点；过期单独计数，买断与无日期排除，并列保留列表顺序")
+eq(expirationsOf([...expirations, node(8, { name: "今天到期", expires_in: 0 })]), {
+  next: { id: 8, name: "今天到期", days: 0 }, withinWeek: 4, expired: 1,
+}, "今天到期优先且计入7天内")
+eq(expirationsOf([node(1, { expires_in: -1 }), node(2, { expires_in: -30 })]), {
+  next: null, withinWeek: 0, expired: 2,
+}, "仅有已过期节点时不伪造下一到期日")
+eq(expirationsOf([
+  node(1, { expires_in: NaN }), node(2, { expires_in: Infinity }),
+  node(3, { expires_in: null, expires_at: "invalid" }),
+]), { next: null, withinWeek: 0, expired: 0 }, "非法到期数据不参与提醒")
+const future = new Date()
+future.setDate(future.getDate() + 5)
+const date = `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, "0")}-${String(future.getDate()).padStart(2, "0")}`
+eq(expirationsOf([node(9, { expires_at: date })]).next?.days, 5, "旧Hub缺expires_in时兼容日期字段")
+eq(expirationsOf([node(9, { expires_at: date, expires_in: 3 })]).next?.days, 3, "Hub天数优先于访客计算日期")
 
 if (failed) {
   console.error(`\n${failed} 处不符`)

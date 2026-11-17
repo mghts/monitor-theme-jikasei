@@ -1,4 +1,30 @@
 import type { Node } from "@/lib/api"
+import { daysUntil } from "./format.ts"
+
+export type Expirations = {
+  next: { id: number; name: string; days: number } | null
+  withinWeek: number
+  expired: number
+}
+
+/** 到期提醒独立于价格与汇率；今天至第 7 天计入本周，已过期单独提示。 */
+export function expirationsOf(nodes: Node[]): Expirations {
+  const result: Expirations = { next: null, withinWeek: 0, expired: 0 }
+  for (const node of nodes) {
+    if (node.billing_cycle === "once") continue
+    // 优先保留 Hub 的日历口径；只有缺字段 / null 时才兼容旧 Hub 的日期。
+    const days = node.expires_in ?? daysUntil(node.expires_at)
+    if (typeof days !== "number" || !Number.isFinite(days)) continue
+    if (days < 0) {
+      result.expired++
+      continue
+    }
+    if (days <= 7) result.withinWeek++
+    // 同日到期时沿用列表顺序，不按价格或在线状态改变优先级。
+    if (!result.next || days < result.next.days) result.next = { id: node.id, name: node.name, days }
+  }
+  return result
+}
 
 /**
  * 列表页顶上那行概览卡片要用的合计值。

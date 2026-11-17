@@ -2,7 +2,7 @@
   "name": "jikasei",
   "short": "jikasei",
   "description": "自家制の极简探针（Monitor）主题：五种卡片形态、节点地球、分组筛选、明暗双色。",
-  "version": "1.40.3",
+  "version": "1.41.0",
   "author": "akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [
@@ -44,7 +44,7 @@
         },
         {
           "value": "budget",
-          "label": "只显示概览卡片·价值版"
+          "label": "只显示概览卡片·计费版"
         },
         {
           "value": "both",
@@ -52,10 +52,10 @@
         },
         {
           "value": "bothBudget",
-          "label": "两个都显示·概览卡片价值版"
+          "label": "两个都显示·概览卡片计费版"
         }
       ],
-      "help": "分组标签行与概览卡片行各要哪一档；概览卡片分原版与价值版两种排法。"
+      "help": "分组标签行与概览卡片行各要哪一档；概览卡片分原版与计费版两种排法；计费版显示月度预算、最近到期节点和7天内到期台数。"
     },
     {
       "type": "select",

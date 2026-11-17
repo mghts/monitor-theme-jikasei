@@ -1,7 +1,8 @@
-// 拍 README 画廊用的那几张预览图（面板缩略图是 preview.png，由 preview-cover.mjs 生成）：
-//   ① preview-globe.png   桌面 1440 下的「节点地球」整块（含右侧地区列表）
-//   ② preview-globe-dark.png  同一块的深色版（明暗双色那一句的对照）
-//   ③ preview-mobile.png  手机 390×844@2x 的列表页首屏
+// 拍 README 的桌面、地图与手机预览图（面板缩略图是 preview.png，由 preview-cover.mjs 生成）：
+//   ① preview-desktop.png  桌面列表页，含地图、计费概览与节点卡片
+//   ② preview-globe.png   桌面 1440 下的「节点地球」整块（含右侧地区列表）
+//   ③ preview-globe-dark.png  同一块的深色版（明暗双色那一句的对照）
+//   ④ preview-mobile.png  手机 390×844@2x 的列表页首屏
 //
 // 用法：node tools/shot_preview_set.mjs [输出目录=仓库根]
 //
@@ -23,7 +24,24 @@ const OUTDIR = (process.argv[2] || '.').replace(/\/$/, '')
 const PORT = 5212
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' }
 const NODES = JSON.parse(readFileSync('tools/globe-nodes-fixture.json', 'utf8'))
+// 仅用于截图的演示价格与到期天数，不读取真实 Hub。统一使用 CNY，避免请求第三方汇率。
+NODES.nodes = NODES.nodes.map((node, i) => ({ ...node,
+  price: [24, 36, 18, 32, 28, 16, 42][i % 7], currency: 'CNY', billing_cycle: 'monthly',
+  expires_in: [2, 6, 18, 30, 12, 22, 45][i % 7],
+}))
 const CONFIG = { listTop: 'bothBudget', cardStyle: 'detailed', remarkPlacement: 'both', pingLines: '', globeOn: true, themeMode: 'system' }
+
+const pingPayload = (id) => {
+  const now = Math.floor(Date.now() / 1000)
+  const ping = []
+  for (const [task, base] of [[1, 62], [2, 92], [3, 121]]) {
+    for (let i = 59; i >= 0; i--) {
+      const jitter = ((i * 7 + task * 13 + id * 5) % 17) - 8
+      ping.push({ ts: now - i * 60, task_id: task, latency: Math.max(8, base + jitter) })
+    }
+  }
+  return { metrics: [], ping, step: 60, probes: { 1: '电信', 2: '联通', 3: '移动' }, loss: {} }
+}
 
 const server = createServer((req, res) => {
   const path = new URL(req.url, `http://127.0.0.1:${PORT}`).pathname
@@ -38,10 +56,11 @@ const server = createServer((req, res) => {
   }
   if (path.startsWith('/api/')) {
     const body = path === '/api/me'
-      ? { authed: false, github: false, public_page: true, site: `http://127.0.0.1:${PORT}`, site_name: 'Monitor', history_days: 30 }
+      ? { authed: false, github: false, public_page: true, site: `http://127.0.0.1:${PORT}`, site_name: 'Monitor M', history_days: 30 }
       : path === '/api/nodes' ? NODES
         : path.includes('/config') ? CONFIG
-          : { nodes: [] }
+          : path.includes('/metrics') ? pingPayload(Number((path.match(/nodes\/(\d+)/) || [])[1] || 1))
+            : { nodes: [] }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     return res.end(JSON.stringify(body))
   }
@@ -53,7 +72,7 @@ const server = createServer((req, res) => {
 })
 await new Promise((r) => server.listen(PORT, r))
 
-const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => existsSync(p)) || 'chrome'
+const CHROME = process.env.CHROME_PATH || ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => existsSync(p)) || 'chrome'
 const dbg = 9987
 let wsUrl = null
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbg}`, '--remote-allow-origins=*', '--no-first-run', '--disable-gpu',
@@ -81,10 +100,16 @@ const waitReady = async () => {
 
 // ① / ② 桌面：地球整块（亮 / 暗各一张，同一机位）
 for (const [dark, name] of [[false, 'preview-globe.png'], [true, 'preview-globe-dark.png']]) {
-  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 2, mobile: false })
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1120, deviceScaleFactor: 2, mobile: false })
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }, { name: 'prefers-reduced-motion', value: 'reduce' }] })
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` })
   await waitReady()
+  if (!dark) {
+    // 截至第一排卡片的完整下沿，避免截出下一排的半张卡片。
+    const firstRowBottom = await js(`Math.ceil(Math.max(...Array.from(document.querySelectorAll('[data-card-style="detailed"] > [data-slot="card"]')).slice(0, 3).map(el => el.getBoundingClientRect().bottom + scrollY)))`)
+    if (!Number.isFinite(firstRowBottom) || firstRowBottom <= 0) throw new Error('未找到节点卡片，无法生成桌面预览')
+    await shoot('preview-desktop.png', { x: 0, y: 0, width: 1440, height: firstRowBottom + 6, scale: 1 })
+  }
   const geo = JSON.parse(await js(`(() => { const el = document.querySelector('.globe-panel'); const r = el.getBoundingClientRect(); return JSON.stringify({ x: r.x, y: r.y + scrollY, w: r.width, h: r.height }) })()`))
   await shoot(name, { x: Math.round(geo.x), y: Math.round(geo.y), width: Math.round(geo.w), height: Math.round(geo.h), scale: 1 })
 }

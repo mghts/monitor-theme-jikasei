@@ -23,6 +23,11 @@ const OUTDIR = (process.argv[3] || '.').replace(/\/$/, '')
 const PORT = 5213
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' }
 const NODES = JSON.parse(readFileSync(NODES_PATH, 'utf8'))
+// 仅用于截图的演示价格与到期天数，不读取真实 Hub。统一使用 CNY，避免请求第三方汇率。
+NODES.nodes = NODES.nodes.map((node, i) => ({ ...node,
+  price: [24, 36, 18, 32, 28, 16, 42][i % 7], currency: 'CNY', billing_cycle: 'monthly',
+  expires_in: [2, 6, 18, 30, 12, 22, 45][i % 7],
+}))
 /** 每一档换一次；`listTop: 'none'` 与 `globeOn: false` 照旧图的口径（画廊只讲卡片本身）。 */
 let CONFIG = { listTop: 'none', globeOn: false, cardStyle: 'detailed', remarkPlacement: 'both', pingLines: '', themeMode: 'system' }
 let configHits = 0
@@ -57,7 +62,7 @@ const server = createServer((req, res) => {
   if (path.startsWith('/api/')) {
     if (path.includes('/config')) configHits += 1
     const body = path === '/api/me'
-      ? { authed: false, github: false, public_page: true, site: `http://127.0.0.1:${PORT}`, site_name: 'Monitor', history_days: 30 }
+      ? { authed: false, github: false, public_page: true, site: `http://127.0.0.1:${PORT}`, site_name: 'Monitor M', history_days: 30 }
       : path === '/api/nodes' ? NODES
         : path.includes('/config') ? CONFIG
           : path.includes('/metrics') ? pingPayload(Number((path.match(/nodes\/(\d+)/) || [])[1] || 1))
@@ -73,7 +78,7 @@ const server = createServer((req, res) => {
 })
 await new Promise((r) => server.listen(PORT, r))
 
-const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => existsSync(p)) || 'chrome'
+const CHROME = process.env.CHROME_PATH || ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => existsSync(p)) || 'chrome'
 const dbg = 9971 + Math.floor(Math.random() * 9)
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${dbg}`, '--remote-allow-origins=*', '--no-first-run', '--disable-gpu',
   '--hide-scrollbars', '--window-size=1440,900', '--user-data-dir=' + (process.env.TEMP || '/tmp') + '/shotstyles-' + Date.now(), 'about:blank'], { stdio: 'ignore' })

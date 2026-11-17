@@ -5,6 +5,8 @@
   `origin` 指向此 fork，`upstream` 保留原作者仓库 `https://github.com/akanotanin/monitor-theme-jikasei`。
 - 保留原主题作者 `akanotanin` 的署名、上游来源与 `LICENSE` 中的 MIT 版权和许可。
   安装包的 `theme.json.url`、页脚源码链接及其验收脚本应指向当前 fork。
+- 对外名称为 `Monitor M`，由 `mghts` 维护。`theme.json.short`、Hub 配置接口及访客存储键
+  继续沿用 `jikasei`，以保留已有安装、站点设置和浏览器偏好；仓库地址不变。
 
 ## 接手项目
 
@@ -12,7 +14,7 @@
   询问、评审或方案讨论先回答；用户明确要求修改时再编辑文件，避免把讨论变成实现。
 - 当前版本从 `package.json`、`theme.json` 和 `package-lock.json` 读取，不在本文件重复维护。
   近期变化查 `git log`；是否已发布、是否为最新版本须核对 GitHub Release 与远端 tag。
-- `README.md` 记录安装方法和完整产品行为；下列入口及口径用于定位代码、避免回归。
+- `README.md` 记录简介、安装与预览，`GUIDE.md` 记录完整产品行为、设置和开发发布方法；下列入口及口径用于定位代码、避免回归。
   源码变化后应同步相关说明，不把旧聊天、临时截图或 `/tmp` 报告当作永久状态来源。
 - Hub 版本及安装状态不能由主题版本推断。核查兼容性时阅读指定版本的官方发布说明和源码，
   区分源码核对、夹具测试和实际 Hub 验证；匿名接口无权查询时，不宣称已确认线上版本。

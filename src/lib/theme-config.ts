@@ -26,6 +26,7 @@ export function useLatencyStyle(): LatencyStyleState {
  * `config` 现画，两边靠 key 对上；默认值与迁移规则在 `site-settings.ts`（那里能单测），
  * `scripts/check-config.mjs` 在打包前兜底。
  */
+// 沿用安装标识，保证 Monitor M 更新后仍能读取已有 Hub 配置。
 const SHORT = "jikasei"
 
 /**

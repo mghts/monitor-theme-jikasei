@@ -35,6 +35,7 @@ const TITLE_CACHE_KEY = "jikasei:site_name"
 // 页脚署名（右下角那行）里指向的源码仓库 —— 与 theme.json 的 `url` 是同一个地址
 // （面板卡片上的「源码」也指这里）。两处一起改。
 const REPO_URL = "https://github.com/mghts/monitor-theme-jikasei"
+const THEME_NAME = "Monitor M"
 
 // Split out because recharts is most of this bundle and the list page draws no
 // chart. The landing page is 242 kB rather than 629 kB (77 kB gzipped against
@@ -553,20 +554,12 @@ export default function App() {
         )}
       </main>
 
-      {/* 页脚署名：一行浅色小字。桌面在右下角（右对齐、比内容右沿往左收 12px）；手机上**收进一个
-          带上分割线的页脚带**里居中 —— 2026-10-07 站长两轮反馈：先嫌「右下角一行孤零零的灰字
-          像水印」（改居中），再说「还是得改个位置、要和谐美观不突兀」。根因是它**没有结构**：
-          一行灰字悬在卡片下面，既不像页脚、也不像卡片的一部分。加一条 1px 上分割线（与顶栏的
-          border-b 呼应，页面上下就都框住了），留白按「卡→线 24px、线→字 16px、字→底 20px」
-          拉开，它才读成一个明确的页脚区。分割线只出现在窄屏（<640px，与署名居中的断点同一档）
-          —— 为手机改的东西不落到电脑端，桌面维持原样。
-          「jikasei」那截点开去本主题的源码仓库 —— 新标签页打开，别把访客从状态页带走
-          （链接地址与 theme.json 的 url 是同一个，见上面的 REPO_URL）。样式见 index.css 的 .theme-credit。 */}
+      {/* 主题源码入口：桌面右对齐，手机在带分隔线的页脚中居中。原作信息保留在链接提示与 README。 */}
       <footer className="mx-auto mt-2 w-full max-w-[1280px] border-t px-4 pb-5 pt-4 sm:mt-0 sm:border-t-0 sm:px-6 sm:pb-5 sm:pt-1">
         <p className="theme-credit text-center sm:pr-3 sm:text-right">
-          Theme by{" "}
-          <a href={REPO_URL} target="_blank" rel="noreferrer">
-            jikasei
+          主题 ·{" "}
+          <a href={REPO_URL} target="_blank" rel="noreferrer" title="由 mghts 维护，基于 akanotanin 的 jikasei">
+            {THEME_NAME}
           </a>
         </p>
       </footer>

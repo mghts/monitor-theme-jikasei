@@ -15,18 +15,19 @@
 这几条路径全部改由 hub 回答（带版本号），没设时回落到主题目录里的同名文件。所以主题只要把
 这三份放好，就同时管住了「没设图标」与「设了图标」两种状态。
 
-跑法：uv run --with pillow python tools/make_icons.py [--check]
+跑法：python3 tools/make_icons.py [--check] [--refresh-source]
+    --refresh-source 用固定几何生成 Monitor M 的 M 字标源图，再生成三份图标。
     --check 只比对（不写盘），用来验证仓库里的三份产物确实由这张源图生成。
 
 源图放在 preview-src/ 而不是 public/：public/ 里的东西会被原样打进主题包，而这三份产物已经
-把源图的内容带上去了，再带一份 140×140 的原图只是白占体积。
+把源图的内容带上去了，无需再将源图打包。
 """
 import base64
 import io
 import os
 import sys
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
@@ -83,8 +84,22 @@ def ico_bytes(src: Image.Image) -> bytes:
     return out.getvalue()
 
 
+def source_icon() -> Image.Image:
+    """固定几何的 M 字标，高分辨率绘制后缩小，不依赖字体或外部图片。"""
+    art = Image.new("RGBA", (768, 768), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(art)
+    draw.rounded_rectangle((0, 0, 767, 767), radius=192, fill="#292824")
+    draw.line([(192, 552), (192, 216), (384, 420), (576, 216), (576, 552)],
+              fill="#f7f7f4", width=60, joint="curve")
+    return art.resize((192, 192), Image.Resampling.LANCZOS)
+
+
 def main() -> int:
     check = "--check" in sys.argv
+    if "--refresh-source" in sys.argv:
+        if check:
+            raise ValueError("--check 与 --refresh-source 不能同时使用")
+        source_icon().save(SRC, "PNG", optimize=True)
     src = Image.open(SRC)
     svg = favicon_svg(src)
     touch = touch_png(src)

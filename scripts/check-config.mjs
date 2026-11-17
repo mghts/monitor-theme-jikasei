@@ -21,6 +21,12 @@ for (const file of ['src/App.tsx', 'tools/verify_footer_credit.mjs']) {
   const url = readFileSync(file, 'utf8').match(/const REPO_URL\s*=\s*["']([^"']+)["']/)?.[1]
   if (url !== manifest.url) throw new Error(`${file} 的 REPO_URL 与 theme.json.url 不一致`)
 }
+const app = readFileSync('src/App.tsx', 'utf8')
+if (app.match(/const THEME_NAME\s*=\s*"([^"]+)"/)?.[1] !== manifest.name) {
+  throw new Error('页脚主题名与 theme.json.name 不一致')
+}
+const configShort = readFileSync('src/lib/theme-config.ts', 'utf8').match(/const SHORT\s*=\s*"([^"]+)"/)?.[1]
+if (configShort !== manifest.short) throw new Error('Hub 配置请求标识与 theme.json.short 不一致')
 console.log(`版本与更新源一致：${manifest.version}，${manifest.url}`)
 
 const fields = (manifest.config || []).filter((entry) => entry.type !== 'title' && entry.key)

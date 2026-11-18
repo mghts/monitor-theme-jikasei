@@ -5,14 +5,14 @@
 
 [下载安装](https://github.com/mghts/monitor-theme-jikasei/releases/latest) · [使用说明](GUIDE.md) · [反馈问题](https://github.com/mghts/monitor-theme-jikasei/issues)
 
-![Monitor M 桌面预览，使用演示数据](preview-desktop.png?v=1.41.2)
+![Monitor M 桌面预览，使用演示数据](preview-desktop.png?v=1.41.3)
 
 ## 功能
 
 - **节点地图**：3D 地球与 2D 世界地图，按分组、地区查看节点，可配置中心节点流向示意。
 - **五种布局**：经典、简约、延迟、详细、紧凑，访客可自行切换。
 - **监控图表**：资源历史、网络延迟、丢包与缺测提示，支持时间范围和延迟线形设置。
-- **计费概览**：按月摊销预算、外币参考汇率、最近到期节点和 7 天内到期提醒。
+- **计费概览**：按月摊销预算、外币参考汇率、最近到期节点和已过期台数。
 - **外观设置**：默认与 Gruvbox 配色，支持亮色、暗色、随系统或按北京时间自动切换。
 
 纯静态前端，读取 Hub 接口；国旗、地图与图标随主题提供。外币自动折算按需请求每日参考汇率。
@@ -46,7 +46,7 @@ shasum -a 256 -c theme.tar.gz.sha256
 |:---:|:---:|
 | ![亮色地图](preview-globe.png?v=1.41.1) | ![暗色地图](preview-globe-dark.png?v=1.41.1) |
 
-<img src="preview-mobile.png?v=1.41.2" alt="手机列表页" width="260">
+<img src="preview-mobile.png?v=1.41.3" alt="手机列表页" width="260">
 
 </details>
 

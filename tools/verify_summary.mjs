@@ -72,7 +72,7 @@ const base = (id, name, over) => ({
 // 真实网络更新与故障回退由 verify_exchange_rates.mjs 专项验收，不访问外网来决定本脚本结果。
 //   月度预算 = 12×6.7179 + 120×6.7179÷12 + 300×7.6172÷3 + 30
 //            = 80.6148 + 67.179 + 761.72 + 30 = 939.5138 → ≈¥939.51（4 台计费）
-//   最近到期 = Node A，15 天；7天内有0台到期。
+//   最近到期 = Node A，15 天。
 const MIXED = {
   nodes: [
     base(1, 'Node A', {
@@ -166,7 +166,7 @@ const BIG_MONEY = { nodes: [base(1, 'Node A', { online: true, price: 3000, curre
 
 const EXPIRY_NODES = [
   base(201, '已过期节点', { expires_in: -2 }),
-  base(202, '七天后到期', { expires_in: 7 }),
+  base(202, '七天后到期', { expires_in: 7, online: true, metrics: metrics({ cpu: 100, net_rx: 8 * MB, net_tx: 3 * MB }) }),
   base(203, '八天后到期', { expires_in: 8 }),
   base(204, '未填价格的最近到期节点名称很长 <img src=x onerror=alert(1)>', { expires_in: 2 }),
   base(205, '缺汇率节点', { price: 10, currency: 'XYZ', expires_in: 2 }),
@@ -445,7 +445,8 @@ function checkPair(where, t, cardPad = 16) {
     b.x - t.x >= (t.right - t.x) / 2 - 2 && b.x >= a.right,
     `右块起点 ${Math.round(b.x - t.x)}px / 卡片半宽 ${Math.round((t.right - t.x) / 2)}px（左块宽 ${a.w} / 右块宽 ${b.w}）`)
   check(`${where}：两块的下沿对齐（同一条基线）`, a.foot === b.foot && a.foot !== null, `左 ${a.foot} / 右 ${b.foot}`)
-  check(`${where}：两块里的数字都没被截断`, a.clip <= 0 && b.clip <= 0, `裁掉 ${a.clip}/${b.clip}px`)
+  check(`${where}：两块里的数字都没被截断`, a.numTextW <= a.numW && b.numTextW <= b.numW,
+    `文本/可用宽度 ${a.numTextW}/${a.numW}px、${b.numTextW}/${b.numW}px`)
 }
 
 /**
@@ -509,7 +510,7 @@ let classicNet = null
   check('原版：概览行排在节点卡片之前', dom.above === true, String(dom.above))
   check('原版：节点卡「在线 / 总数 + 离线台数」', tile(dom, '节点').text === '节点 | 3 / 4 | 1 台离线', tile(dom, '节点').text)
   check('原版：最忙节点卡 = CPU 最高的那台（51.0% / Node B）',
-    tile(dom, '最忙节点').text === '最忙节点 | 51.0% | CPU 使用率 | Node B', tile(dom, '最忙节点').text)
+    tile(dom, '最忙节点').text === '最忙节点 | CPU 51.0% | Node B', tile(dom, '最忙节点').text)
   check('原版：今日流量卡：今日 1.25 GB ↓ / 768 MB ↑，总流量 3.50 TB ↓ / 2.25 TB ↑',
     tile(dom, '今日流量').text === '今日流量 | 1.25 GB | 768 MB | 总流量 | 3.50 TB | 2.25 TB', tile(dom, '今日流量').text)
   check('原版：实时网速卡 = 在线且有指标的节点之和（20.5 → 21 MB/s ↓ / 40.125 → 40 MB/s ↑）',
@@ -544,10 +545,10 @@ let classicNet = null
     JSON.stringify(tile(dom, '月度预算')?.titles ?? []))
   check('预算版：月度预算 ≈¥939.51（年付摊到月、季付摊到月、掉线那台也算）+ 4 台计费',
     block(dom, '月度预算').text === '月度预算 | ≈¥939.51 | 4 台计费', block(dom, '月度预算').text)
-  check('预算版：最近到期为Node A，15天，7天内0台',
-    block(dom, '最近到期').text === '最近到期 | 15 天 | Node A | 7天内有0台到期', block(dom, '最近到期').text)
+  check('预算版：最近到期为 Node A，15 天',
+    block(dom, '最近到期').text === '最近到期 | 15 天 | Node A', block(dom, '最近到期').text)
   check('预算版：节点与最忙节点两块与原版逐字一致',
-    tile(dom, '节点').blocks.map((b) => b.text).join(' | ') === '节点 | 3 / 4 | 1 台离线 | 最忙节点 | 51.0% | CPU 使用率 | Node B',
+    tile(dom, '节点').blocks.map((b) => b.text).join(' | ') === '节点 | 3 / 4 | 1 台离线 | 最忙节点 | CPU 51.0% | Node B',
     tile(dom, '节点').blocks.map((b) => b.text).join(' | '))
   check('预算版：今日流量 / 实时网速两张与原版逐字一致（没被误伤）',
     tile(dom, '今日流量').text === classicDay && tile(dom, '实时网速').text === classicNet,
@@ -571,7 +572,7 @@ let classicNet = null
     !budgetHint.includes('1 CNY'),
     budgetHint)
   check('预算版：最近到期提示包含7天范围与价格/汇率独立口径',
-    valueHint.includes('7 天内包含今天及第 7 天') && valueHint.includes('无到期日') && valueHint.includes('不要求价格或汇率'), valueHint)
+    valueHint.includes('7 天内到期 0 台，包含今天及第 7 天') && valueHint.includes('无到期日') && valueHint.includes('不要求价格或汇率'), valueHint)
   check('预算版：折算日期写在提示里（不写来源站点）', budgetHint.includes(FIXTURE_DATE) && !/https?:\/\/|[a-z0-9-]+\.(com|net|org|io)/.test(budgetHint), budgetHint)
 }
 
@@ -581,31 +582,31 @@ let classicNet = null
   check('没填价格：月度预算写「— / 未记录价格」，不是 ¥0.00',
     block(free, '月度预算').text === '月度预算 | — | 未记录价格', block(free, '月度预算').text)
   check('没填价格：到期提醒仍然可用',
-    block(free, '最近到期').text === '最近到期 | 15 天 | Node A | 7天内有0台到期', block(free, '最近到期').text)
+    block(free, '最近到期').text === '最近到期 | 15 天 | Node A', block(free, '最近到期').text)
   check('没填价格：提示里只写「按参考汇率折算成人民币」（没有汇率可列）',
     block(free, '月度预算').hint === '各节点的价格按计费周期摊到每个月后相加；一次性买断与没填价格的不计入。按参考汇率折算成人民币',
     block(free, '月度预算').hint)
 
   const once = await render({ listTop: 'budget' }, 'once', 'once')
   check('一次性买断：两块都不计入（没有「每月」也没有「剩余天数」）',
-    block(once, '月度预算').text === '月度预算 | — | 未记录价格' && block(once, '最近到期').text === '最近到期 | — | 无待到期节点 | 7天内有0台到期',
+    block(once, '月度预算').text === '月度预算 | — | 未记录价格' && block(once, '最近到期').text === '最近到期 | — | 无待到期节点',
     `${block(once, '月度预算').text} ／ ${block(once, '最近到期').text}`)
 
   const exotic = await render({ listTop: 'budget' }, 'exotic', 'exotic')
   check('缺汇率只影响预算，到期提醒仍包含未知币种',
-    block(exotic, '月度预算').text === '月度预算 | ≈¥20.00 | 1/2 台计费' && block(exotic, '最近到期').text === '最近到期 | 10 天 | X 币机 | 7天内有0台到期',
+    block(exotic, '月度预算').text === '月度预算 | ≈¥20.00 | 1/2 台计费' && block(exotic, '最近到期').text === '最近到期 | 10 天 | X 币机',
     `${block(exotic, '月度预算').text} ／ ${block(exotic, '最近到期').text}`)
   check('没有汇率的币种：提示里点名（XYZ 没有汇率，未计入）',
     block(exotic, '月度预算').hint.includes('XYZ 没有汇率，未计入'), block(exotic, '月度预算').hint)
 
   const unknownOnly = await render({ listTop: 'budget' }, 'unknown-only', 'unknownonly')
   check('全部币种未知：不把已有价格误报为未记录价格',
-    block(unknownOnly, '月度预算').text === '月度预算 | — | 缺少汇率' && block(unknownOnly, '最近到期').text === '最近到期 | 10 天 | X 币机 | 7天内有0台到期',
+    block(unknownOnly, '月度预算').text === '月度预算 | — | 缺少汇率' && block(unknownOnly, '最近到期').text === '最近到期 | 10 天 | X 币机',
     `${block(unknownOnly, '月度预算').text} ／ ${block(unknownOnly, '最近到期').text}`)
 
   const rare = await render({ listTop: 'budget' }, 'rare-currency-29', 'rare')
   check('29节点：NOK/HUF正确折算，零价节点仍不计费，显示28/29而非监控总数',
-    block(rare, '月度预算').text === '月度预算 | ≈¥536.52 | 28/29 台计费' && block(rare, '最近到期').text === '最近到期 | 15 天 | 已知币种节点 1 | 7天内有0台到期',
+    block(rare, '月度预算').text === '月度预算 | ≈¥536.52 | 28/29 台计费' && block(rare, '最近到期').text === '最近到期 | 15 天 | 已知币种节点 1',
     `${block(rare, '月度预算').text} ／ ${block(rare, '最近到期').text}`)
   check('参考报价提示准确标明缓存日期与币种，零价USD不出现在折算清单',
     block(rare, '月度预算').hint.includes(FIXTURE_DATE) && block(rare, '月度预算').hint.includes('HUF') && block(rare, '月度预算').hint.includes('NOK') && !block(rare, '月度预算').hint.includes('USD'),
@@ -638,7 +639,7 @@ let classicNet = null
     block(downB, '月度预算').text === '月度预算 | ≈¥939.51 | 4 台计费', block(downB, '月度预算').text)
 
   const tied = await render({ listTop: 'summary' }, 'tied', 'tied')
-  check('最忙并列：留列表里先出现的那台', tile(tied, '最忙节点').text === '最忙节点 | 30.0% | CPU 使用率 | 先出现的', tile(tied, '最忙节点').text)
+  check('最忙并列：留列表里先出现的那台', tile(tied, '最忙节点').text === '最忙节点 | CPU 30.0% | 先出现的', tile(tied, '最忙节点').text)
 }
 
 /* 6) 走势线：冷启动没有（一个采样画不出走势），攒到两个点才画；卡片高度不因此变 */
@@ -654,13 +655,13 @@ let classicNet = null
       const curve = chart.querySelector('polyline[data-transfer="' + key + '"]')
       if (!sample || !curve) return null
       const a = getComputedStyle(sample), b = getComputedStyle(curve)
-      return { label: sample.closest('span').innerText.trim(), dash: b.strokeDasharray,
+      return { label: sample.closest('span').innerText.trim(), color: b.stroke, dash: b.strokeDasharray,
         matched: a.stroke === b.stroke && a.strokeDasharray === b.strokeDasharray }
     })
   })()`)
   const [rx, tx] = traceStyles
-  check('图例与曲线对应：下行实线、上行虚线', rx?.label === '下行' && rx.matched && rx.dash === 'none' &&
-    tx?.label === '上行' && tx.matched && tx.dash !== 'none', JSON.stringify(traceStyles))
+  check('图例与曲线对应：上下行都是实线，颜色可区分', rx?.label === '下行' && rx.matched && rx.dash === 'none' &&
+    tx?.label === '上行' && tx.matched && tx.dash === 'none' && rx.color !== tx.color, JSON.stringify(traceStyles))
   check('走势线：画出来前后卡片高度不变（位置是预留的，不是撑开的）',
     dom.tileHeights[0] === first.tileHeights[0], `${first.tileHeights[0]}px → ${dom.tileHeights[0]}px`)
 }
@@ -800,7 +801,7 @@ let classicNet = null
     usa.clicked === 'ok' && sig(usa.dom) === sig(soloUsa),
     `点击 ${usa.clicked} ／ 页面上 ${sig(usa.dom)} ／ 对照 ${sig(soloUsa)}`)
   check('分组跟随：点「美国」后节点 = 1 / 1 全部在线、最忙 = Node A 12.5%',
-    block(usa.dom, '节点').text === '节点 | 1 / 1 | 全部在线' && block(usa.dom, '最忙节点').text === '最忙节点 | 12.5% | CPU 使用率 | Node A',
+    block(usa.dom, '节点').text === '节点 | 1 / 1 | 全部在线' && block(usa.dom, '最忙节点').text === '最忙节点 | CPU 12.5% | Node A',
     `${block(usa.dom, '节点').text} ／ ${block(usa.dom, '最忙节点').text}`)
   check('分组跟随：点「美国」后确实变了（不是原地不动）', sig(usa.dom) !== fleetSig, `先 ${fleetSig} ／ 后 ${sig(usa.dom)}`)
 
@@ -808,7 +809,7 @@ let classicNet = null
   check('分组跟随：点「欧洲」后概览 = 只放欧洲那两台的站点', sig(eu.dom) === sig(soloEu),
     `页面上 ${sig(eu.dom)} ／ 对照 ${sig(soloEu)}`)
   check('分组跟随：点「欧洲」后节点 = 2 / 2、最忙 = Node B 51.0%（没上报指标那台不参与）',
-    block(eu.dom, '节点').text === '节点 | 2 / 2 | 全部在线' && block(eu.dom, '最忙节点').text === '最忙节点 | 51.0% | CPU 使用率 | Node B',
+    block(eu.dom, '节点').text === '节点 | 2 / 2 | 全部在线' && block(eu.dom, '最忙节点').text === '最忙节点 | CPU 51.0% | Node B',
     `${block(eu.dom, '节点').text} ／ ${block(eu.dom, '最忙节点').text}`)
 
   const un = await clickGroup('未分组')
@@ -842,7 +843,7 @@ let classicNet = null
   const plainEu = await clickGroup('欧洲')
   check('分组跟随·原版面孔：四张卡片各一块读数、节点 2 / 2、最忙 Node B',
     plainEu.dom.tiles.length === 4 && plainEu.dom.tiles.every((t) => t.blocks.length === 1) &&
-    tile(plainEu.dom, '节点').text === '节点 | 2 / 2 | 全部在线' && tile(plainEu.dom, '最忙节点').text === '最忙节点 | 51.0% | CPU 使用率 | Node B',
+    tile(plainEu.dom, '节点').text === '节点 | 2 / 2 | 全部在线' && tile(plainEu.dom, '最忙节点').text === '最忙节点 | CPU 51.0% | Node B',
     `${plainEu.dom.tiles.map((t) => t.titles.join('+')).join(' / ')} ／ ${tile(plainEu.dom, '节点').text}`)
 
   // 手机：切分组后四张卡还在、不横向滚
@@ -899,7 +900,7 @@ let classicNet = null
     solo.set(v, texts(dom))
     evidence.push({ name: `custom-${v}`, dom })
     check(`自定义计费·${name}：月摊与独立手算一致，到期天数不受周期影响`,
-      JSON.stringify(texts(dom)) === JSON.stringify([`月度预算 | ≈¥${monthly} | 1 台计费`, `最近到期 | ${days} 天 | ${nodeName} | 7天内有0台到期`]),
+      JSON.stringify(texts(dom)) === JSON.stringify([`月度预算 | ≈¥${monthly} | 1 台计费`, `最近到期 | ${days} 天 | ${nodeName}`]),
       texts(dom).join(' ／ '))
   }
   check('标准月数别名：12m与yearly的月摊、到期天数一致',
@@ -909,8 +910,8 @@ let classicNet = null
   const all = await render(CUSTOM_CYCLE_CONFIG, 'custom-all', 'customcycles')
   check('混合自定义周期：月度预算336元，9台中7台计费',
     block(all, '月度预算').text === '月度预算 | ≈¥336.00 | 7/9 台计费', block(all, '月度预算').text)
-  check('混合自定义周期：今天到期优先，7天内1台',
-    block(all, '最近到期').text === '最近到期 | 今天到期 | 已到期自定义周期 | 7天内有1台到期', block(all, '最近到期').text)
+  check('混合自定义周期：今天到期优先',
+    block(all, '最近到期').text === '最近到期 | 今天到期 | 已到期自定义周期', block(all, '最近到期').text)
   check('自定义周期外币：提示确认注入的USD/EUR汇率为人工值',
     block(all, '月度预算').hint.includes('1 USD = ¥7.5') && block(all, '月度预算').hint.includes('1 EUR = ¥8') && block(all, '月度预算').hint.includes('自定义'),
     block(all, '月度预算').hint)
@@ -927,15 +928,15 @@ let classicNet = null
 
   const custom = await clickGroup('自定义周期')
   check('自定义周期分组：2m/60m/1200m月摊136，最近30天',
-    custom.clicked === 'ok' && JSON.stringify(texts(custom.dom)) === JSON.stringify(['月度预算 | ≈¥136.00 | 3 台计费', '最近到期 | 30 天 | 两月付人民币 | 7天内有0台到期']) && custom.dom.nodeCards === 3,
+    custom.clicked === 'ok' && JSON.stringify(texts(custom.dom)) === JSON.stringify(['月度预算 | ≈¥136.00 | 3 台计费', '最近到期 | 30 天 | 两月付人民币']) && custom.dom.nodeCards === 3,
     `点击 ${custom.clicked} ／ ${texts(custom.dom).join(' ／ ')} ／ 节点卡片 ${custom.dom.nodeCards}`)
   const aliases = await clickGroup('标准别名')
   check('标准别名分组：12m与yearly月摊160，最近73天',
-    aliases.clicked === 'ok' && JSON.stringify(texts(aliases.dom)) === JSON.stringify(['月度预算 | ≈¥160.00 | 2 台计费', '最近到期 | 73 天 | 十二月别名欧元 | 7天内有0台到期']) && aliases.dom.nodeCards === 2,
+    aliases.clicked === 'ok' && JSON.stringify(texts(aliases.dom)) === JSON.stringify(['月度预算 | ≈¥160.00 | 2 台计费', '最近到期 | 73 天 | 十二月别名欧元']) && aliases.dom.nodeCards === 2,
     `点击 ${aliases.clicked} ／ ${texts(aliases.dom).join(' ／ ')}`)
   const excluded = await clickGroup('排除口径')
   check('自定义周期计数：今天到期仍提醒，买断排除，缺价仍保留到期信息',
-    excluded.clicked === 'ok' && JSON.stringify(texts(excluded.dom)) === JSON.stringify(['月度预算 | ≈¥40.00 | 2/4 台计费', '最近到期 | 今天到期 | 已到期自定义周期 | 7天内有1台到期']) && excluded.dom.nodeCards === 4,
+    excluded.clicked === 'ok' && JSON.stringify(texts(excluded.dom)) === JSON.stringify(['月度预算 | ≈¥40.00 | 2/4 台计费', '最近到期 | 今天到期 | 已到期自定义周期']) && excluded.dom.nodeCards === 4,
     `点击 ${excluded.clicked} ／ ${texts(excluded.dom).join(' ／ ')}`)
   const back = await clickGroup('全部')
   check('自定义周期分组：切回全部恢复两金额与计数',
@@ -968,7 +969,7 @@ let classicNet = null
         const b = block(dom, '最近到期')
         const expected = days < 3 ? 'expiry-urgent' : days < 7 ? 'expiry-warn' : null
         check(`到期阈值 ${gruvbox ? 'Gruvbox' : '默认'}/${dark ? '暗' : '亮'}/${days}天`,
-          b.numTone === expected && b.text === `最近到期 | ${days === 0 ? '今天到期' : days + ' 天'} | 边界节点 | 7天内有${days <= 7 ? 1 : 0}台到期`,
+          b.numTone === expected && b.text === `最近到期 | ${days === 0 ? '今天到期' : days + ' 天'} | 边界节点`,
           `${b.text} ／ ${b.numTone} ／ ${b.numColor}`)
         colors.set(days, b.numColor)
       }
@@ -979,22 +980,27 @@ let classicNet = null
         await render({ listTop: 'budget', gruvboxOn: gruvbox }, `expiry-layout-${width}`, 'expiry')
         const dom = await capture(`expiry-${gruvbox ? 'gruvbox' : 'default'}-${dark ? 'dark' : 'light'}-${width}`)
         const b = block(dom, '最近到期')
-        check(`到期布局 ${gruvbox}/${dark}/${width}：缺价节点优先，7天内3台，过期1台，长名纯文本`,
-          b.text === `最近到期 | 2 天 | ${EXPIRY_NODES[3].name} | 7天内有3台到期 | 已过期 1 台` &&
-          b.footLines[0]?.title === EXPIRY_NODES[3].name && b.numTextW <= b.numW &&
+        check(`到期布局 ${gruvbox}/${dark}/${width}：缺价节点优先，过期1台，长名纯文本，7天内统计仅在提示中`,
+          b.text === `最近到期 | 2 天 | ${EXPIRY_NODES[3].name} | 已过期 1 台` &&
+          b.hint.includes('7 天内到期 3 台') && b.footLines[0]?.title === EXPIRY_NODES[3].name && b.numTextW <= b.numW &&
           b.footLines.slice(1).every((line) => line.clip <= 0) && dom.scroll[0] <= dom.scroll[1], b.text)
         checkPair(`到期布局 ${gruvbox}/${dark}/${width}`, tile(dom, '月度预算'))
+        const busiest = block(dom, '最忙节点')
+        check(`CPU 布局 ${gruvbox}/${dark}/${width}：满载读数完整显示且与在线数下沿对齐`,
+          busiest.text === '最忙节点 | CPU 100.0% | 七天后到期' &&
+          busiest.numTextW <= busiest.numW && busiest.foot === block(dom, '节点').foot,
+          `${busiest.text}，文本/可用宽度 ${busiest.numTextW}/${busiest.numW}px`)
       }
       await send('Emulation.setDeviceMetricsOverride', WIDE)
     }
   }
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] })
   const expired = await render({ listTop: 'budget' }, 'expiry-only-expired', 'expiredonly')
-  check('只有已过期节点：无待到期，7天内0台，红色过期台数单列',
-    block(expired, '最近到期').text === '最近到期 | — | 无待到期节点 | 7天内有0台到期 | 已过期 1 台', block(expired, '最近到期').text)
+  check('只有已过期节点：无待到期，红色过期台数单列',
+    block(expired, '最近到期').text === '最近到期 | — | 无待到期节点 | 已过期 1 台', block(expired, '最近到期').text)
   const missing = await render({ listTop: 'budget' }, 'expiry-no-date', 'noexpiry')
-  check('无到期信息：不虚构天数与节点，7天内0台',
-    block(missing, '最近到期').text === '最近到期 | — | 无待到期节点 | 7天内有0台到期', block(missing, '最近到期').text)
+  check('无到期信息：不虚构天数与节点',
+    block(missing, '最近到期').text === '最近到期 | — | 无待到期节点', block(missing, '最近到期').text)
   await render({ listTop: 'budget' }, 'expiry-search', 'expiry')
   await evalJS(`(() => {
     const input = document.querySelector('input[type="search"]')
@@ -1003,8 +1009,10 @@ let classicNet = null
   })()`)
   await sleep(500)
   const searched = JSON.parse(await evalJS(PROBE))
-  check('搜索后最近到期、7天内与已过期台数同步重算',
-    searched.nodeCards === 1 && block(searched, '最近到期').text === '最近到期 | 7 天 | 七天后到期 | 7天内有1台到期', block(searched, '最近到期').text)
+  const searchedExpiry = block(searched, '最近到期')
+  check('搜索后最近到期与 7 天内到期提示同步重算',
+    searched.nodeCards === 1 && searchedExpiry.text === '最近到期 | 7 天 | 七天后到期' &&
+    searchedExpiry.hint.includes('7 天内到期 1 台'), searchedExpiry.text)
 }
 
 ws.close()

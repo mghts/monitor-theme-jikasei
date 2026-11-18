@@ -182,11 +182,7 @@
   --globe-pin-online: #79740e;
   --globe-pin-offline: #9d0006;
   --globe-pin-detail: #fbf1c7;
-  /* 金、绿色略混入暖墨，兼顾米纸底上的读数与小字号选中标签。 */
-  --gruvbox-budget: color-mix(in srgb, #b57614 55%, #282828);
-  --gruvbox-online: color-mix(in srgb, #427b58 85%, #282828);
-  --gruvbox-rx: #076678;
-  --gruvbox-tx: #af3a03;
+  --gruvbox-selection: color-mix(in srgb, #b57614 55%, #282828);
 }
 
 :root[data-palette="gruvbox"].dark {
@@ -231,21 +227,46 @@
   --globe-pin-online: #b8bb26;
   --globe-pin-offline: #fb4934;
   --globe-pin-detail: #fbf1c7;
-  --gruvbox-budget: #fabd2f;
-  --gruvbox-online: #b8bb26;
-  --gruvbox-rx: #83a598;
-  --gruvbox-tx: #fe8019;
+  --gruvbox-selection: #fabd2f;
 }
 
-:root[data-palette="gruvbox"] [data-readout="budget"] { color: var(--gruvbox-budget); }
-[data-readout="expiry-warn"] { color: var(--chart-2); }
-[data-readout="expiry-urgent"] { color: var(--chart-5); }
-:root[data-palette="gruvbox"] [data-readout="online"] { color: var(--gruvbox-online); }
-:root[data-palette="gruvbox"] [data-transfer="rx"] { color: var(--gruvbox-rx); }
-:root[data-palette="gruvbox"] [data-transfer="tx"] { color: var(--gruvbox-tx); }
+/* 概览独立配色。暗色模式也降低饱和度，同时为卡片底色保留对比度。 */
+.summary-cards {
+  --summary-expiry-warn: #855938;
+  --summary-expiry-urgent: #903f45;
+  --summary-rx: #466a71;
+  --summary-tx: #89604e;
+}
+.dark .summary-cards {
+  --summary-expiry-warn: #be956f;
+  --summary-expiry-urgent: #be7d82;
+  --summary-rx: #86a6ab;
+  --summary-tx: #b48d79;
+}
+:root[data-palette="gruvbox"] .summary-cards {
+  --summary-budget: #6d5632;
+  --summary-online: #41624c;
+  --summary-rx: #41666a;
+  --summary-tx: #895732;
+}
+:root[data-palette="gruvbox"].dark .summary-cards {
+  --summary-budget: #bea273;
+  --summary-online: #a2ae73;
+  --summary-rx: #85a6a1;
+  --summary-tx: #b88c6d;
+}
+.summary-cards [data-readout="budget"] { color: var(--summary-budget, inherit); }
+.summary-cards [data-readout="online"] { color: var(--summary-online, inherit); }
+.summary-cards [data-readout="expiry-warn"] { color: var(--summary-expiry-warn); }
+.summary-cards [data-readout="expiry-urgent"] { color: var(--summary-expiry-urgent); }
+.summary-cards :is(svg, polyline)[data-transfer="rx"],
+:root[data-palette="gruvbox"] .summary-cards [data-transfer="rx"] { color: var(--summary-rx); }
+.summary-cards :is(svg, polyline)[data-transfer="tx"],
+:root[data-palette="gruvbox"] .summary-cards [data-transfer="tx"] { color: var(--summary-tx); }
+
 :root[data-palette="gruvbox"] .group-tab[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--gruvbox-budget) 12%, var(--card));
-  color: var(--gruvbox-budget);
+  background: color-mix(in srgb, var(--gruvbox-selection) 12%, var(--card));
+  color: var(--gruvbox-selection);
 }
 
 @theme inline {

@@ -2,7 +2,7 @@
   "name": "Monitor M",
   "short": "jikasei",
   "description": "Monitor 第三方主题，提供节点地图、五种列表布局、资源与延迟图表、月度预算和到期提醒。",
-  "version": "1.41.2",
+  "version": "1.41.3",
   "author": "mghts · 原作 akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [
@@ -55,7 +55,7 @@
           "label": "两个都显示·概览卡片计费版"
         }
       ],
-      "help": "选择分组标签和概览卡片的显示方式。计费版包含月度预算、最近到期节点和 7 天内到期台数。"
+      "help": "选择分组标签和概览卡片的显示方式。计费版显示月度预算、最近到期节点和已过期台数。"
     },
     {
       "type": "select",

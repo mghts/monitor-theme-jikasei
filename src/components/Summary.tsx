@@ -75,7 +75,11 @@ function Block({ title, hint, fx, children }: {
  */
 const BIG_BASE = 24
 const BIG_MIN = 16
-function Big({ children, tone }: { children: ReactNode; tone?: "budget" | "online" | "expiry-warn" | "expiry-urgent" }) {
+function Big({ children, tone, minSize = BIG_MIN }: {
+  children: ReactNode
+  tone?: "budget" | "online" | "expiry-warn" | "expiry-urgent"
+  minSize?: number
+}) {
   const ref = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -94,10 +98,10 @@ function Big({ children, tone }: { children: ReactNode; tone?: "budget" | "onlin
         // 行高钉在基准字号那一档：缩号只改字的大小，卡片高度零位移
         // （否则长读数那张卡会矮几像素，整行卡片跟着参差）。
         el.style.lineHeight = `${baseH}px`
-        let size = Math.max(BIG_MIN, Math.floor((BIG_BASE * cw) / sw))
+        let size = Math.max(minSize, Math.floor((BIG_BASE * cw) / sw))
         el.style.fontSize = `${size}px`
         // 数字旁的单位可能有独立字号，缩号后再次实测，而非假设整串同比例缩小。
-        while (size > BIG_MIN && textWidth() > cw) el.style.fontSize = `${--size}px`
+        while (size > minSize && textWidth() > cw) el.style.fontSize = `${--size}px`
       }
     }
     fit()
@@ -119,7 +123,7 @@ function Big({ children, tone }: { children: ReactNode; tone?: "budget" | "onlin
       timers.forEach((t) => window.clearTimeout(t))
       document.fonts?.removeEventListener?.("loadingdone", onDone)
     }
-  }, [children])
+  }, [children, minSize])
   return <div ref={ref} data-readout={tone} className="tnum mt-1 truncate text-2xl font-semibold tracking-tight">{children}</div>
 }
 
@@ -130,7 +134,7 @@ function Foot({ children }: { children: ReactNode }) {
 
 /** 一张卡片：里面就一块读数（今日流量 / 实时网速，以及原版的每一张）。 */
 function Tile({ children }: { children: ReactNode }) {
-  return <Card className="min-w-0 gap-0 p-4">{children}</Card>
+  return <Card className="min-w-0 justify-center gap-0 p-4">{children}</Card>
 }
 
 /**
@@ -146,7 +150,7 @@ function Tile({ children }: { children: ReactNode }) {
  */
 function Pair({ children }: { children: ReactNode }) {
   return (
-    <Card className="grid min-w-0 grid-cols-2 gap-x-2 gap-y-0 p-4">
+    <Card className="grid min-w-0 grid-cols-2 content-center gap-x-2 gap-y-0 p-4">
       {children}
     </Card>
   )
@@ -203,8 +207,8 @@ function Unit({ children }: { children: string }) {
 const W = 100
 const H = 28
 const speedTraces = [
-  { key: "rx", label: "下行", style: "实线", dash: undefined, color: "text-foreground/75" },
-  { key: "tx", label: "上行", style: "虚线", dash: "4 3", color: "text-muted-foreground" },
+  { key: "rx", label: "下行" },
+  { key: "tx", label: "上行" },
 ] as const
 
 /**
@@ -212,7 +216,7 @@ const speedTraces = [
  * 「从打开页面到现在大概什么形状」，确切读数是它上面那一行。
  *
  * `preserveAspectRatio="none"` 把 viewBox 横向拉满卡片，代价是线宽也会被拉粗，
- * 所以每条线挂 `vectorEffect="non-scaling-stroke"` 把线宽钉回 1px。
+ * 所以每条线用 `vectorEffect="non-scaling-stroke"` 保持固定线宽。
  *
  * 采样点少于两个（冷启动的头几秒、或 hub 一直连不上）就只占位不画线：一个点画不出
  * 走势，画在那里会被读成「一直那么快」。高度照留，卡片不会因此跳一下。
@@ -227,19 +231,19 @@ function Sparkline({ series }: { series: { rx: number; tx: number }[] }) {
   return (
     <div className="mt-1">
       <div className="grid grid-cols-2 gap-x-2 text-xs text-muted-foreground">
-        {speedTraces.map(({ key, label, style, dash, color }) => (
-          <span key={key} className="flex items-center gap-1.5" title={`${label} · ${style}`}>
-            <svg aria-hidden="true" width="18" height="4" className={color} data-transfer={key}>
-              <line x1="0" x2="18" y1="2" y2="2" stroke="currentColor" strokeDasharray={dash} strokeWidth="1.5" />
+        {speedTraces.map(({ key, label }) => (
+          <span key={key} className="flex items-center gap-1.5">
+            <svg aria-hidden="true" width="18" height="4" data-transfer={key}>
+              <line x1="0" x2="18" y1="2" y2="2" stroke="currentColor" strokeWidth="1.5" />
             </svg>
             {label}
           </span>
         ))}
       </div>
       <svg className="mt-0.5 h-5 w-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
-        {ready && speedTraces.map(({ key, dash, color }) => (
-          <polyline key={key} points={line((s) => s[key])} data-transfer={key} className={color}
-            fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={dash} vectorEffect="non-scaling-stroke" />
+        {ready && speedTraces.map(({ key }) => (
+          <polyline key={key} points={line((s) => s[key])} data-transfer={key}
+            fill="none" stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
         ))}
       </svg>
     </div>
@@ -268,13 +272,10 @@ function NodesBlock({ fleet, searching = false }: { fleet: Fleet; searching?: bo
 function BusiestBlock({ fleet }: { fleet: Fleet }) {
   return (
     <Block title="最忙节点" hint="当前筛选范围内 CPU 使用率最高的在线节点">
-      {/* 一位小数，与卡片里 CPU 那格同一个口径。 */}
-      <Big>{fleet.busiest ? `${fleet.busiest.cpu.toFixed(1)}%` : "—"}</Big>
+      {/* 四列刚切换时，允许满载读数缩到 15px，保留完整的 CPU 前缀与百分比。 */}
+      <Big minSize={15}>{fleet.busiest ? `CPU ${fleet.busiest.cpu.toFixed(1)}%` : "—"}</Big>
       <Foot>
-        {fleet.busiest ? <>
-          <div>CPU 使用率</div>
-          <div className="truncate" title={fleet.busiest.name}>{fleet.busiest.name}</div>
-        </> : "无在线节点"}
+        <div className="truncate" title={fleet.busiest?.name}>{fleet.busiest?.name ?? "无在线节点"}</div>
       </Foot>
     </Block>
   )
@@ -311,7 +312,7 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
     /* 版式照参考站：`sm` 起两列、`lg` 起四列。**手机是一列而不是参考站的两列**——参考站每张
        卡只有一个大数，两个数并排也放得下；本站的「今日流量 / 实时网速」一张卡里有两个方向，
        390px 两列时每张卡只有 173px、两个数会各自截断（护栏量过）。 */
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="summary-cards grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {finance ? (
         <>
           {/* 第一张卡：月度预算 + 最近到期；到期提醒不受价格与汇率可用性影响。 */}
@@ -320,13 +321,12 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
               <Big tone={budget.monthly === null ? undefined : "budget"}>{budget.monthly === null ? "—" : `≈${cny(budget.monthly)}`}</Big>
               <Foot>{budget.monthlyCount ? `${monthlyCoverage} 台计费` : budget.skipped.length ? "缺少汇率" : "未记录价格"}</Foot>
             </Block>
-            <Block title="最近到期" hint={`当前筛选节点中下一台到期的节点${next ? `：${next.name}，${next.days === 0 ? "今天到期" : `剩余 ${next.days} 天`}` : ""}。7 天内包含今天及第 7 天；少于 7 天橙色，少于 3 天红色。已过期 ${expiry.expired} 台，单独统计。无到期日与一次性买断不计入；不要求价格或汇率。`}>
+            <Block title="最近到期" hint={`当前筛选节点中下一台到期的节点${next ? `：${next.name}，${next.days === 0 ? "今天到期" : `剩余 ${next.days} 天`}` : ""}。7 天内到期 ${expiry.withinWeek} 台，包含今天及第 7 天。已过期 ${expiry.expired} 台。无到期日与一次性买断不计入。不要求价格或汇率。`}>
               <Big tone={next ? next.days < 3 ? "expiry-urgent" : next.days < 7 ? "expiry-warn" : undefined : undefined}>
                 {next ? next.days === 0 ? "今天到期" : `${next.days} 天` : "—"}
               </Big>
               <Foot>
                 <div className="truncate" title={next?.name}>{next ? next.name : "无待到期节点"}</div>
-                <div data-expiry-week="" className="whitespace-normal">7天内有{expiry.withinWeek}台到期</div>
                 {expiry.expired > 0 && <div data-readout="expiry-urgent">已过期 {expiry.expired} 台</div>}
               </Foot>
             </Block>

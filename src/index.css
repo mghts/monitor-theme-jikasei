@@ -264,9 +264,9 @@
 .summary-cards [data-readout="cpu"] { color: var(--summary-cpu); }
 .summary-cards [data-readout="expiry-warn"] { color: var(--summary-expiry-warn); }
 .summary-cards [data-readout="expiry-urgent"] { color: var(--summary-expiry-urgent); }
-.summary-cards :is(svg, polyline)[data-transfer="rx"],
+.summary-cards polyline[data-transfer="rx"],
 :root[data-palette="gruvbox"] .summary-cards [data-transfer="rx"] { color: var(--summary-rx); }
-.summary-cards :is(svg, polyline)[data-transfer="tx"],
+.summary-cards polyline[data-transfer="tx"],
 :root[data-palette="gruvbox"] .summary-cards [data-transfer="tx"] { color: var(--summary-tx); }
 
 :root[data-palette="gruvbox"] .group-tab[aria-pressed="true"] {

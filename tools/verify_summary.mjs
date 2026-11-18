@@ -514,7 +514,7 @@ let classicNet = null
   check('原版：今日流量卡：今日 1.25 GB ↓ / 768 MB ↑，总流量 3.50 TB ↓ / 2.25 TB ↑',
     tile(dom, '今日流量').text === '今日流量 | 1.25 GB | 768 MB | 总流量 | 3.50 TB | 2.25 TB', tile(dom, '今日流量').text)
   check('原版：实时网速卡 = 在线且有指标的节点之和（20.5 → 21 MB/s ↓ / 40.125 → 40 MB/s ↑）',
-    tile(dom, '实时网速').text === '实时网速 | 21 MB/s | 40 MB/s | 下行 | 上行', tile(dom, '实时网速').text)
+    tile(dom, '实时网速').text === '实时网速 | 21 MB/s | 40 MB/s', tile(dom, '实时网速').text)
   // ── 与参考站对齐的三条：每块读数都是「小标签 / 大数 / 一行小字」三段、四张卡等高、
   //    24px 的主数字在两列栅格里不被截断（栅格自己不溢出，格子里的 truncate 是静默的）。
   check('原版：每块读数都是三段（小标签 / 大数 / 一行小字，照参考站）',
@@ -628,7 +628,7 @@ let classicNet = null
   check('全掉线·原版：最忙节点显示「— / 无在线节点」，不是 0%',
     tile(down, '最忙节点').text === '最忙节点 | — | 无在线节点', tile(down, '最忙节点').text)
   check('全掉线·原版：网速是 0 B/s（不是 NaN/undefined）',
-    tile(down, '实时网速').text === '实时网速 | 0 B/s | 0 B/s | 下行 | 上行', tile(down, '实时网速').text)
+    tile(down, '实时网速').text === '实时网速 | 0 B/s | 0 B/s', tile(down, '实时网速').text)
 
   const downB = await render({ listTop: 'budget' }, 'down-budget', 'down')
   check('全掉线·预算版：节点与最忙节点两块照旧降级',
@@ -651,17 +651,16 @@ let classicNet = null
   const traceStyles = await evalJS(`(() => {
     const chart = [...document.querySelectorAll('[data-slot=card]')].find(c => c.innerText.startsWith('实时网速'))
     return ['rx', 'tx'].map(key => {
-      const sample = chart.querySelector('svg[data-transfer="' + key + '"] line')
       const curve = chart.querySelector('polyline[data-transfer="' + key + '"]')
-      if (!sample || !curve) return null
-      const a = getComputedStyle(sample), b = getComputedStyle(curve)
-      return { label: sample.closest('span').innerText.trim(), color: b.stroke, dash: b.strokeDasharray,
-        matched: a.stroke === b.stroke && a.strokeDasharray === b.strokeDasharray }
+      if (!curve) return null
+      const style = getComputedStyle(curve)
+      return { color: style.stroke, dash: style.strokeDasharray }
     })
   })()`)
   const [rx, tx] = traceStyles
-  check('图例与曲线对应：上下行都是实线，颜色可区分', rx?.label === '下行' && rx.matched && rx.dash === 'none' &&
-    tx?.label === '上行' && tx.matched && tx.dash === 'none' && rx.color !== tx.color, JSON.stringify(traceStyles))
+  check('上下行仍用两种颜色的实线，卡片只显示速率读数', rx?.dash === 'none' &&
+    tx?.dash === 'none' && rx.color !== tx.color && tile(dom, '实时网速').text === tile(first, '实时网速').text,
+    JSON.stringify(traceStyles))
   check('走势线：画出来前后卡片高度不变（位置是预留的，不是撑开的）',
     dom.tileHeights[0] === first.tileHeights[0], `${first.tileHeights[0]}px → ${dom.tileHeights[0]}px`)
 }

@@ -206,10 +206,7 @@ function Unit({ children }: { children: string }) {
 // 「一直很忙」和「偶尔抖一下」画成同一个形状。
 const W = 100
 const H = 28
-const speedTraces = [
-  { key: "rx", label: "下行" },
-  { key: "tx", label: "上行" },
-] as const
+const speedDirections = ["rx", "tx"] as const
 
 /**
  * 实时网速下面那条走势线：下行 / 上行两条折线，无坐标轴、无填充——这一块只说
@@ -229,24 +226,12 @@ function Sparkline({ series }: { series: { rx: number; tx: number }[] }) {
       .map((s, i) => `${((i / (series.length - 1)) * W).toFixed(2)},${(H - 1 - (pick(s) / max) * (H - 2)).toFixed(2)}`)
       .join(" ")
   return (
-    <div className="mt-1">
-      <div className="grid grid-cols-2 gap-x-2 text-xs text-muted-foreground">
-        {speedTraces.map(({ key, label }) => (
-          <span key={key} className="flex items-center gap-1.5">
-            <svg aria-hidden="true" width="18" height="4" data-transfer={key}>
-              <line x1="0" x2="18" y1="2" y2="2" stroke="currentColor" strokeWidth="1.5" />
-            </svg>
-            {label}
-          </span>
-        ))}
-      </div>
-      <svg className="mt-0.5 h-5 w-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
-        {ready && speedTraces.map(({ key }) => (
-          <polyline key={key} points={line((s) => s[key])} data-transfer={key}
-            fill="none" stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-        ))}
-      </svg>
-    </div>
+    <svg className="mt-1 h-5 w-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+      {ready && speedDirections.map((direction) => (
+        <polyline key={direction} points={line((s) => s[direction])} data-transfer={direction}
+          fill="none" stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      ))}
+    </svg>
   )
 }
 

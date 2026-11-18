@@ -202,6 +202,10 @@ function Unit({ children }: { children: string }) {
 // 「一直很忙」和「偶尔抖一下」画成同一个形状。
 const W = 100
 const H = 28
+const speedTraces = [
+  { key: "rx", label: "下行", style: "实线", dash: undefined, color: "text-foreground/75" },
+  { key: "tx", label: "上行", style: "虚线", dash: "4 3", color: "text-muted-foreground" },
+] as const
 
 /**
  * 实时网速下面那条走势线：下行 / 上行两条折线，无坐标轴、无填充——这一块只说
@@ -221,17 +225,23 @@ function Sparkline({ series }: { series: { rx: number; tx: number }[] }) {
       .map((s, i) => `${((i / (series.length - 1)) * W).toFixed(2)},${(H - 1 - (pick(s) / max) * (H - 2)).toFixed(2)}`)
       .join(" ")
   return (
-    /* 走势线的高度照着参考站那条来（那边约 22px）：这一格是卡片里唯一不是文字的东西，
-       高了整行四张卡就不再等高（护栏钉着「四张卡等高」）。 */
-    <div className="mt-1 h-5">
-      {ready && (
-        <svg className="h-full w-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
-          {/* 下行用前景色、上行用弱化灰：与卡片网络区那两个方向的读法一致
-              （速率用前景色、累计用灰），深浅色下都跟着同一套变量走。 */}
-          <polyline points={line((s) => s.rx)} fill="none" strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-foreground/70" />
-          <polyline points={line((s) => s.tx)} fill="none" strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-muted-foreground/60" />
-        </svg>
-      )}
+    <div className="mt-1">
+      <div className="grid grid-cols-2 gap-x-2 text-xs text-muted-foreground">
+        {speedTraces.map(({ key, label, style, dash, color }) => (
+          <span key={key} className="flex items-center gap-1.5" title={`${label} · ${style}`}>
+            <svg aria-hidden="true" width="18" height="4" className={color} data-transfer={key}>
+              <line x1="0" x2="18" y1="2" y2="2" stroke="currentColor" strokeDasharray={dash} strokeWidth="1.5" />
+            </svg>
+            {label}
+          </span>
+        ))}
+      </div>
+      <svg className="mt-0.5 h-5 w-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+        {ready && speedTraces.map(({ key, dash, color }) => (
+          <polyline key={key} points={line((s) => s[key])} data-transfer={key} className={color}
+            fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={dash} vectorEffect="non-scaling-stroke" />
+        ))}
+      </svg>
     </div>
   )
 }
@@ -257,11 +267,14 @@ function NodesBlock({ fleet, searching = false }: { fleet: Fleet; searching?: bo
 /** 「最忙节点」那块读数：CPU 占用最高的在线节点。 */
 function BusiestBlock({ fleet }: { fleet: Fleet }) {
   return (
-    <Block title="最忙节点">
+    <Block title="最忙节点" hint="当前筛选范围内 CPU 使用率最高的在线节点">
       {/* 一位小数，与卡片里 CPU 那格同一个口径。 */}
       <Big>{fleet.busiest ? `${fleet.busiest.cpu.toFixed(1)}%` : "—"}</Big>
       <Foot>
-        {fleet.busiest ? fleet.busiest.name : "无在线节点"}
+        {fleet.busiest ? <>
+          <div>CPU 使用率</div>
+          <div className="truncate" title={fleet.busiest.name}>{fleet.busiest.name}</div>
+        </> : "无在线节点"}
       </Foot>
     </Block>
   )
@@ -313,7 +326,7 @@ export function SummaryCards({ nodes, finance = false, searching = false, exchan
               </Big>
               <Foot>
                 <div className="truncate" title={next?.name}>{next ? next.name : "无待到期节点"}</div>
-                <div data-expiry-week="">7 天内 {expiry.withinWeek} 台</div>
+                <div data-expiry-week="" className="whitespace-normal">7天内有{expiry.withinWeek}台到期</div>
                 {expiry.expired > 0 && <div data-readout="expiry-urgent">已过期 {expiry.expired} 台</div>}
               </Foot>
             </Block>

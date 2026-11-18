@@ -9,9 +9,7 @@
 // 为什么要这一份（而不是直接对着现网拍）：
 //   1. 公开仓库里的预览图**不能带真实机器名/IP**——这里用 tools/globe-nodes-fixture.json 那套
 //      中性演示数据（「测试节点 · 城市」口径），拍出来的图可以直接进 README。
-//   2. 只桩 /api/* 的伺服会让页面顶部挂「实时连接中断」的提示条，而且它是自己会消失的——
-//      同一份代码早晚两张图，一张干净一张带条。所以这里做**最小 WebSocket 握手**（见技能
-//      references/default-change-preview-shot.md 第 1 节）：握手成功、不推任何数据。
+//   2. 本机 WebSocket 推送固定的演示网速，让桌面和手机预览能显示上下行曲线。
 //   3. 视口按内容量、裁剪按**量出来的几何**（先 getBoundingClientRect 再 clip），不猜坐标。
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -45,15 +43,6 @@ const pingPayload = (id) => {
 
 const server = createServer((req, res) => {
   const path = new URL(req.url, `http://127.0.0.1:${PORT}`).pathname
-  // 最小 WebSocket 握手：不推数据，但让页面认为连上了（否则顶部会挂重连提示条）
-  if (path === '/api/ws' && (req.headers.upgrade || '').toLowerCase() === 'websocket') {
-    const key = req.headers['sec-websocket-key'] || ''
-    const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
-    res.writeHead(101, { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Accept': accept })
-    const keep = setInterval(() => res.socket.write(Buffer.from([0x89, 0x00])), 5000)
-    req.socket.on('close', () => clearInterval(keep))
-    return
-  }
   if (path.startsWith('/api/')) {
     const body = path === '/api/me'
       ? { authed: false, github: false, public_page: true, site: `http://127.0.0.1:${PORT}`, site_name: 'Monitor M', history_days: 30 }
@@ -70,7 +59,31 @@ const server = createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': TYPES[file.slice(file.lastIndexOf('.'))] || 'application/octet-stream' })
   res.end(readFileSync(file))
 })
-await new Promise((r) => server.listen(PORT, r))
+// 每次连接按相同顺序回放一段网速，让截图中的曲线可复现。
+const down = [42, 46, 40, 60, 55, 48, 67, 63, 50, 53, 48, 54]
+const up =   [23, 22, 30, 27, 32, 21, 29, 36, 32, 28, 24, 30]
+server.on('upgrade', (req, socket) => {
+  if (req.url !== '/api/ws') return socket.end()
+  const key = req.headers['sec-websocket-key']
+  const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
+  let step = 0
+  const timer = setInterval(() => {
+    const nodes = NODES.nodes.map((node, i) => ({ ...node, metrics: { ...node.metrics,
+      net_rx: down[step] * (i + 1) * 1024, net_tx: up[step] * (i + 1) * 1024,
+    }}))
+    const payload = Buffer.from(JSON.stringify({ nodes }))
+    // 这组固定节点的 JSON 长度介于 126 与 65535 字节，使用 16 位长度的文本帧。
+    const header = Buffer.from([0x81, 126, 0, 0])
+    header.writeUInt16BE(payload.length, 2)
+    socket.write(Buffer.concat([header, payload]))
+    if (++step === down.length) clearInterval(timer)
+  }, 150)
+  socket.on('data', frame => { if ((frame[0] & 0x0f) === 8) socket.end() })
+  socket.on('error', () => socket.destroy())
+  socket.on('close', () => clearInterval(timer))
+})
+await new Promise((r) => server.listen(PORT, '127.0.0.1', r))
 
 const CHROME = process.env.CHROME_PATH || ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => existsSync(p)) || 'chrome'
 const dbg = 9987
@@ -96,6 +109,7 @@ const shoot = async (name, clip) => {
 const waitReady = async () => {
   for (let i = 0; i < 60; i++) { await sleep(400); if (await js('!!document.querySelector(".globe-panel")')) break }
   await sleep(3500)
+  if (!await js('document.querySelectorAll("polyline[data-transfer]").length === 2')) throw new Error('缺少演示网速曲线')
 }
 
 // ① / ② 桌面：地球整块（亮 / 暗各一张，同一机位）

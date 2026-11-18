@@ -5,7 +5,7 @@
 
 [下载安装](https://github.com/mghts/monitor-theme-jikasei/releases/latest) · [使用说明](GUIDE.md) · [反馈问题](https://github.com/mghts/monitor-theme-jikasei/issues)
 
-![Monitor M 桌面预览，使用演示数据](preview-desktop.png?v=1.41.1)
+![Monitor M 桌面预览，使用演示数据](preview-desktop.png?v=1.41.2)
 
 ## 功能
 
@@ -46,7 +46,7 @@ shasum -a 256 -c theme.tar.gz.sha256
 |:---:|:---:|
 | ![亮色地图](preview-globe.png?v=1.41.1) | ![暗色地图](preview-globe-dark.png?v=1.41.1) |
 
-<img src="preview-mobile.png?v=1.41.1" alt="手机列表页" width="260">
+<img src="preview-mobile.png?v=1.41.2" alt="手机列表页" width="260">
 
 </details>
 

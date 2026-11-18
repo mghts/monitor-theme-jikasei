@@ -962,6 +962,7 @@ let classicNet = null
 {
   for (const gruvbox of [false, true]) {
     for (const dark of [false, true]) {
+      const cpuColors = gruvbox ? ["rgb(80, 72, 64)", "rgb(182, 170, 145)"] : ["rgb(72, 74, 71)", "rgb(170, 166, 154)"]
       await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }] })
       const colors = new Map()
       for (const days of [0, 2, 3, 6, 7, 8]) {
@@ -990,6 +991,8 @@ let classicNet = null
           busiest.text === '最忙节点 | CPU 100.0% | 七天后到期' &&
           busiest.numTextW <= busiest.numW && busiest.foot === block(dom, '节点').foot,
           `${busiest.text}，文本/可用宽度 ${busiest.numTextW}/${busiest.numW}px`)
+        check(`CPU 配色 ${gruvbox}/${dark}/${width}：整行读数使用对应的低饱和灰`,
+          busiest.numColor === cpuColors[Number(dark)], busiest.numColor)
       }
       await send('Emulation.setDeviceMetricsOverride', WIDE)
     }

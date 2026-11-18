@@ -77,7 +77,7 @@ const BIG_BASE = 24
 const BIG_MIN = 16
 function Big({ children, tone, minSize = BIG_MIN }: {
   children: ReactNode
-  tone?: "budget" | "online" | "expiry-warn" | "expiry-urgent"
+  tone?: "budget" | "online" | "cpu" | "expiry-warn" | "expiry-urgent"
   minSize?: number
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -273,7 +273,7 @@ function BusiestBlock({ fleet }: { fleet: Fleet }) {
   return (
     <Block title="最忙节点" hint="当前筛选范围内 CPU 使用率最高的在线节点">
       {/* 四列刚切换时，允许满载读数缩到 15px，保留完整的 CPU 前缀与百分比。 */}
-      <Big minSize={15}>{fleet.busiest ? `CPU ${fleet.busiest.cpu.toFixed(1)}%` : "—"}</Big>
+      <Big minSize={15} tone={fleet.busiest ? "cpu" : undefined}>{fleet.busiest ? `CPU ${fleet.busiest.cpu.toFixed(1)}%` : "—"}</Big>
       <Foot>
         <div className="truncate" title={fleet.busiest?.name}>{fleet.busiest?.name ?? "无在线节点"}</div>
       </Foot>

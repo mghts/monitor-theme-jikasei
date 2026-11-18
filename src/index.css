@@ -232,24 +232,28 @@
 
 /* 概览独立配色。暗色模式也降低饱和度，同时为卡片底色保留对比度。 */
 .summary-cards {
+  --summary-cpu: #484a47;
   --summary-expiry-warn: #855938;
   --summary-expiry-urgent: #903f45;
   --summary-rx: #466a71;
   --summary-tx: #89604e;
 }
 .dark .summary-cards {
+  --summary-cpu: #aaa69a;
   --summary-expiry-warn: #be956f;
   --summary-expiry-urgent: #be7d82;
   --summary-rx: #86a6ab;
   --summary-tx: #b48d79;
 }
 :root[data-palette="gruvbox"] .summary-cards {
+  --summary-cpu: #504840;
   --summary-budget: #6d5632;
   --summary-online: #41624c;
   --summary-rx: #41666a;
   --summary-tx: #895732;
 }
 :root[data-palette="gruvbox"].dark .summary-cards {
+  --summary-cpu: #b6aa91;
   --summary-budget: #bea273;
   --summary-online: #a2ae73;
   --summary-rx: #85a6a1;
@@ -257,6 +261,7 @@
 }
 .summary-cards [data-readout="budget"] { color: var(--summary-budget, inherit); }
 .summary-cards [data-readout="online"] { color: var(--summary-online, inherit); }
+.summary-cards [data-readout="cpu"] { color: var(--summary-cpu); }
 .summary-cards [data-readout="expiry-warn"] { color: var(--summary-expiry-warn); }
 .summary-cards [data-readout="expiry-urgent"] { color: var(--summary-expiry-urgent); }
 .summary-cards :is(svg, polyline)[data-transfer="rx"],

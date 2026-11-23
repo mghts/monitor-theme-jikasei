@@ -159,8 +159,7 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
   const pageGroups = [...new Set(pageRows.map((row) => row.group))].map((group) => ({ group, rows: pageRows.filter((row) => row.group === group) }))
   // 窄屏预留最高一页的高度与 4px 行内绘制/焦点余量，末页不跳动且不裁切。
   const regionListHeight = Math.max(32, ...pagination.heights) + 4
-  // 「全部」那一行的悬停说明：合计里有多少台认不出国家（不上地球与地区列表）——
-  // 「全部 N」与地区分项合计对不上这件事，就在那里有一句明面上的说法。
+  // 「全部节点」的悬停说明列出无法定位的节点台数。
   const unplaced = nodes.length - rows.reduce((sum, row) => sum + row.count, 0)
 
   // 初始视角与上游一致：东经 80°、北纬 30°（亚洲那一面，机器最密的地方）。
@@ -623,7 +622,9 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
         <div ref={regionHost} className="globe-side-inner" style={{ "--globe-region-list-height": `${regionListHeight}px` } as CSSProperties}>
           <div id={regionListId} className="globe-regions" data-region-page={regionPage + 1} data-region-pages={regionPages} data-region-total={rows.length}>
             <h2 className="globe-side-title">
-              地区分布{located && <span className="globe-side-status">已定位</span>}
+              <span>地区分布</span>
+              {located && <span className="globe-side-status">已定位</span>}
+              <span className="globe-side-count">{rows.length}</span>
             </h2>
             <button
               type="button"
@@ -632,7 +633,7 @@ export function Globe({ nodes, flowCenterId, region, regionGroup, onRegion, onOp
               onClick={() => pick(null)}
               title={unplaced > 0 ? `共 ${nodes.length} 台，其中 ${unplaced} 台认不出国家（不上地球与地区列表）` : `共 ${nodes.length} 台`}
             >
-              <span>全部</span>
+              <span>全部节点</span>
               <b>{nodes.length}</b>
             </button>
             <div className="globe-region-groups">

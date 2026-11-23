@@ -1423,10 +1423,13 @@ async function compactRegionChecks() {
   const ordinaryNodes = nodes
   const panel = () => evaluate(() => {
     const root = document.querySelector('.globe-panel'), list = root.querySelector('.globe-regions')
+    const regionCount = root.querySelector('.globe-side-count'), nodeCount = root.querySelector('.globe-reg-all b')
     return {
       height: root.getBoundingClientRect().height, atlasHeight: root.querySelector('.globe-atlas').getBoundingClientRect().height,
       page: Number(list.dataset.regionPage || 1), pages: Number(list.dataset.regionPages || 1),
-      total: Number(list.dataset.regionTotal), all: Number(root.querySelector('.globe-reg-all b').textContent),
+      total: Number(list.dataset.regionTotal), regionCount: regionCount ? Number(regionCount.textContent) : null, all: Number(nodeCount.textContent),
+      allLabel: root.querySelector('.globe-reg-all span').textContent,
+      countsAligned: !!regionCount && Math.abs(regionCount.getBoundingClientRect().right - nodeCount.getBoundingClientRect().right) <= 0.5,
       keys: [...root.querySelectorAll('[data-region-key]')].map((button) => button.dataset.regionKey),
       prev: root.querySelector('[aria-label="上一页地区"]')?.disabled,
       next: root.querySelector('[aria-label="下一页地区"]')?.disabled,
@@ -1481,12 +1484,14 @@ async function compactRegionChecks() {
     const tag = '地区分页/' + width + '/' + selectedMode
     const first = await panel(), initialMap = await state(tag + '/first')
     check(tag + '：页数、每页容量与全部台数准确', first.total === 36 && first.all === 37 && first.pages >= 2 && first.keys.length > 0 && first.keys.length < 36 && first.prev === true && first.next === false)
+    check(tag + '：地区总数和全部节点数在右侧对齐', first.regionCount === 36 && first.allLabel === '全部节点' && first.countsAligned, JSON.stringify(first))
     const seen = [...first.keys]
     for (let page = 2; page <= first.pages; page++) {
       await turn(true, width === 320)
       const current = await panel(), snapshot = await state(tag + '/' + page)
       seen.push(...current.keys)
       check(tag + '：第 ' + page + ' 页不撑高面板、不改变地图或筛选', current.page === page && Math.abs(current.height - first.height) <= 1 && geometry(snapshot) === geometry(initialMap) && snapshot.cards.length === 37 && !snapshot.overflow)
+      check(tag + '：第 ' + page + ' 页保留地区总数和节点总数', current.regionCount === 36 && current.all === 37)
     }
     const last = await panel()
     check(tag + '：所有地区可翻页到达且无重复遗漏，末页正确禁用', JSON.stringify(seen.sort()) === JSON.stringify(expectedKeys) && last.next === true && last.prev === false)
@@ -1515,6 +1520,7 @@ async function compactRegionChecks() {
     await waitFor(() => document.querySelector('.globe-regions')?.dataset.regionTotal === '4')
     const small = await panel()
     check(tag + '：切小分组回到有效页码并隐藏分页', small.page === 1 && small.pages === 1 && small.keys.length === 4 && small.all === 4 && small.prev === undefined && small.next === undefined)
+    check(tag + '：切换顶部分组后更新地区总数', small.regionCount === 4 && small.countsAligned)
   }
   await viewport(1440, 1000)
   await preferences('3d', '0')
@@ -1569,7 +1575,9 @@ async function compactRegionChecks() {
     await evaluate(() => document.querySelector('[data-region-group="常用节点"][data-region-key="JP · Tokyo"]').click())
     await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 2)
     const first = await state()
-    check(tag + '：点击常用东京只筛两台，地图保持全部当前节点', JSON.stringify(first.cards) === JSON.stringify(['Tokyo A1', 'Tokyo A2']) && (await panel()).all === 10 && (await panel()).total === 8)
+    const selected = await panel()
+    check(tag + '：点击常用东京只筛两台，地图保持全部当前节点', JSON.stringify(first.cards) === JSON.stringify(['Tokyo A1', 'Tokyo A2']) && selected.all === 10 && selected.total === 8)
+    check(tag + '：已定位时地区计数仍按分组条目统计并对齐', selected.regionCount === 8 && selected.countsAligned && await evaluate(() => document.querySelector('.globe-side-status')?.textContent === '已定位'))
     await evaluate(() => document.querySelector('[data-region-group="备用节点"][data-region-key="JP · Tokyo"]').click())
     await waitFor(() => document.querySelectorAll('[data-slot="card"] h3').length === 1)
     check(tag + '：点击同城另一分组正确切换，不误取消选择', (await state()).cards[0] === 'Tokyo B' && await evaluate(() => document.querySelectorAll('[data-region-key][aria-pressed="true"]').length === 1))
@@ -1598,7 +1606,7 @@ async function paginationChecks() {
     const titleStyle = getComputedStyle(title), headingStyle = getComputedStyle(heading), cityStyle = getComputedStyle(city)
     return { page: Number(list.dataset.regionPage), pages: Number(list.dataset.regionPages),
       hierarchy: {
-        title: title.textContent.trim(), semantic: title.tagName === 'H2' && heading.tagName === 'H3',
+        title: title.firstElementChild.textContent.trim(), semantic: title.tagName === 'H2' && heading.tagName === 'H3',
         titleProminent: parseFloat(titleStyle.fontSize) > parseFloat(cityStyle.fontSize) && Number(titleStyle.fontWeight) > Number(cityStyle.fontWeight) && titleStyle.color !== cityStyle.color,
         groupDistinct: Number(headingStyle.fontWeight) > Number(cityStyle.fontWeight) && Number(headingStyle.fontWeight) < Number(titleStyle.fontWeight) && headingStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(headingStyle.borderLeftWidth) === 0,
         indented: city.getBoundingClientRect().left > heading.getBoundingClientRect().left,

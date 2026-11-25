@@ -8,28 +8,9 @@ import { Card } from "@/components/ui/card"
 import { LatencyPanel, PeekLatency } from "@/components/Latency"
 import { Meter } from "@/components/Meter"
 import type { Node } from "@/lib/api"
-import { CYCLES, FOREVER, bytes, daysUntil, money, offlineSeconds, pair, percent, rate, uptime } from "@/lib/format"
+import { CYCLES, FOREVER, bytes, daysUntil, money, monthUsage, offlineSeconds, pair, percent, rate, uptime } from "@/lib/format"
 import { remarkChips, type RemarkChip } from "@/lib/notes"
 import { remarksOnCards, type RemarkPlacement } from "@/lib/site-settings"
-
-/**
- * This period's usage as the plan meters it. The hub computes it; the switch
- * below serves only a hub from before `month_used`.
- */
-export function monthUsage(node: Node): number {
-  if (typeof node.month_used === "number") return node.month_used
-  const { month_rx: rx, month_tx: tx } = node
-  switch (node.traffic_mode) {
-    case "up":
-      return tx
-    case "down":
-      return rx
-    case "max":
-      return Math.max(rx, tx)
-    default:
-      return rx + tx
-  }
-}
 
 // A node that has reported once has told the hub its shape -- cores, memory,
 // disk -- and the hub retains its traffic totals whether connected or not. A node

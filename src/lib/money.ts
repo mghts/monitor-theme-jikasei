@@ -95,6 +95,21 @@ function rateOf(currency: string, rates: Record<string, number> = FX_CNY): numbe
   return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : undefined
 }
 
+export function recurringCurrency(node: Node): string | null {
+  if (!Number.isFinite(node.price) || node.price <= 0 || node.billing_cycle === "once") return null
+  return (node.currency || "").trim().toUpperCase()
+}
+
+function monthlyAtRate(node: Node, fx: number): number {
+  return (node.price * fx) / cycleMonthsOf(node.billing_cycle)
+}
+
+export function monthlyCostOf(node: Node, rates: Record<string, number>): number | null {
+  const currency = recurringCurrency(node)
+  const fx = currency === null ? undefined : rateOf(currency, rates)
+  return fx === undefined ? null : monthlyAtRate(node, fx)
+}
+
 export type Budget = {
   /** 折成人民币的每月合计；一台可计的都没有时 null（卡片显示「—」而不是 ¥0.00）。 */
   monthly: number | null
@@ -120,20 +135,17 @@ export function budgetOf(nodes: Node[], rates: Record<string, number> = FX_CNY):
 
   for (const node of nodes) {
     // 没填价格（0 / 空）＝这台不计账，不是「花 0 元」。
-    if (!Number.isFinite(node.price) || !(node.price > 0) || node.billing_cycle === "once") continue
-    const currency = (node.currency || "").trim().toUpperCase()
+    const currency = recurringCurrency(node)
+    if (currency === null) continue
     const fx = rateOf(currency, rates)
     if (fx === undefined) {
       skipped.add(currency || "（空）")
       continue
     }
     used.add(currency)
-    const months = cycleMonthsOf(node.billing_cycle)
     const days = cycleDaysOf(node.billing_cycle)
-    if (months > 0) {
-      monthly += (node.price * fx) / months
-      monthlyCount++
-    }
+    monthly += monthlyAtRate(node, fx)
+    monthlyCount++
     if (days <= 0) continue
     // `expires_in` 是数字（含 0、负数）就用它；null / 缺字段才按 `expires_at` 自己数。
     const left = typeof node.expires_in === "number" ? node.expires_in : daysUntil(node.expires_at)

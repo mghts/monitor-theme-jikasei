@@ -1,12 +1,12 @@
 import { Suspense, useEffect, useState } from "react"
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react"
 
-import { Country, deployed, monthUsage } from "@/components/NodeCard"
+import { Country, deployed } from "@/components/NodeCard"
 import { DetailLoader } from "@/components/DetailLoader"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { Node } from "@/lib/api"
 import type { RemarkPlacement } from "@/lib/site-settings"
-import { FOREVER, CYCLES, bytes, daysUntil, money, osName, pair, percent, rate } from "@/lib/format"
+import { FOREVER, CYCLES, bytes, daysUntil, money, monthUsage, osName, pair, percent, rate } from "@/lib/format"
 
 /**
  * 「紧凑」形态：一行一台机器的表格，点一行就地摊开延迟。
@@ -29,8 +29,7 @@ import { FOREVER, CYCLES, bytes, daysUntil, money, osName, pair, percent, rate }
  * 只借版式，不借它的皮：配色仍是本主题这一套灰阶。深浅只有一条规则——表头标签与箭头是弱化灰，
  * 单元格里的数据是前景色，「没有这个值」（`—` / `∞` / `未接入`）也回到弱化灰；主次不再用深浅
  * 区分（卡片里那层灰是「主读数底下的注脚」，而表里每个格子本身就是主读数），只在字重上留一线：
- * 指标读数用 medium、其余常规。也没有它的状态点、排序表头与搜索框——本主题早把状态点删了、
- * 不做排序与搜索。
+ * 指标读数用 medium、其余常规。排序与搜索沿用首页列表入口，表头只显示列名。
  *
  * 列随屏宽收放（与源站同样的思路，只是断点用本主题一贯的视口断点而非容器查询）：
  *   窄屏   名称 / CPU / 流量

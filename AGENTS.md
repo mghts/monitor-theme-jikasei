@@ -23,7 +23,7 @@
 
 | 模块 | 文件入口 |
 |---|---|
-| 页面、筛选与详情入口 | `src/App.tsx`；`src/components/DetailLoader.tsx`；`src/lib/search.ts` |
+| 页面、筛选、排序与详情入口 | `src/App.tsx`；`src/components/DetailLoader.tsx`；`src/lib/search.ts`；`src/lib/node-sort.ts` |
 | 公开接口、实时更新与降级 | `src/lib/api.ts`；`src/lib/transport.ts` |
 | 3D / 2D 地图、流向、信标与地区 | `src/components/Globe.tsx`；`src/lib/globe.ts`；`src/lib/map.ts`；`src/lib/map-flow.ts`；`src/lib/world.ts` |
 | 首页节点卡片与延迟图 | `src/components/NodeCard.tsx`；`src/components/Latency.tsx` |
@@ -68,6 +68,8 @@
 - 月度预算按周期月数摊销；支持 `1m`–`1200m`。最近到期优先使用 Hub 的 `expires_in`，
   缺少天数时兼容旧 Hub 的 `expires_at`。无效或空周期保留按月付回退。大额读数须检查真实文字宽度，
   不能仅凭取整的 `scrollWidth/clientWidth` 判定未裁切。
+- 排序作用于筛选后的节点列表，五种布局共用入口。首次及并列沿用后台顺序，选择保存在访客浏览器。
+  CPU、内存、磁盘排序使用选中时的读数，手动重新排序才更新名次。流量按卡片本周期已用字节数，月均费用与预算共用折算口径。
 - 汇率为无需密钥的每日参考价，不能称为秒级实时行情；首页不显示独立汇率状态行及来源链接，
   原始报价日期、来源和回退状态保留在月度预算的悬停提示中。
   正常每 6 小时及跨 UTC 日期检查更新，失败 15 分钟后重试；镜像、有效缓存和离线报价按现有顺序回退。
@@ -99,6 +101,7 @@
   详情脚本加载或地图关闭时地区筛选修改选第四项；延迟线形与缺桶修改还需运行 `node tools/verify_latency_options.mjs`。
   Summary 从当前目录的 `dist/` 读取，HTTP 端口默认 5321、CDP 为端口 + 4000；占用时换一个同时可用的端口。
   预算专项可用 `node tools/verify_summary.mjs 5321 --custom-only`，不能省略前面的端口参数。
+  排序专项可用 `node tools/verify_summary.mjs 5321 --sort-only`，覆盖实时读数、筛选、持久化和桌面与手机菜单。
   图表工具可用 `SHOT_DIR` 指定新的证据目录；汇率工具的第一个参数可指定证据父目录。
   Summary 的浏览器覆盖变量为 `CHROME`，汇率工具为 `CHROME_PATH`；图表工具自动查找已列出的浏览器路径。
 - 地图配色改动运行 `MAP_CHECK_GROUP=colors node tools/verify_map_controls.mjs`，覆盖四套主题的

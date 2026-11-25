@@ -1,11 +1,11 @@
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react"
+import { useLayoutEffect, useRef, type ReactNode } from "react"
 import { ArrowDown, ArrowUp } from "lucide-react"
 
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
 import { bytes, rate } from "@/lib/format"
-import { budgetOf, cny, fxNote, parseRateOverrides } from "@/lib/money"
-import { useExchangeRates } from "@/lib/use-exchange-rates"
+import { budgetOf, cny, fxNote } from "@/lib/money"
+import type { useBillingRates, useExchangeRates } from "@/lib/use-exchange-rates"
 import { expirationsOf, summarize, type Fleet } from "@/lib/summary"
 import { speedSeriesOf } from "@/lib/speed-history"
 
@@ -266,15 +266,14 @@ function BusiestBlock({ fleet }: { fleet: Fleet }) {
   )
 }
 
-export function SummaryCards({ nodes, finance = false, searching = false, exchangeRates = "" }: { nodes: Node[]; finance?: boolean; searching?: boolean; exchangeRates?: string }) {
+export function SummaryCards({ nodes, finance, searching, billingRates }: {
+  nodes: Node[]
+  finance: boolean
+  searching: boolean
+  billingRates: ReturnType<typeof useBillingRates>
+}) {
   const fleet = summarize(nodes)
-  const custom = useMemo(() => parseRateOverrides(exchangeRates), [exchangeRates])
-  const needsFx = finance && nodes.some((node) => {
-    const code = (node.currency || "").trim().toUpperCase()
-    return Number.isFinite(node.price) && node.price > 0 && node.billing_cycle !== "once" && code !== "CNY" && !Object.hasOwn(custom.rates, code)
-  })
-  const fx = useExchangeRates(needsFx)
-  const rates = useMemo(() => ({ ...fx.snapshot.rates, ...custom.rates, CNY: 1 }), [fx.snapshot.rates, custom.rates])
+  const { custom, needsFx, fx, rates } = billingRates
   const budget = budgetOf(nodes, rates)
   const expiry = expirationsOf(nodes)
   const next = expiry.next

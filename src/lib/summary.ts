@@ -7,14 +7,19 @@ export type Expirations = {
   expired: number
 }
 
+/** 优先使用 Hub 的到期天数，保留今天和已过期的读数。 */
+export function expiryDaysOf(node: Node): number | null {
+  if (node.billing_cycle === "once") return null
+  const days = node.expires_in ?? daysUntil(node.expires_at)
+  return typeof days === "number" && Number.isFinite(days) ? days : null
+}
+
 /** 到期提醒独立于价格与汇率；今天至第 7 天计入本周，已过期单独提示。 */
 export function expirationsOf(nodes: Node[]): Expirations {
   const result: Expirations = { next: null, withinWeek: 0, expired: 0 }
   for (const node of nodes) {
-    if (node.billing_cycle === "once") continue
-    // 优先保留 Hub 的日历口径；只有缺字段 / null 时才兼容旧 Hub 的日期。
-    const days = node.expires_in ?? daysUntil(node.expires_at)
-    if (typeof days !== "number" || !Number.isFinite(days)) continue
+    const days = expiryDaysOf(node)
+    if (days === null) continue
     if (days < 0) {
       result.expired++
       continue

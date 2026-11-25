@@ -1,6 +1,6 @@
 // 验「概览卡片行」的两副面孔、合计口径与开关。
 //
-// 用法：node tools/verify_summary.mjs [port] [--custom-only]
+// 用法：node tools/verify_summary.mjs [port] [--custom-only | --sort-only]
 //
 // 为什么要它：这一行有六处只能靠实测确认——
 //   ① 开关关着时**整个不挂载**（不是 display:none 藏起来），首屏与没有这个功能时一致；
@@ -26,6 +26,7 @@ import { ISO_FIAT_CODES } from '../src/lib/currency-codes.ts'
 
 const PORT = Number(process.argv[2] || 5321)
 const CUSTOM_ONLY = process.argv.includes('--custom-only')
+const SORT_ONLY = process.argv.includes('--sort-only')
 const CDP_PORT = PORT + 4000
 const OUTPUT = mkdtempSync(join(tmpdir(), 'monitor-summary-'))
 const startedAt = new Date().toISOString()
@@ -182,6 +183,23 @@ const VARIANTS = { mixed: MIXED, down: ALL_DOWN, tied: TIED, free: NO_PRICE, exo
   // 概览卡片在「全部」档切到某个分组时的数字，必须与「站点里只有这几台」时逐字相同。
   gusa: { nodes: [MIXED.nodes[0]] }, geu: { nodes: [MIXED.nodes[1], MIXED.nodes[2]] }, gnone: { nodes: [MIXED.nodes[3]] } }
 
+const SORT_NODES = [
+  base(501, 'Node 10', { online: true, group: '亚太日常监控', month_used: Math.round(1.2 * TB),
+    price: 120, currency: 'USD', billing_cycle: 'yearly', expires_in: 2,
+    metrics: metrics({ cpu: 5, mem_used: 6 * GB, mem_total: 10 * GB, disk_used: 80 * GB, disk_total: 100 * GB }) }),
+  base(502, 'Node 2', { online: true, group: '亚太日常监控', month_used: 850 * GB, traffic_limit: 900 * GB,
+    price: 140, currency: 'CNY', billing_cycle: '2m', expires_in: -1,
+    metrics: metrics({ cpu: 80, mem_used: 8 * GB, mem_total: 10 * GB, disk_used: 10 * GB, disk_total: 100 * GB }) }),
+  base(503, 'Node 30', { group: '欧洲远程备用', country: 'DE', month_rx: 3 * TB, month_tx: 200 * GB, traffic_mode: 'up',
+    price: 1000, currency: 'CNY', billing_cycle: 'once', expires_in: 0, metrics: metrics({ cpu: 99 }) }),
+  base(504, 'Node 4', { online: true, group: '美洲其他节点', country: 'US', price: 50, currency: 'XYZ',
+    metrics: metrics({ cpu: 0, mem_used: 0, disk_used: 0, disk_total: 0 }) }),
+  base(505, 'Node 5', { online: true, group: '欧洲远程备用', country: 'GB', month_rx: 20 * GB,
+    price: 90, currency: 'CNY', expires_in: 0 }),
+]
+VARIANTS.sorting = { nodes: SORT_NODES }
+VARIANTS.sortlive = { nodes: SORT_NODES.map((node) => node.id === 501 ? { ...node, metrics: { ...node.metrics, cpu: 95 } } : node) }
+
 let config = {}
 let variant = 'mixed'
 
@@ -328,6 +346,7 @@ const PROBE = `JSON.stringify((() => {
   return {
     cards: cards.length,
     nodeCards: nodes.length,
+    nodeRows: document.querySelectorAll('[data-card-style=compact] tbody tr[role=button]').length,
     tiles: tiles.map(card),
     polylines: tiles.reduce((n, c) => n + c.querySelectorAll('svg polyline').length, 0),
     tileHeights: [...new Set(tiles.map((c) => Math.round(c.getBoundingClientRect().height)))],
@@ -339,7 +358,7 @@ const PROBE = `JSON.stringify((() => {
       const b = r.getBoundingClientRect()
       // ★ 与上下邻居的**视觉**间距（2026-10-07 站长说这一行夹在面板/概览与卡片之间空得太开）：
       //   上 = 前一个兄弟（面板或概览）的底，下 = 后一个兄弟（卡片列表）的顶。
-      const prev = r.previousElementSibling, next = r.nextElementSibling
+      const prev = r.parentElement.previousElementSibling, next = r.parentElement.nextElementSibling
       return {
         top: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height),
         gapAbove: prev ? Math.round(b.top - prev.getBoundingClientRect().bottom) : null,
@@ -370,10 +389,10 @@ async function render(cfg, tag = '', v = 'mixed') {
     dom = JSON.parse(raw)
     // 「页面起来了」认节点卡片，不认概览卡片——开关关着那一行本来就没有（踩过这个坑：
     // 拿概览当加载条件会把「开关生效」误判成「页面没渲染」）。
-    if (dom.nodeCards > 0) break
+    if (dom.nodeCards > 0 || dom.nodeRows > 0) break
     dom = null
   }
-  if (!dom || dom.nodeCards === 0) throw new Error(`【${tag}】页面没渲染出节点卡片`)
+  if (!dom) throw new Error(`【${tag}】页面没渲染出节点列表`)
   return dom
 }
 
@@ -475,7 +494,7 @@ function checkRhythm(where, dom) {
     `右列 ${pair}px ／ 今日流量第二列 ${day === null ? '—' : day - tile(dom, '今日流量').x}px ／ 实时网速第二列 ${net === null ? '—' : net - tile(dom, '实时网速').x}px`)
 }
 
-if (!CUSTOM_ONLY) {
+if (!CUSTOM_ONLY && !SORT_ONLY) {
 /* 1) 默认（后台没存过：GET config 回 {}）→ 出厂默认「两个都显示·概览卡片价值版」 */
 {
   const dom = await render({}, 'default')
@@ -492,9 +511,10 @@ if (!CUSTOM_ONLY) {
 {
   const dom = await render({ listTop: 'none' }, 'off')
   const ALL = ['月度预算', '最近到期', '节点', '最忙节点', '今日流量', '实时网速']
+  const visibleLines = dom.body.split(' | ').map((line) => line.trim())
+  const visibleTitles = ALL.filter((title) => visibleLines.includes(title))
   check('显式关：一张概览卡片都没有', dom.tiles.length === 0 && dom.polylines === 0, `概览 ${dom.tiles.length} 张 / polyline ${dom.polylines}`)
-  check('显式关：六个标题一个都不在页面上', ALL.every((t) => !dom.body.includes(t)),
-    ALL.filter((t) => dom.body.includes(t)).join('、') || '（都不在）')
+  check('显式关：没有独立的概览标题', visibleTitles.length === 0, visibleTitles.join('、') || '（都不在）')
   check('显式关：节点卡片照常四张', dom.nodeCards === 4, `节点卡片 ${dom.nodeCards} 张`)
 }
 
@@ -885,7 +905,7 @@ let classicNet = null
 }
 
 /* 14) Hub 自定义月数：真实 DOM 的月摊、最近到期、标准别名与当前分组。 */
-{
+if (!SORT_ONLY) {
   const texts = (dom) => ['月度预算', '最近到期'].map((title) => block(dom, title).text)
   const solo = new Map()
   for (const [name, v, monthly, days, nodeName] of [
@@ -958,7 +978,7 @@ let classicNet = null
 }
 
 /* 15) 到期提醒：真实边界、四套配色、价格/汇率独立、过期、长名称与搜索筛选。 */
-{
+if (!SORT_ONLY) {
   for (const gruvbox of [false, true]) {
     for (const dark of [false, true]) {
       const cpuColors = gruvbox ? ["rgb(80, 72, 64)", "rgb(182, 170, 145)"] : ["rgb(72, 74, 71)", "rgb(170, 166, 154)"]
@@ -1017,6 +1037,140 @@ let classicNet = null
     searchedExpiry.hint.includes('7 天内到期 1 台'), searchedExpiry.text)
 }
 
+/* 16) 列表排序：各条件、实时数据、筛选、持久化及触屏菜单。 */
+if (!CUSTOM_ONLY) try {
+  const order = () => evalJS(`[...document.querySelectorAll('[data-slot=card][role=button] h3, [data-card-style=compact] tr[role=button] td:first-child .truncate')].map((el) => el.textContent.trim().replace('Node ', '')).join(',')`)
+  const label = () => evalJS(`document.querySelector('[data-node-sort]')?.getAttribute('aria-label')`)
+  const openMenu = () => evalJS(`document.querySelector('[data-node-sort]')?.getAttribute('aria-expanded') === 'true'`)
+  const press = async (key, code, virtualKey) => {
+    for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: virtualKey })
+    await sleep(160)
+  }
+  const click = async (selector, text, touch = false) => {
+    const point = await evalJS(`(() => {
+      const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((item) => ${JSON.stringify(text ?? null)} === null || item.textContent.trim() === ${JSON.stringify(text ?? null)})
+      if (!el) return null
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      const r = el.getBoundingClientRect()
+      const x = r.left + r.width / 2, y = r.top + r.height / 2
+      const hit = document.elementFromPoint(x, y)
+      return { x, y, coveredBy: el.contains(hit) ? null : hit?.outerHTML.slice(0, 220) ?? '视口之外' }
+    })()`)
+    if (!point) throw new Error(`找不到排序验收目标 ${selector} ${text ?? ''}`)
+    const { x, y, coveredBy } = point
+    if (coveredBy) throw new Error(`排序验收目标 ${selector} 被遮挡：${coveredBy}`)
+    if (touch) {
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1, radiusX: 2, radiusY: 2, force: 1 }] })
+      await sleep(80)
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    } else {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, x, y })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, x, y })
+    }
+    await sleep(touch ? 320 : 160)
+  }
+  const pick = async (text) => {
+    if (!await openMenu()) await click('[data-node-sort]')
+    await click('[role=menuitemradio]', text)
+  }
+  const suite = { listTop: 'bothBudget', exchangeRates: 'USD=7.5' }
+  const defaultOrder = '10,2,30,4,5'
+  await send('Emulation.setDeviceMetricsOverride', WIDE)
+  const first = await render(suite, 'sort-default', 'sorting')
+  check('节点排序：首次沿用后台顺序', await order() === defaultOrder && (await label()).endsWith('后台顺序'))
+  await evalJS(`document.querySelector('[data-node-sort]').focus()`)
+  await press('Enter', 'Enter', 13)
+  check('节点排序：键盘打开菜单并聚焦选项', await openMenu() && await evalJS(`document.activeElement.matches('[role=menuitemradio]')`))
+  await press('Escape', 'Escape', 27)
+  check('节点排序：Esc 关菜单并还原焦点', !await openMenu() && await evalJS(`document.activeElement.matches('[data-node-sort]')`))
+  for (const [text, expected] of [
+    ['节点名称', '2,4,5,10,30'], ['离线优先', '30,10,2,4,5'], ['到期优先', '2,5,10,30,4'],
+    ['CPU占用', '2,10,4,30,5'], ['内存占用', '2,10,4,30,5'], ['磁盘占用', defaultOrder],
+    ['流量使用', '10,2,30,5,4'], ['月均费用', '5,10,2,30,4'],
+  ]) {
+    await pick(text)
+    const actual = await order()
+    check(`节点排序：${text}`, actual === expected && (await label()).endsWith(text), actual)
+  }
+  const sorted = JSON.parse(await evalJS(PROBE))
+  check('节点排序：预算、到期提醒、地图地区和分组统计仍使用原口径',
+    block(first, '月度预算').text === block(sorted, '月度预算').text &&
+    block(first, '最近到期').text === block(sorted, '最近到期').text &&
+    JSON.stringify(sorted.groupRow.tabs) === JSON.stringify(first.groupRow.tabs) &&
+    await evalJS(`document.querySelector('.globe-regions').dataset.regionTotal === '4'`))
+  await render({ listTop: 'none', globeOn: false }, 'sort-monthly-no-summary', 'sorting')
+  check('节点排序：刷新记住月均费用，关闭概览后仍用参考汇率',
+    await order() === '5,2,10,30,4' && (await label()).endsWith('月均费用'))
+  await pick('后台顺序')
+  check('节点排序：还原后台顺序并清除偏好', await order() === defaultOrder &&
+    await evalJS(`localStorage.getItem('jikasei:node_sort') === null`))
+  await render(suite, 'sort-live', 'sorting')
+  await pick('CPU占用')
+  await fetch(`http://127.0.0.1:${PORT}/__variant?name=sortlive`)
+  const deadline = Date.now() + 18000
+  let updated = false
+  while (!updated && Date.now() < deadline) {
+    const dom = JSON.parse(await evalJS(PROBE))
+    updated = block(dom, '最忙节点').text.includes('CPU 95.0%')
+    if (!updated) await sleep(350)
+  }
+  check('节点排序：实时读数更新时 CPU 名次保持稳定', updated && await order() === '2,10,4,30,5')
+  await click('[data-node-sort]')
+  await click('[role=menuitem]', '重新排序')
+  check('节点排序：重新排序使用最新 CPU 读数', await order() === '10,2,4,30,5')
+  await pick('节点名称')
+  await click('[data-region-code=JP]')
+  check('节点排序：地区筛选后只在结果中排序', await order() === '2,10')
+  await click('.globe-reg-all')
+  await clickGroup('亚太')
+  check('节点排序：分组筛选后只在结果中排序', await order() === '2,10')
+  await evalJS(`(() => {
+    const input = document.querySelector('input[type=search]')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '10')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+  await sleep(400)
+  check('节点排序：搜索与分组叠加', await order() === '10' && (await label()).endsWith('节点名称'))
+  await click('[data-slot=card][role=button]')
+  check('节点排序：详情页隐藏列表工具', await evalJS(`location.pathname === '/node/501' && !document.querySelector('[data-node-sort]')`))
+  await click('header button', '概览校验')
+  check('节点排序：详情返回保留排序与筛选', await order() === '10' && (await label()).endsWith('节点名称'))
+
+  for (const [width, gruvbox, dark] of [[1440, false, false], [1440, true, false], [390, false, true], [320, true, true]]) {
+    const mobile = width < 640
+    await send('Emulation.setDeviceMetricsOverride', { ...WIDE, width, height: mobile ? 950 : 1200, mobile })
+    await send('Emulation.setTouchEmulationEnabled', { enabled: mobile })
+    await render({ ...suite, gruvboxOn: gruvbox, themeMode: dark ? 'dark' : 'light', cardStyle: mobile ? 'compact' : 'detailed' },
+      `sort-layout-${width}-${gruvbox}`, 'sorting')
+    await evalJS(`document.querySelector('[data-node-sort]').scrollIntoView({block:'center'})`)
+    await click('[data-node-sort]', null, mobile)
+    const layout = await evalJS(`(() => {
+      const button = document.querySelector('[data-node-sort]'), bar = button.closest('[data-node-toolbar]')
+      const group = bar.querySelector('[role=group]'), menu = document.querySelector('[role=menu]')
+      const b = button.getBoundingClientRect(), p = menu.getBoundingClientRect(), g = group.getBoundingClientRect()
+      return { fixedRight: Math.abs(b.right - bar.getBoundingClientRect().right) < 1 && g.right < b.left,
+        inside: p.left >= 0 && p.top >= 0 && p.right <= innerWidth && p.bottom <= innerHeight,
+        tabsScroll: group.scrollWidth > group.clientWidth, pageFits: document.documentElement.scrollWidth <= innerWidth,
+        active: menu.querySelector('[aria-checked=true]')?.textContent.trim(),
+        labels: [...menu.querySelectorAll('[role=menuitemradio]')].map((item) => item.textContent.trim()).join('/'),
+        compact: !!document.querySelector('[data-card-style=compact]') }
+    })()`)
+    const tag = `sort-${width}-${gruvbox ? 'gruvbox' : 'default'}-${dark ? 'dark' : 'light'}`
+    check(`节点排序：${tag} 菜单可用、同排右对齐，无横向溢出`,
+      layout?.fixedRight && layout.inside && layout.pageFits && layout.compact === mobile &&
+      (!mobile || layout.tabsScroll) && layout.active === '节点名称' &&
+      layout.labels === '后台顺序/节点名称/离线优先/到期优先/CPU占用/内存占用/磁盘占用/流量使用/月均费用',
+      JSON.stringify(layout))
+    await capture(tag)
+    await click('[role=menuitemradio]', '流量使用', mobile)
+    check(`节点排序：${tag} 选项可操作并作用于对应列表`, !await openMenu() && await order() === '10,2,30,5,4')
+    await pick('节点名称')
+  }
+} catch (error) {
+  check('节点排序专项执行完整', false, String(error.stack ?? error))
+}
+
 ws.close()
 chrome.kill()
 server.close()
@@ -1024,7 +1178,7 @@ server.close()
 const failed = results.filter((r) => !r.ok)
 const reportPath = join(OUTPUT, 'report.json')
 writeFileSync(reportPath, JSON.stringify({
-  startedAt, finishedAt: new Date().toISOString(), workspace: process.cwd(), port: PORT, customOnly: CUSTOM_ONLY,
+  startedAt, finishedAt: new Date().toISOString(), workspace: process.cwd(), port: PORT, customOnly: CUSTOM_ONLY, sortOnly: SORT_ONLY,
   fixtureDate: FIXTURE_DATE, customCycleConfig: CUSTOM_CYCLE_CONFIG, customCycleNodes: CUSTOM_CYCLES.nodes,
   passed: results.length - failed.length, failed: failed.length, results, evidence,
 }, null, 2))

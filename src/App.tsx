@@ -3,6 +3,7 @@ import { Globe as GlobeIcon, Moon, Sun, Wrench } from "lucide-react"
 
 import { CardStyleMenu } from "@/components/CardStyleMenu"
 import { NodeCard } from "@/components/NodeCard"
+import { NodeSortMenu } from "@/components/NodeSortMenu"
 import { CompactList } from "@/components/CompactList"
 import { DetailLoader, warmNodeDetail } from "@/components/DetailLoader"
 import { Globe } from "@/components/Globe"
@@ -12,11 +13,13 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, groupView, useNodes } from "@/lib/api"
 import { regionView } from "@/lib/globe"
+import { captureResourceReadings, isResourceSort, savedNodeSort, saveNodeSort, sortNodes, type NodeSort, type NodeSortPreference } from "@/lib/node-sort"
 import { hasDetailRemarks } from "@/lib/notes"
 import { searchNodes } from "@/lib/search"
 import { hasGroupTabs, hasSummary, isBudgetLayout, LatencyStyleContext, useCardStyle, useGlobeVisible, useLocalFarm, useThemeConfig } from "@/lib/theme-config"
 import { isBeijingNight, readThemePreference, resolveDark, type ThemeMode } from "@/lib/site-settings"
 import type { LatencyStyle, RemarkPlacement } from "@/lib/site-settings"
+import { useBillingRates } from "@/lib/use-exchange-rates"
 import { FarmIcon } from "@/components/FarmIcon"
 
 type Me = {
@@ -236,6 +239,7 @@ export default function App() {
   const [meError, setMeError] = useState("")
   const { nodes, error, closed } = useNodes()
   const [open, go] = useNodeRoute()
+  const [nodeSort, setNodeSort] = useState<NodeSortPreference>(() => ({ mode: savedNodeSort() }))
   // The list's group tab, held here so it survives a visit to a node's page.
   const [group, setGroup] = useState<string | null>(null)
   // 地球侧栏里选中的地区：同理留在这儿，进详情页再回来不丢。
@@ -353,7 +357,18 @@ export default function App() {
   // 那行概览卡片一起收窄**，地球仍然是「分组的地图」（它画的是分组里有哪些地方，
   // 不是搜索结果热力图；地区列表点一行照样能把列表收窄到那个地区）。
   const found = searchNodes(regions.shown, query)
-  const listView = { ...view, shown: found.shown }
+  const finance = isBudgetLayout(config.listTop)
+  const billingRates = useBillingRates(found.shown, config.exchangeRates, open === null && (finance || nodeSort.mode === "monthly"))
+  if (!nodeSort.readings && nodes?.length && isResourceSort(nodeSort.mode)) {
+    // 刷新页面后，用首批节点重建已保存的资源排序。
+    setNodeSort({ mode: nodeSort.mode, readings: captureResourceReadings(nodes, nodeSort.mode) })
+  }
+  const chooseNodeSort = (mode: NodeSort) => {
+    const readings = isResourceSort(mode) ? captureResourceReadings(sorted, mode) : undefined
+    setNodeSort({ mode, readings })
+    saveNodeSort(mode)
+  }
+  const listView = { ...view, shown: sortNodes(found.shown, nodeSort, billingRates.rates) }
 
   // `/node/{id}` is a page people bookmark and share, so the tab needs the node's
   // name. The site name rather than a fixed string, since the hub lets an operator
@@ -527,7 +542,7 @@ export default function App() {
           <>
             {/* 概览卡片行：设置里没选它时整个不挂载（不是藏起来），首屏与没有这个功能时一致。
                 「计费版」只是同一行换一副面孔，组件另收一个 finance 开关。 */}
-            {hasSummary(config.listTop) && <SummaryCards nodes={found.shown} finance={isBudgetLayout(config.listTop)} searching={found.active} exchangeRates={config.exchangeRates} />}
+            {hasSummary(config.listTop) && <SummaryCards nodes={found.shown} finance={finance} searching={found.active} billingRates={billingRates} />}
             {/* 节点地球：概览卡片之下、列表之上（上游就是这个次序）。 */}
             {globeOn && (
               <Globe nodes={view.shown} flowCenterId={Number(config.mapFlowCenterId) || null} region={regions.current} regionGroup={regions.group} onRegion={(key, group) => { setRegion(key); setRegionGroup(group) }} onOpen={go} onWarm={warmDetail} />
@@ -545,7 +560,7 @@ export default function App() {
                 这个地区里当前没有节点 —— 点上面那一列的「全部」取消筛选。
               </p>
             ) : null}
-            <NodeList view={listView} group={group} onGroup={setGroup} onOpen={go} onWarm={warmDetail}
+            <NodeList view={listView} group={group} onGroup={setGroup} sort={nodeSort.mode} onSort={chooseNodeSort} onOpen={go} onWarm={warmDetail}
               latencyLines={config.pingLines}
               cardStyle={cardStyle}
               historyDays={me.history_days}
@@ -627,12 +642,14 @@ function useProgressive(total: number, first = 24, step = 12): number {
   return limit
 }
 
-function NodeList({ view, group, onGroup, onOpen, onWarm, latencyLines, cardStyle, historyDays, remarkPlacement }: {
-  /** 分组求值的结果：groups / current / shown / tabs / total（App 与概览卡片共用一份）。 */
+function NodeList({ view, group, onGroup, sort, onSort, onOpen, onWarm, latencyLines, cardStyle, historyDays, remarkPlacement }: {
+  /** 保留分组信息，shown 为筛选并排序后的列表。 */
   view: ReturnType<typeof groupView>
   /** 原始选中值（null = 全部，"" = 未分组）：只在归一化后回写时用，见下面的 effect。 */
   group: string | null
   onGroup: (group: string | null) => void
+  sort: NodeSort
+  onSort: (mode: NodeSort) => void
   onOpen: (id: number) => void
   /** 指针/键盘刚落到某一张卡片上：把详情那块 chunk 先取回来（见 App 的 warmDetail）。 */
   onWarm: () => void
@@ -654,27 +671,27 @@ function NodeList({ view, group, onGroup, onOpen, onWarm, latencyLines, cardStyl
   }, [current, group, onGroup])
   return (
     <>
-      {/* ★ 分组标签行的上下间距收紧（2026-10-07 站长说这一行夹在面板与卡片之间显得空）：
-          主容器是 space-y-5（20px），一行 36px 高的细条被它夹着就像浮着。下面那行用
-          -mt-2（上 20→12）+ mb-3（下 12）—— 它是**下面那张列表的筛选条**，贴着卡片更顺。
-          Tailwind 的 space-y 用的是 :where()（零特异性），所以这里随手覆盖得动。 */}
-      {showTabs && groups.length > 0 && (
-        <div role="group" aria-label="分组" className="-mx-1 -mt-2 mb-3 flex gap-1 overflow-x-auto px-1 pb-1">
-          {tabs.map(([value, label, count]) => (
-            <Button
-              // Group names are free text, so they carry a prefix no key of
-              // the 全部 tab can share.
-              key={value === null ? "*" : `=${value}`}
-              aria-pressed={current === value}
-              size="sm"
-              variant={current === value ? "secondary" : "ghost"}
-              className="group-tab shrink-0"
-              onClick={() => onGroup(value)}
-            >
-              {label}
-              <span className="tnum text-muted-foreground">{count}</span>
-            </Button>
-          ))}
+      {total > 0 && (
+        <div data-node-toolbar className="-mt-2 mb-3 flex items-start justify-end gap-2">
+          {showTabs && groups.length > 0 && (
+            <div role="group" aria-label="分组" className="-ml-1 mr-auto flex min-w-0 gap-1 overflow-x-auto p-1">
+              {tabs.map(([value, label, count]) => (
+                <Button
+                  // 分组名是自由文本，给键加前缀以避开「全部」的键。
+                  key={value === null ? "*" : `=${value}`}
+                  aria-pressed={current === value}
+                  size="sm"
+                  variant={current === value ? "secondary" : "ghost"}
+                  className="group-tab shrink-0"
+                  onClick={() => onGroup(value)}
+                >
+                  {label}
+                  <span className="tnum text-muted-foreground">{count}</span>
+                </Button>
+              ))}
+            </div>
+          )}
+          <NodeSortMenu value={sort} onPick={onSort} />
         </div>
       )}
       {total === 0 ? (

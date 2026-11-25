@@ -1,3 +1,5 @@
+import type { Node } from "./api.ts"
+
 const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
 
 const unitOf = (n: number) => Math.min(Math.floor(Math.log(n) / Math.log(1024)), UNITS.length - 1)
@@ -81,6 +83,18 @@ export function rate(n: number): string {
 
 export function percent(used: number, total: number): number {
   return total > 0 ? Math.min(100, (used / total) * 100) : 0
+}
+
+/** 本周期的计费用量。旧 Hub 缺少 month_used 时按套餐计费方向计算。 */
+export function monthUsage(node: Node): number {
+  if (typeof node.month_used === "number") return node.month_used
+  const { month_rx: rx, month_tx: tx } = node
+  switch (node.traffic_mode) {
+    case "up": return tx
+    case "down": return rx
+    case "max": return Math.max(rx, tx)
+    default: return rx + tx
+  }
 }
 
 export function uptime(seconds: number): string {

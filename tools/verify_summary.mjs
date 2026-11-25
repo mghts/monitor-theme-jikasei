@@ -1074,6 +1074,10 @@ if (!CUSTOM_ONLY) try {
     if (!await openMenu()) await click('[data-node-sort]')
     await click('[role=menuitemradio]', text)
   }
+  const reverse = async (text, touch = false) => {
+    if (!await openMenu()) await click('[data-node-sort]', null, touch)
+    await click('[data-node-sort-direction]', text, touch)
+  }
   const suite = { listTop: 'bothBudget', exchangeRates: 'USD=7.5' }
   const defaultOrder = '10,2,30,4,5'
   await send('Emulation.setDeviceMetricsOverride', WIDE)
@@ -1081,17 +1085,26 @@ if (!CUSTOM_ONLY) try {
   check('节点排序：首次沿用后台顺序', await order() === defaultOrder && (await label()).endsWith('后台顺序'))
   await evalJS(`document.querySelector('[data-node-sort]').focus()`)
   await press('Enter', 'Enter', 13)
-  check('节点排序：键盘打开菜单并聚焦选项', await openMenu() && await evalJS(`document.activeElement.matches('[role=menuitemradio]')`))
+  check('节点排序：键盘打开菜单并聚焦选项，后台顺序隐藏方向切换', await openMenu() &&
+    await evalJS(`document.activeElement.matches('[role=menuitemradio]') && !document.querySelector('[data-node-sort-direction]')`))
   await press('Escape', 'Escape', 27)
   check('节点排序：Esc 关菜单并还原焦点', !await openMenu() && await evalJS(`document.activeElement.matches('[data-node-sort]')`))
-  for (const [text, expected] of [
-    ['节点名称', '2,4,5,10,30'], ['离线优先', '30,10,2,4,5'], ['到期优先', '2,5,10,30,4'],
-    ['CPU占用', '2,10,4,30,5'], ['内存占用', '2,10,4,30,5'], ['磁盘占用', defaultOrder],
-    ['流量使用', '10,2,30,5,4'], ['月均费用', '5,10,2,30,4'],
+  for (const [text, expected, action, reversed] of [
+    ['节点名称', '2,4,5,10,30', '降序', '30,10,5,4,2'],
+    ['离线优先', '30,10,2,4,5', '在线优先', '10,2,4,5,30'],
+    ['到期优先', '2,5,10,30,4', '降序', '10,5,2,30,4'],
+    ['CPU占用', '2,10,4,30,5', '升序', '4,10,2,30,5'],
+    ['内存占用', '2,10,4,30,5', '升序', '4,10,2,30,5'],
+    ['磁盘占用', defaultOrder, '升序', '2,10,30,4,5'],
+    ['流量使用', '10,2,30,5,4', '升序', '4,5,30,2,10'],
+    ['月均费用', '5,10,2,30,4', '升序', '2,10,5,30,4'],
   ]) {
     await pick(text)
     const actual = await order()
-    check(`节点排序：${text}`, actual === expected && (await label()).endsWith(text), actual)
+    check(`节点排序：${text}默认方向`, actual === expected && (await label()).includes(text), actual)
+    await reverse('切换为' + action)
+    const flipped = await order()
+    check(`节点排序：${text}切换为${action}，缺值置底且并列稳定`, flipped === reversed && (await label()).endsWith(action), flipped)
   }
   const sorted = JSON.parse(await evalJS(PROBE))
   check('节点排序：预算、到期提醒、地图地区和分组统计仍使用原口径',
@@ -1100,11 +1113,14 @@ if (!CUSTOM_ONLY) try {
     JSON.stringify(sorted.groupRow.tabs) === JSON.stringify(first.groupRow.tabs) &&
     await evalJS(`document.querySelector('.globe-regions').dataset.regionTotal === '4'`))
   await render({ listTop: 'none', globeOn: false }, 'sort-monthly-no-summary', 'sorting')
-  check('节点排序：刷新记住月均费用，关闭概览后仍用参考汇率',
-    await order() === '5,2,10,30,4' && (await label()).endsWith('月均费用'))
+  check('节点排序：刷新保留月均费用升序，关闭概览后仍用参考汇率',
+    await order() === '10,2,5,30,4' && (await label()).endsWith('月均费用，升序'))
   await pick('后台顺序')
   check('节点排序：还原后台顺序并清除偏好', await order() === defaultOrder &&
     await evalJS(`localStorage.getItem('jikasei:node_sort') === null`))
+  await evalJS(`localStorage.setItem('jikasei:node_sort', 'expiry')`)
+  await render(suite, 'sort-legacy', 'sorting')
+  check('节点排序：从旧版升级保留原条件与原方向', await order() === '2,5,10,30,4' && (await label()).endsWith('到期优先，升序'))
   await render(suite, 'sort-live', 'sorting')
   await pick('CPU占用')
   await fetch(`http://127.0.0.1:${PORT}/__variant?name=sortlive`)
@@ -1116,9 +1132,13 @@ if (!CUSTOM_ONLY) try {
     if (!updated) await sleep(350)
   }
   check('节点排序：实时读数更新时 CPU 名次保持稳定', updated && await order() === '2,10,4,30,5')
+  await reverse('切换为升序')
+  check('节点排序：切换 CPU 方向沿用旧读数', await order() === '4,10,2,30,5')
   await click('[data-node-sort]')
   await click('[role=menuitem]', '重新排序')
-  check('节点排序：重新排序使用最新 CPU 读数', await order() === '10,2,4,30,5')
+  check('节点排序：手动刷新 CPU 读数并保留升序', await order() === '4,2,10,30,5' && (await label()).endsWith('CPU占用，升序'))
+  await reverse('切换为降序')
+  check('节点排序：CPU 可切回降序', await order() === '10,2,4,30,5')
   await pick('节点名称')
   await click('[data-region-code=JP]')
   check('节点排序：地区筛选后只在结果中排序', await order() === '2,10')
@@ -1131,11 +1151,11 @@ if (!CUSTOM_ONLY) try {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })()`)
   await sleep(400)
-  check('节点排序：搜索与分组叠加', await order() === '10' && (await label()).endsWith('节点名称'))
+  check('节点排序：搜索与分组叠加', await order() === '10' && (await label()).endsWith('节点名称，升序'))
   await click('[data-slot=card][role=button]')
   check('节点排序：详情页隐藏列表工具', await evalJS(`location.pathname === '/node/501' && !document.querySelector('[data-node-sort]')`))
   await click('header button', '概览校验')
-  check('节点排序：详情返回保留排序与筛选', await order() === '10' && (await label()).endsWith('节点名称'))
+  check('节点排序：详情返回保留排序与筛选', await order() === '10' && (await label()).endsWith('节点名称，升序'))
 
   for (const [width, gruvbox, dark] of [[1440, false, false], [1440, true, false], [390, false, true], [320, true, true]]) {
     const mobile = width < 640
@@ -1153,18 +1173,21 @@ if (!CUSTOM_ONLY) try {
         inside: p.left >= 0 && p.top >= 0 && p.right <= innerWidth && p.bottom <= innerHeight,
         tabsScroll: group.scrollWidth > group.clientWidth, pageFits: document.documentElement.scrollWidth <= innerWidth,
         active: menu.querySelector('[aria-checked=true]')?.textContent.trim(),
+        directionAction: menu.querySelector('[data-node-sort-direction]')?.textContent.trim(),
         labels: [...menu.querySelectorAll('[role=menuitemradio]')].map((item) => item.textContent.trim()).join('/'),
         compact: !!document.querySelector('[data-card-style=compact]') }
     })()`)
     const tag = `sort-${width}-${gruvbox ? 'gruvbox' : 'default'}-${dark ? 'dark' : 'light'}`
     check(`节点排序：${tag} 菜单可用、同排右对齐，无横向溢出`,
       layout?.fixedRight && layout.inside && layout.pageFits && layout.compact === mobile &&
-      (!mobile || layout.tabsScroll) && layout.active === '节点名称' &&
+      (!mobile || layout.tabsScroll) && layout.active === '节点名称' && layout.directionAction === '切换为降序' &&
       layout.labels === '后台顺序/节点名称/离线优先/到期优先/CPU占用/内存占用/磁盘占用/流量使用/月均费用',
       JSON.stringify(layout))
     await capture(tag)
     await click('[role=menuitemradio]', '流量使用', mobile)
     check(`节点排序：${tag} 选项可操作并作用于对应列表`, !await openMenu() && await order() === '10,2,30,5,4')
+    await reverse('切换为升序', mobile)
+    check(`节点排序：${tag} 可切换流量方向`, !await openMenu() && await order() === '4,5,30,2,10')
     await pick('节点名称')
   }
 } catch (error) {

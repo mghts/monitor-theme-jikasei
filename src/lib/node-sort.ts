@@ -16,8 +16,10 @@ export const NODE_SORT_LABELS = {
 } as const
 
 export type NodeSort = keyof typeof NODE_SORT_LABELS
+export type SortDirection = "asc" | "desc"
+export type NodeSortChoice = { mode: NodeSort; direction: SortDirection }
 type ResourceSort = "cpu" | "memory" | "disk"
-export type NodeSortPreference = { mode: NodeSort; readings?: ReadonlyMap<number, number> }
+export type NodeSortPreference = NodeSortChoice & { readings?: ReadonlyMap<number, number> }
 
 const NODE_SORT_KEY = "jikasei:node_sort"
 const nameOrder = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" })
@@ -26,20 +28,31 @@ export function isResourceSort(mode: NodeSort): mode is ResourceSort {
   return mode === "cpu" || mode === "memory" || mode === "disk"
 }
 
-export function savedNodeSort(): NodeSort {
+export function defaultSortDirection(mode: NodeSort): SortDirection {
+  return mode === "default" || mode === "name" || mode === "offline" || mode === "expiry" ? "asc" : "desc"
+}
+
+export function savedNodeSort(): NodeSortChoice {
   try {
-    const saved = localStorage.getItem(NODE_SORT_KEY)
-    if (saved !== null && Object.hasOwn(NODE_SORT_LABELS, saved)) return saved as NodeSort
+    const [saved, direction] = localStorage.getItem(NODE_SORT_KEY)?.split(":") ?? []
+    if (saved && Object.hasOwn(NODE_SORT_LABELS, saved)) {
+      const mode = saved as NodeSort
+      return { mode, direction: direction === "asc" || direction === "desc" ? direction : defaultSortDirection(mode) }
+    }
   } catch {
     // 禁止存储时仍可在当前会话里切换。
   }
-  return "default"
+  return { mode: "default", direction: "asc" }
 }
 
-export function saveNodeSort(mode: NodeSort) {
+export function saveNodeSort({ mode, direction }: NodeSortChoice) {
   try {
     if (mode === "default") localStorage.removeItem(NODE_SORT_KEY)
-    else localStorage.setItem(NODE_SORT_KEY, mode)
+    else {
+      // 默认方向继续沿用原来的存值，反向时再在同一条记录里附上方向。
+      const record = direction === defaultSortDirection(mode) ? mode : `${mode}:${direction}`
+      localStorage.setItem(NODE_SORT_KEY, record)
+    }
   } catch {
     // 保存失败时仍保留当前选择。
   }
@@ -59,21 +72,27 @@ export function captureResourceReadings(nodes: Node[], mode: ResourceSort): Read
 }
 
 /** 输入已按后台排序。稳定排序使并列与缺少读数的节点保留原有次序。 */
-export function sortNodes(nodes: Node[], { mode, readings }: NodeSortPreference, rates: Record<string, number>): Node[] {
+export function sortNodes(nodes: Node[], { mode, direction, readings }: NodeSortPreference, rates: Record<string, number>): Node[] {
   if (mode === "default") return nodes
-  if (mode === "name") return [...nodes].sort((a, b) => nameOrder.compare(a.name, b.name))
+  const sign = direction === "asc" ? 1 : -1
+  if (mode === "name") return [...nodes].sort((a, b) => sign * nameOrder.compare(a.name, b.name))
 
-  const rank = (node: Node) => {
+  const rank = (node: Node): number | null => {
     switch (mode) {
       case "offline": return Number(node.online)
-      case "expiry": return expiryDaysOf(node) ?? Infinity
-      case "traffic": return -monthUsage(node)
-      case "monthly": return -(monthlyCostOf(node, rates) ?? -Infinity)
-      default: return -(readings?.get(node.id) ?? -Infinity)
+      case "expiry": return expiryDaysOf(node)
+      case "traffic": return monthUsage(node)
+      case "monthly": return monthlyCostOf(node, rates)
+      default: return readings?.get(node.id) ?? null
     }
   }
   return nodes
     .map((node) => ({ node, rank: rank(node) }))
-    .sort((a, b) => a.rank === b.rank ? 0 : a.rank - b.rank)
+    .sort((a, b) => {
+      if (a.rank === b.rank) return 0
+      if (a.rank === null) return 1
+      if (b.rank === null) return -1
+      return sign * (a.rank - b.rank)
+    })
     .map(({ node }) => node)
 }

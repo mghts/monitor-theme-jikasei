@@ -2,7 +2,7 @@
   "name": "Monitor M",
   "short": "jikasei",
   "description": "Monitor 第三方主题，提供节点地图、五种列表布局、资源与延迟图表、月度预算和到期提醒。",
-  "version": "1.43.0",
+  "version": "1.44.0",
   "author": "mghts · 原作 akanotanin",
   "url": "https://github.com/mghts/monitor-theme-jikasei",
   "config": [

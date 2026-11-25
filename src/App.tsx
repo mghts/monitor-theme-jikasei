@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, groupView, useNodes } from "@/lib/api"
 import { regionView } from "@/lib/globe"
-import { captureResourceReadings, isResourceSort, savedNodeSort, saveNodeSort, sortNodes, type NodeSort, type NodeSortPreference } from "@/lib/node-sort"
+import { captureResourceReadings, defaultSortDirection, isResourceSort, savedNodeSort, saveNodeSort, sortNodes, type NodeSort, type NodeSortChoice, type NodeSortPreference } from "@/lib/node-sort"
 import { hasDetailRemarks } from "@/lib/notes"
 import { searchNodes } from "@/lib/search"
 import { hasGroupTabs, hasSummary, isBudgetLayout, LatencyStyleContext, useCardStyle, useGlobeVisible, useLocalFarm, useThemeConfig } from "@/lib/theme-config"
@@ -239,7 +239,7 @@ export default function App() {
   const [meError, setMeError] = useState("")
   const { nodes, error, closed } = useNodes()
   const [open, go] = useNodeRoute()
-  const [nodeSort, setNodeSort] = useState<NodeSortPreference>(() => ({ mode: savedNodeSort() }))
+  const [nodeSort, setNodeSort] = useState<NodeSortPreference>(savedNodeSort)
   // The list's group tab, held here so it survives a visit to a node's page.
   const [group, setGroup] = useState<string | null>(null)
   // 地球侧栏里选中的地区：同理留在这儿，进详情页再回来不丢。
@@ -361,12 +361,19 @@ export default function App() {
   const billingRates = useBillingRates(found.shown, config.exchangeRates, open === null && (finance || nodeSort.mode === "monthly"))
   if (!nodeSort.readings && nodes?.length && isResourceSort(nodeSort.mode)) {
     // 刷新页面后，用首批节点重建已保存的资源排序。
-    setNodeSort({ mode: nodeSort.mode, readings: captureResourceReadings(nodes, nodeSort.mode) })
+    setNodeSort({ ...nodeSort, readings: captureResourceReadings(nodes, nodeSort.mode) })
+  }
+  const applyNodeSort = (next: NodeSortPreference) => {
+    setNodeSort(next)
+    saveNodeSort(next)
   }
   const chooseNodeSort = (mode: NodeSort) => {
+    const direction = mode === nodeSort.mode ? nodeSort.direction : defaultSortDirection(mode)
     const readings = isResourceSort(mode) ? captureResourceReadings(sorted, mode) : undefined
-    setNodeSort({ mode, readings })
-    saveNodeSort(mode)
+    applyNodeSort({ mode, direction, readings })
+  }
+  const reverseNodeSort = () => {
+    applyNodeSort({ ...nodeSort, direction: nodeSort.direction === "asc" ? "desc" : "asc" })
   }
   const listView = { ...view, shown: sortNodes(found.shown, nodeSort, billingRates.rates) }
 
@@ -560,7 +567,7 @@ export default function App() {
                 这个地区里当前没有节点 —— 点上面那一列的「全部」取消筛选。
               </p>
             ) : null}
-            <NodeList view={listView} group={group} onGroup={setGroup} sort={nodeSort.mode} onSort={chooseNodeSort} onOpen={go} onWarm={warmDetail}
+            <NodeList view={listView} group={group} onGroup={setGroup} sort={nodeSort} onSort={chooseNodeSort} onReverseSort={reverseNodeSort} onOpen={go} onWarm={warmDetail}
               latencyLines={config.pingLines}
               cardStyle={cardStyle}
               historyDays={me.history_days}
@@ -642,14 +649,15 @@ function useProgressive(total: number, first = 24, step = 12): number {
   return limit
 }
 
-function NodeList({ view, group, onGroup, sort, onSort, onOpen, onWarm, latencyLines, cardStyle, historyDays, remarkPlacement }: {
+function NodeList({ view, group, onGroup, sort, onSort, onReverseSort, onOpen, onWarm, latencyLines, cardStyle, historyDays, remarkPlacement }: {
   /** 保留分组信息，shown 为筛选并排序后的列表。 */
   view: ReturnType<typeof groupView>
   /** 原始选中值（null = 全部，"" = 未分组）：只在归一化后回写时用，见下面的 effect。 */
   group: string | null
   onGroup: (group: string | null) => void
-  sort: NodeSort
+  sort: NodeSortChoice
   onSort: (mode: NodeSort) => void
+  onReverseSort: () => void
   onOpen: (id: number) => void
   /** 指针/键盘刚落到某一张卡片上：把详情那块 chunk 先取回来（见 App 的 warmDetail）。 */
   onWarm: () => void
@@ -691,7 +699,7 @@ function NodeList({ view, group, onGroup, sort, onSort, onOpen, onWarm, latencyL
               ))}
             </div>
           )}
-          <NodeSortMenu value={sort} onPick={onSort} />
+          <NodeSortMenu choice={sort} onPick={onSort} onReverse={onReverseSort} />
         </div>
       )}
       {total === 0 ? (
